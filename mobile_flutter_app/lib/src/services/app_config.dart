@@ -10,7 +10,7 @@ class AppConfig {
   static const String _apiBaseUrlKey = 'api_base_url_v2';
   static const String _compileTimeApiBaseUrl = String.fromEnvironment(
     'API_BASE_URL',
-    defaultValue: 'http:// 192.168.0.106:5000/api',
+    defaultValue: 'https://daraz-inventory-system.onrender.com/api',
   );
 
   static String? _runtimeApiBaseUrl;
