@@ -895,3 +895,139 @@ class SyncStatus {
     );
   }
 }
+
+class LinkedSkuModel {
+  LinkedSkuModel({
+    required this.id,
+    required this.sku,
+    required this.storeId,
+    required this.storeName,
+    required this.storeCode,
+    required this.listingTitle,
+    required this.imageUrl,
+    required this.status,
+  });
+
+  final String id;
+  final String sku;
+  final String storeId;
+  final String storeName;
+  final String storeCode;
+  final String listingTitle;
+  final String imageUrl;
+  final String status;
+
+  factory LinkedSkuModel.fromJson(Map<String, dynamic> json) {
+    return LinkedSkuModel(
+      id: JsonReaders.string(json, '_id'),
+      sku: JsonReaders.string(json, 'sku'),
+      storeId: JsonReaders.nestedId(json['store_id']),
+      storeName: JsonReaders.string(json, 'store_name'),
+      storeCode: JsonReaders.string(json, 'store_code'),
+      listingTitle: JsonReaders.string(json, 'listing_title'),
+      imageUrl: JsonReaders.string(json, 'image_url'),
+      status: JsonReaders.string(json, 'status', 'active'),
+    );
+  }
+
+  Map<String, dynamic> toJson() => <String, dynamic>{
+        'sku': sku,
+        'store_id': storeId.isEmpty ? null : storeId,
+        'store_name': storeName,
+        'listing_title': listingTitle,
+        'image_url': imageUrl,
+        'status': status,
+      };
+}
+
+class ProductItemModel {
+  ProductItemModel({
+    required this.id,
+    required this.name,
+    required this.masterSku,
+    required this.stock,
+    required this.reservedStock,
+    required this.availableStock,
+    required this.lowStockLimit,
+    required this.purchasePrice,
+    required this.sellingPrice,
+    required this.imageUrl,
+    required this.sourceTitle,
+    required this.linkedSkus,
+  });
+
+  final String id;
+  final String name;
+  final String masterSku;
+  final int stock;
+  final int reservedStock;
+  final int availableStock;
+  final int lowStockLimit;
+  final double purchasePrice;
+  final double sellingPrice;
+  final String imageUrl;
+  final String sourceTitle;
+  final List<LinkedSkuModel> linkedSkus;
+
+  bool get isLowStock => stock <= lowStockLimit && stock > 0;
+  bool get isOutOfStock => stock <= 0;
+  int get buyAgainQty => stock >= lowStockLimit ? 0 : (lowStockLimit - stock) + lowStockLimit;
+
+  factory ProductItemModel.fromJson(Map<String, dynamic> json) {
+    return ProductItemModel(
+      id: JsonReaders.string(json, '_id'),
+      name: JsonReaders.string(json, 'name'),
+      masterSku: JsonReaders.string(json, 'master_sku', JsonReaders.string(json, 'sku')),
+      stock: JsonReaders.integer(json, 'stock'),
+      reservedStock: JsonReaders.integer(json, 'reserved_stock'),
+      availableStock: JsonReaders.integer(json, 'available_stock', JsonReaders.integer(json, 'stock')),
+      lowStockLimit: JsonReaders.integer(json, 'low_stock_limit', 5),
+      purchasePrice: JsonReaders.number(json, 'purchase_price'),
+      sellingPrice: JsonReaders.number(json, 'selling_price'),
+      imageUrl: JsonReaders.string(json, 'image_url'),
+      sourceTitle: JsonReaders.string(json, 'source_title'),
+      linkedSkus: JsonReaders.list(json['linked_skus'] ?? json['extra_skus'])
+          .map((item) => LinkedSkuModel.fromJson(JsonReaders.map(item)))
+          .toList(),
+    );
+  }
+}
+
+class ImportProductPreviewModel {
+  ImportProductPreviewModel({
+    required this.title,
+    required this.suggestedName,
+    required this.sku,
+    required this.stock,
+    required this.imageUrl,
+    required this.alreadyImported,
+  });
+
+  final String title;
+  final String suggestedName;
+  final String sku;
+  final int stock;
+  final String imageUrl;
+  final bool alreadyImported;
+
+  factory ImportProductPreviewModel.fromJson(Map<String, dynamic> json) {
+    return ImportProductPreviewModel(
+      title: JsonReaders.string(json, 'title'),
+      suggestedName: JsonReaders.string(json, 'suggested_name'),
+      sku: JsonReaders.string(json, 'sku'),
+      stock: JsonReaders.integer(json, 'stock'),
+      imageUrl: JsonReaders.string(json, 'image_url'),
+      alreadyImported: JsonReaders.boolean(json, 'already_imported'),
+    );
+  }
+
+  Map<String, dynamic> toImportPayload({double purchasePrice = 0, int lowStockLimit = 5}) => <String, dynamic>{
+        'title': title,
+        'name': suggestedName,
+        'sku': sku,
+        'stock': stock,
+        'image_url': imageUrl,
+        'purchase_price': purchasePrice,
+        'low_stock_limit': lowStockLimit,
+      };
+}

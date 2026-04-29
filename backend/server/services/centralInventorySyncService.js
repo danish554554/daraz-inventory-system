@@ -4,6 +4,8 @@ const CentralOrder = require('../models/CentralOrder');
 const StoreToken = require('../models/StoreToken');
 const CentralOrderItem = require('../models/CentralOrderItem');
 const InventoryTransaction = require('../models/InventoryTransaction');
+const Product = require('../models/Product');
+const ProductSkuMap = require('../models/ProductSkuMap');
 const StoreSyncLog = require('../models/StoreSyncLog');
 const { getOrders, getOrderItems } = require('./darazApiService');
 const { ensureStoreTokenReadyForSync, isLiveApiEnabled } = require('./darazService');
@@ -103,6 +105,17 @@ function getItemPrice(item) {
 function makeSyncWindow(lastSyncAt) {
   if (!lastSyncAt) return new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString();
   return new Date(new Date(lastSyncAt).getTime() - 10 * 60 * 1000).toISOString();
+}
+
+async function resolveProductByStoreSku({ store, sellerSku }) {
+  const normalizedSku = safeString(sellerSku);
+  if (!normalizedSku) return null;
+  const map = await ProductSkuMap.findOne({
+    sku: normalizedSku,
+    $or: [{ store_id: store._id }, { store_id: null }, { store_name: store.name }]
+  });
+  if (map) return Product.findById(map.product_id);
+  return Product.findOne({ sku: normalizedSku });
 }
 
 async function resolveCentralInventory({ store, sellerSku, productName = '' }) {
@@ -207,9 +220,24 @@ async function deductStockForOrderItem({ store, orderDoc, itemDoc, stats }) {
     return { action: 'insufficient_stock' };
   }
 
-  const stockBefore = inventory.stock || 0;
-  inventory.stock = stockBefore - qty;
-  await inventory.save();
+  const product = await resolveProductByStoreSku({ store, sellerSku: itemDoc.seller_sku, productName: itemDoc.product_name });
+  const stockTarget = product || inventory;
+  const stockBefore = stockTarget.stock || 0;
+  if (stockBefore < qty) {
+    itemDoc.mapping_status = product ? 'mapped' : 'mapped';
+    itemDoc.processing_status = 'failed';
+    itemDoc.error_message = 'Insufficient master product stock';
+    await itemDoc.save();
+    await upsertOrderItemIssue({ issueType: 'insufficient_stock', store, orderDoc, itemDoc, message: itemDoc.error_message, quantityNeeded: qty, availableStock: stockBefore, product });
+    stats.failed += 1;
+    return { action: 'insufficient_stock' };
+  }
+  stockTarget.stock = stockBefore - qty;
+  await stockTarget.save();
+  if (product && inventory) {
+    inventory.stock = stockTarget.stock;
+    await inventory.save();
+  }
 
   itemDoc.mapping_status = 'mapped';
   itemDoc.stock_deducted = true;
@@ -220,7 +248,7 @@ async function deductStockForOrderItem({ store, orderDoc, itemDoc, stats }) {
 
   await createInventoryTransaction({
     store_id: store._id,
-    inventory,
+    inventory: stockTarget,
     seller_sku: itemDoc.seller_sku,
     product_name: itemDoc.product_name,
     order_id: orderDoc._id,
@@ -230,7 +258,7 @@ async function deductStockForOrderItem({ store, orderDoc, itemDoc, stats }) {
     transaction_type: 'order_deduct',
     quantity: qty,
     stock_before: stockBefore,
-    stock_after: inventory.stock,
+    stock_after: stockTarget.stock,
     note: `Daraz order deduction for order ${orderDoc.external_order_id}`
   });
 
@@ -275,7 +303,7 @@ async function restoreStockForCanceledItem({ store, orderDoc, itemDoc, stats }) 
 
   await createInventoryTransaction({
     store_id: store._id,
-    inventory,
+    inventory: stockTarget,
     seller_sku: itemDoc.seller_sku,
     product_name: itemDoc.product_name,
     order_id: orderDoc._id,
@@ -285,7 +313,7 @@ async function restoreStockForCanceledItem({ store, orderDoc, itemDoc, stats }) 
     transaction_type: 'cancel_restore',
     quantity: qty,
     stock_before: stockBefore,
-    stock_after: inventory.stock,
+    stock_after: stockTarget.stock,
     note: `Daraz order restore for order ${orderDoc.external_order_id}`
   });
 

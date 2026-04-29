@@ -154,6 +154,24 @@ function extractOrdersFromData(data) {
   return [];
 }
 
+function extractProductsFromData(data) {
+  if (!data) return [];
+  if (Array.isArray(data.products)) return data.products;
+  if (Array.isArray(data.product_list)) return data.product_list;
+  if (Array.isArray(data.items)) return data.items;
+  if (Array.isArray(data.list)) return data.list;
+
+  const direct = deepFindFirstArray(data, (arr) => {
+    if (!arr.length) return false;
+    const first = arr[0];
+    return first && typeof first === "object" && (
+      "seller_sku" in first || "SellerSku" in first || "item_id" in first ||
+      "product_id" in first || "product_name" in first || "title" in first
+    );
+  });
+  return direct || [];
+}
+
 function extractItemsFromData(data) {
   if (!data) return [];
 
@@ -351,6 +369,26 @@ async function getOrders({
     offset,
     limit,
     hasMore: orders.length === limit || offset + orders.length < count
+  };
+}
+
+async function getProducts({ storeToken, status = "active", offset = 0, limit = 100 }) {
+  const result = await darazRequest("/products/get", storeToken, {
+    filter: status,
+    offset,
+    limit
+  });
+
+  const products = extractProductsFromData(result.data);
+  const count = extractCount(result.data, products.length);
+
+  return {
+    raw: result,
+    products,
+    count,
+    offset,
+    limit,
+    hasMore: products.length === limit || offset + products.length < count
   };
 }
 
