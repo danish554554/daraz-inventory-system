@@ -375,6 +375,8 @@ async function callDarazAuthApi(path, params = {}, country = "PK") {
 
   url.searchParams.append("sign", sign);
 
+  console.log(`[Daraz Auth API] Calling ${baseUrl}${path} for country=${country}`);
+
   const response = await fetch(url.toString(), {
     method: "GET",
     headers: {
@@ -388,11 +390,21 @@ async function callDarazAuthApi(path, params = {}, country = "PK") {
   try {
     json = JSON.parse(text);
   } catch (error) {
+    console.error("[Daraz Auth API] Invalid JSON response:", text);
     throw new Error(`Daraz auth API returned invalid JSON: ${text}`);
   }
 
   const apiCode = String(json?.code ?? "");
   const apiMessage = safeString(json?.message || json?.msg);
+
+  console.log("[Daraz Auth API] Response summary:", {
+    httpStatus: response.status,
+    code: apiCode,
+    message: apiMessage,
+    hasData: Boolean(json?.data),
+    hasRootAccessToken: Boolean(json?.access_token),
+    hasDataAccessToken: Boolean(json?.data?.access_token)
+  });
 
   if (!response.ok || apiCode !== "0") {
     const error = new Error(apiMessage || `Daraz auth API error (${response.status})`);
@@ -403,7 +415,10 @@ async function callDarazAuthApi(path, params = {}, country = "PK") {
     throw error;
   }
 
-  return json?.data || {};
+  // Daraz/Lazada auth endpoints commonly return token fields at the root level:
+  // { code: "0", access_token: "...", refresh_token: "..." }
+  // Some responses may wrap them in data. Support both shapes.
+  return json?.data || json || {};
 }
 
 async function persistTokenFromPayload({
@@ -412,6 +427,18 @@ async function persistTokenFromPayload({
   tokenSource = "oauth"
 }) {
   const normalized = normalizeTokenPayload(tokenPayload, store);
+
+  console.log("[Daraz OAuth] Token payload summary:", {
+    store_id: String(store._id),
+    store_name: store.name,
+    has_access_token: Boolean(normalized.access_token),
+    has_refresh_token: Boolean(normalized.refresh_token),
+    account: normalized.account,
+    seller_id: normalized.seller_id,
+    country_code: normalized.country_code,
+    expires_at: normalized.expires_at,
+    refresh_expires_at: normalized.refresh_expires_at
+  });
 
   if (!normalized.access_token) {
     throw new Error("Daraz token response missing access_token");
@@ -444,7 +471,7 @@ async function persistTokenFromPayload({
     { store_id: store._id },
     updateDoc,
     {
-      new: true,
+      returnDocument: "after",
       upsert: true,
       setDefaultsOnInsert: true
     }
@@ -466,10 +493,18 @@ async function persistTokenFromPayload({
     },
     {
       upsert: true,
-      new: true,
+      returnDocument: "after",
       setDefaultsOnInsert: true
     }
   );
+
+  console.log("[Daraz OAuth] Token saved successfully:", {
+    store_id: String(store._id),
+    store_name: store.name,
+    token_id: String(token._id),
+    token_status: token.token_status,
+    token_source: token.token_source
+  });
 
   return {
     token,
@@ -512,7 +547,7 @@ async function saveStoreTokenConnection(storeId, payload = {}) {
       last_error: ""
     },
     {
-      new: true,
+      returnDocument: "after",
       upsert: true,
       setDefaultsOnInsert: true
     }
@@ -700,7 +735,7 @@ async function createOauthConnectUrl(storeId, options = {}) {
     },
     {
       upsert: true,
-      new: true,
+      returnDocument: "after",
       setDefaultsOnInsert: true
     }
   );
@@ -801,9 +836,19 @@ async function handleOauthCallback({ code, state, error, error_description }) {
   }
 
   try {
+    console.log("[Daraz OAuth] Exchanging code for token:", {
+      store_id: statePayload.store_id,
+      has_code: Boolean(safeString(code))
+    });
+
     const result = await exchangeCodeForStoreToken({
       storeId: statePayload.store_id,
       code
+    });
+
+    console.log("[Daraz OAuth] Store connected successfully:", {
+      store_id: String(result.store._id),
+      store_name: result.store.name
     });
 
     return {
@@ -817,6 +862,13 @@ async function handleOauthCallback({ code, state, error, error_description }) {
       token_summary: result.token_summary
     };
   } catch (exchangeError) {
+    console.error("[Daraz OAuth] Token exchange/save failed:", {
+      message: exchangeError.message,
+      apiCode: exchangeError.apiCode,
+      apiMessage: exchangeError.apiMessage,
+      httpStatus: exchangeError.httpStatus
+    });
+
     return {
       ok: false,
       redirect_url: buildFrontendRedirectUrl({

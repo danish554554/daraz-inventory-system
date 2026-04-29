@@ -7,18 +7,6 @@ const {
 
 const router = express.Router();
 
-router.get("/callback", async (req, res) => {
-  console.log("🔥 DARAZ CALLBACK HIT:", req.query);
-
-  try {
-    const result = await handleOauthCallback(req.query);
-    return res.redirect(result.redirect_url);
-  } catch (error) {
-    console.error("[Daraz OAuth Callback Error]", error);
-    return res.status(500).send(error.message || "OAuth callback failed");
-  }
-});
-
 /*
   Admin route:
   generate Daraz connect URL for a store
@@ -54,8 +42,17 @@ router.get("/:storeId/connect", protectAdmin, async (req, res) => {
 */
 router.get("/callback", async (req, res) => {
   console.log("🔥 DARAZ CALLBACK HIT:", req.query);
+
   try {
     const result = await handleOauthCallback(req.query);
+
+    console.log("[Daraz OAuth Callback Result]", {
+      ok: result.ok,
+      redirect_url: result.redirect_url,
+      store_id: result.store?._id ? String(result.store._id) : undefined,
+      store_name: result.store?.name
+    });
+
     return res.redirect(result.redirect_url);
   } catch (error) {
     console.error("[Daraz OAuth Callback Error]", error);
