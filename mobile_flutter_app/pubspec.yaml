@@ -1,0 +1,27 @@
+name: daraz_inventory_mobile
+description: Daraz inventory control mobile app rebuilt in Flutter while keeping the existing Node/Express backend logic intact.
+publish_to: 'none'
+version: 1.0.0+1
+
+environment:
+  sdk: ">=3.3.0 <4.0.0"
+
+dependencies:
+  flutter:
+    sdk: flutter
+  cupertino_icons: ^1.0.8
+  http: ^1.2.2
+  intl: ^0.19.0
+  flutter_secure_storage: ^9.2.2
+  url_launcher: ^6.3.0
+  flutter_web_auth_2: ^4.1.0
+  package_info_plus: ^8.0.2
+  share_plus: ^10.1.2
+
+dev_dependencies:
+  flutter_test:
+    sdk: flutter
+  flutter_lints: ^3.0.2
+
+flutter:
+  uses-material-design: true

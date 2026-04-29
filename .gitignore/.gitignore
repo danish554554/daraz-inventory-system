@@ -1,0 +1,17 @@
+# secrets
+.env
+**/.env
+
+# node
+node_modules/
+npm-debug.log
+
+# flutter
+.dart_tool/
+build/
+.flutter-plugins
+.flutter-plugins-dependencies
+
+# system
+.DS_Store
+Thumbs.db
