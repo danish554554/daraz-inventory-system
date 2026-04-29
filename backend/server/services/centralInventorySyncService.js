@@ -435,10 +435,23 @@ async function syncStoreOrders(store, options = {}) {
   };
 
   try {
-    await ensureStoreTokenReadyForSync(store._id);
+    const tokenReady = await ensureStoreTokenReadyForSync(store._id);
+
+    if (!tokenReady?.ok) {
+      throw new Error(tokenReady?.message || "Store access token is missing");
+    }
+
+    const storeToken = tokenReady.token || await StoreToken.findOne({ store_id: store._id });
+
+    if (!storeToken || !storeToken.access_token) {
+      throw new Error("Store access token is missing");
+    }
+
     const since = makeSyncWindow(store.last_sync_at);
-    const ordersResponse = await getOrders(store._id, { update_after: since });
-    const orders = Array.isArray(ordersResponse) ? ordersResponse : ordersResponse?.data || [];
+    const ordersResponse = await getOrders({ storeToken, updatedAfter: since });
+    const orders = Array.isArray(ordersResponse)
+      ? ordersResponse
+      : ordersResponse?.orders || ordersResponse?.data || [];
     stats.orders_seen = orders.length;
 
     for (const orderPayload of orders) {
@@ -446,8 +459,13 @@ async function syncStoreOrders(store, options = {}) {
       if (!orderDoc) continue;
       stats.orders_upserted += 1;
 
-      const orderItemsResponse = await getOrderItems(store._id, orderDoc.external_order_id);
-      const itemsPayload = Array.isArray(orderItemsResponse) ? orderItemsResponse : orderItemsResponse?.data || [];
+      const orderItemsResponse = await getOrderItems({
+        storeToken,
+        orderId: orderDoc.external_order_id
+      });
+      const itemsPayload = Array.isArray(orderItemsResponse)
+        ? orderItemsResponse
+        : orderItemsResponse?.items || orderItemsResponse?.data || [];
       stats.items_seen += itemsPayload.length;
       await upsertOrderItems(store, orderDoc, itemsPayload, stats);
       await processOrderInventory(store, orderDoc, stats);
