@@ -38,9 +38,7 @@ class _StoresScreenState extends State<StoresScreen> {
     try {
       final response = await ApiClient.instance.get('/stores') as Map<String, dynamic>;
       setState(() {
-        _stores = JsonReaders.list(response['stores'])
-            .map((item) => StoreModel.fromJson(JsonReaders.map(item)))
-            .toList();
+        _stores = JsonReaders.list(response['stores']).map((item) => StoreModel.fromJson(JsonReaders.map(item))).toList();
         _summary = StoreSummary.fromJson(JsonReaders.map(response['summary']));
       });
     } on ApiException catch (error) {
@@ -48,9 +46,7 @@ class _StoresScreenState extends State<StoresScreen> {
     } catch (_) {
       setState(() => _error = 'Failed to load stores.');
     } finally {
-      if (mounted) {
-        setState(() => _loading = false);
-      }
+      if (mounted) setState(() => _loading = false);
     }
   }
 
@@ -72,9 +68,7 @@ class _StoresScreenState extends State<StoresScreen> {
       useSafeArea: true,
       builder: (context) => const StoreFormSheet(),
     );
-    if (created == true) {
-      await _load();
-    }
+    if (created == true) await _load();
   }
 
   Future<void> _openEditSheet(StoreModel store) async {
@@ -84,9 +78,7 @@ class _StoresScreenState extends State<StoresScreen> {
       useSafeArea: true,
       builder: (context) => StoreFormSheet(store: store),
     );
-    if (updated == true) {
-      await _load();
-    }
+    if (updated == true) await _load();
   }
 
   Future<void> _connectStore(StoreModel store) async {
@@ -114,18 +106,12 @@ class _StoresScreenState extends State<StoresScreen> {
 
       if (oauthStatus == 'success') {
         await _load();
-        if (mounted) {
-          showAppSnackBar(context, '${store.name} connected to Daraz successfully.');
-        }
+        if (mounted) showAppSnackBar(context, '${store.name} connected to Daraz successfully.');
         return;
       }
 
       if (mounted) {
-        showAppSnackBar(
-          context,
-          message.isNotEmpty ? message : 'Daraz connection was not completed.',
-          error: true,
-        );
+        showAppSnackBar(context, message.isNotEmpty ? message : 'Daraz connection was not completed.', error: true);
       }
     } on ApiException catch (error) {
       if (mounted) showAppSnackBar(context, error.message, error: true);
@@ -134,9 +120,7 @@ class _StoresScreenState extends State<StoresScreen> {
       if (mounted) {
         showAppSnackBar(
           context,
-          message.contains('canceled') || message.contains('cancelled')
-              ? 'Daraz connection was cancelled.'
-              : 'Failed to start Daraz connection.',
+          message.contains('canceled') || message.contains('cancelled') ? 'Daraz connection was cancelled.' : 'Failed to start Daraz connection.',
           error: true,
         );
       }
@@ -201,17 +185,9 @@ class _StoresScreenState extends State<StoresScreen> {
     try {
       await ApiClient.instance.post('/daraz-sync/import-products/${store.id}');
       await _load();
-      if (mounted) {
-        showAppSnackBar(context, 'Active Daraz products imported successfully.');
-      }
+      if (mounted) showAppSnackBar(context, 'Active Daraz products imported successfully.');
     } catch (_) {
-      if (mounted) {
-        showAppSnackBar(
-          context,
-          'Failed to import Daraz products. Please try again.',
-          error: true,
-        );
-      }
+      if (mounted) showAppSnackBar(context, 'Failed to import Daraz products. Please try again.', error: true);
     }
   }
 
@@ -237,62 +213,89 @@ class _StoresScreenState extends State<StoresScreen> {
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      appBar: AppBar(
-        title: const Text('Stores'),
-        actions: <Widget>[
-          IconButton(onPressed: _loading ? null : _load, icon: const Icon(Icons.refresh_rounded)),
+      body: _loading
+          ? const AppLoader(label: 'Loading stores...')
+          : _error != null
+              ? SafeArea(
+                  child: Padding(
+                    padding: const EdgeInsets.all(16),
+                    child: EmptyState(title: 'Could not load stores', message: _error!, icon: Icons.store_mall_directory_outlined),
+                  ),
+                )
+              : AppShell(
+                  onRefresh: _load,
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: <Widget>[
+                      SectionHeader(
+                        title: 'Stores',
+                        subtitle: '${_stores.length} connected · ${_stores.where((s) => !s.tokenConnected).length} needs attention',
+                        action: CircleIconButton(icon: Icons.add_rounded, onPressed: _openCreateSheet),
+                      ),
+                      const SizedBox(height: 14),
+                      TextField(
+                        decoration: const InputDecoration(
+                          hintText: 'Search stores',
+                          prefixIcon: Icon(Icons.search_rounded),
+                          isDense: true,
+                        ),
+                        onChanged: (value) => setState(() => _search = value),
+                      ),
+                      const SizedBox(height: 14),
+                      _connectBanner(),
+                      const SizedBox(height: 14),
+                      _summaryCards(context),
+                      const SizedBox(height: 16),
+                      if (_filteredStores.isEmpty)
+                        const EmptyState(
+                          title: 'No stores found',
+                          message: 'Create a store first, then connect it to Daraz from this screen.',
+                          icon: Icons.storefront_outlined,
+                        )
+                      else
+                        ..._filteredStores.map(_buildStoreCard),
+                    ],
+                  ),
+                ),
+    );
+  }
+
+  Widget _connectBanner() {
+    return Container(
+      padding: const EdgeInsets.all(14),
+      decoration: BoxDecoration(
+        gradient: AppTheme.primaryGradient,
+        borderRadius: BorderRadius.circular(18),
+        boxShadow: <BoxShadow>[
+          BoxShadow(color: AppTheme.primary.withOpacity(0.12), blurRadius: 14, offset: const Offset(0, 8)),
         ],
       ),
-      floatingActionButton: FloatingActionButton.extended(
-        onPressed: _openCreateSheet,
-        backgroundColor: AppTheme.primary,
-        foregroundColor: Colors.white,
-        icon: const Icon(Icons.add),
-        label: const Text('Add Store'),
-      ),
-      body: SafeArea(
-        child: _loading
-            ? const AppLoader(label: 'Loading stores...')
-            : _error != null
-                ? Padding(
-                    padding: const EdgeInsets.all(20),
-                    child: EmptyState(
-                      title: 'Could not load stores',
-                      message: _error!,
-                      icon: Icons.store_mall_directory_outlined,
-                    ),
-                  )
-                : RefreshIndicator(
-                    onRefresh: _load,
-                    child: ListView(
-                      padding: const EdgeInsets.fromLTRB(20, 8, 20, 100),
-                      children: <Widget>[
-                        const SectionHeader(
-                          title: 'Stores',
-                          subtitle: 'Configure Daraz stores, health, token status, and sync behavior.',
-                        ),
-                        const SizedBox(height: 18),
-                        TextField(
-                          decoration: const InputDecoration(
-                            hintText: 'Search stores...',
-                            prefixIcon: Icon(Icons.search),
-                          ),
-                          onChanged: (value) => setState(() => _search = value),
-                        ),
-                        const SizedBox(height: 18),
-                        _summaryCards(context),
-                        const SizedBox(height: 20),
-                        if (_filteredStores.isEmpty)
-                          const EmptyState(
-                            title: 'No stores found',
-                            message: 'Create a store first, then connect it to Daraz from this screen.',
-                            icon: Icons.storefront_outlined,
-                          )
-                        else
-                          ..._filteredStores.map(_buildStoreCard),
-                      ],
-                    ),
-                  ),
+      child: Row(
+        children: <Widget>[
+          Container(
+            width: 45,
+            height: 45,
+            decoration: BoxDecoration(color: Colors.white.withOpacity(0.16), borderRadius: BorderRadius.circular(14)),
+            child: const Icon(Icons.store_mall_directory_outlined, color: Colors.white),
+          ),
+          const SizedBox(width: 12),
+          const Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: <Widget>[
+                Text('Connect a new Daraz store', maxLines: 1, overflow: TextOverflow.ellipsis, style: TextStyle(color: Colors.white, fontWeight: FontWeight.w900, fontSize: 13)),
+                SizedBox(height: 3),
+                Text('Authorize a seller account to start importing products.', maxLines: 2, overflow: TextOverflow.ellipsis, style: TextStyle(color: Colors.white70, fontWeight: FontWeight.w700, fontSize: 11)),
+              ],
+            ),
+          ),
+          const SizedBox(width: 8),
+          FilledButton(
+            style: FilledButton.styleFrom(backgroundColor: Colors.white, foregroundColor: AppTheme.primary, padding: const EdgeInsets.symmetric(horizontal: 12), shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12))),
+            onPressed: _openCreateSheet,
+            child: const Text('Connect', style: TextStyle(fontSize: 12, fontWeight: FontWeight.w900)),
+          ),
+        ],
       ),
     );
   }
@@ -301,24 +304,24 @@ class _StoresScreenState extends State<StoresScreen> {
     final summary = _summary;
     if (summary == null) return const SizedBox.shrink();
     final width = MediaQuery.of(context).size.width;
-    final itemWidth = width < 380 ? width - 40 : (width - 56) / 2;
-
+    final itemWidth = width < 360 ? width - 32 : (width - 44) / 2;
     return Wrap(
       spacing: 12,
       runSpacing: 12,
       children: <Widget>[
         SizedBox(width: itemWidth, child: MetricCard(label: 'Configured', value: '${summary.totalStores}', icon: Icons.storefront_outlined)),
         SizedBox(width: itemWidth, child: MetricCard(label: 'Connected', value: '${summary.connectedStores}', icon: Icons.link_rounded, tint: AppTheme.successSoft, iconColor: AppTheme.success)),
-        SizedBox(width: itemWidth, child: MetricCard(label: 'Healthy', value: '${summary.healthyStores}', icon: Icons.check_circle_outline, tint: AppTheme.successSoft, iconColor: AppTheme.success)),
-        SizedBox(width: itemWidth, child: MetricCard(label: 'Needs Setup', value: '${summary.setupRequired + summary.reconnectRequired}', icon: Icons.warning_amber_rounded, tint: AppTheme.warningSoft, iconColor: AppTheme.warning)),
       ],
     );
   }
 
   Widget _buildStoreCard(StoreModel store) {
+    final color = store.tokenConnected ? AppTheme.success : AppTheme.warning;
+    final soft = store.tokenConnected ? AppTheme.successSoft : AppTheme.warningSoft;
     return Padding(
-      padding: const EdgeInsets.only(bottom: 14),
+      padding: const EdgeInsets.only(bottom: 12),
       child: AppCard(
+        padding: const EdgeInsets.all(13),
         onTap: () async {
           await showModalBottomSheet<void>(
             context: context,
@@ -340,86 +343,91 @@ class _StoresScreenState extends State<StoresScreen> {
           );
         },
         child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
           children: <Widget>[
             Row(
               children: <Widget>[
                 Container(
-                  width: 42,
-                  height: 42,
-                  decoration: BoxDecoration(
-                    color: AppTheme.background,
-                    borderRadius: BorderRadius.circular(14),
-                  ),
-                  child: Center(
-                    child: Text(
-                      store.country,
-                      style: const TextStyle(fontWeight: FontWeight.w900),
-                    ),
-                  ),
+                  width: 46,
+                  height: 46,
+                  decoration: BoxDecoration(color: AppTheme.background, borderRadius: BorderRadius.circular(15)),
+                  child: Center(child: Text(store.country, style: const TextStyle(fontWeight: FontWeight.w900))),
                 ),
                 const SizedBox(width: 12),
                 Expanded(
                   child: Column(
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: <Widget>[
-                      Text(store.name, maxLines: 1, overflow: TextOverflow.ellipsis, style: const TextStyle(fontWeight: FontWeight.w800, fontSize: 17)),
-                      const SizedBox(height: 4),
-                      Text('${store.code} • ${store.account.isEmpty ? 'Seller not linked' : store.account}', maxLines: 1, overflow: TextOverflow.ellipsis, style: const TextStyle(color: AppTheme.textMuted, fontWeight: FontWeight.w600)),
+                      Text(store.name, maxLines: 1, overflow: TextOverflow.ellipsis, style: const TextStyle(fontWeight: FontWeight.w900, fontSize: 14)),
+                      const SizedBox(height: 3),
+                      Text('${store.code} · ${store.account.isEmpty ? store.country : store.account}', maxLines: 1, overflow: TextOverflow.ellipsis, style: const TextStyle(color: AppTheme.textMuted, fontSize: 11, fontWeight: FontWeight.w700)),
+                      const SizedBox(height: 7),
+                      Wrap(
+                        spacing: 6,
+                        runSpacing: 5,
+                        children: <Widget>[
+                          StatusChip(label: store.tokenConnected ? 'Connected' : 'Needs setup', color: color, softColor: soft),
+                          StatusChip(label: '${store.syncIntervalMinutes}m sync', color: AppTheme.info, softColor: AppTheme.infoSoft),
+                        ],
+                      ),
                     ],
                   ),
                 ),
-                _healthChip(store),
+                PopupMenuButton<String>(
+                  icon: const Icon(Icons.more_horiz_rounded, color: AppTheme.textMuted),
+                  onSelected: (value) {
+                    switch (value) {
+                      case 'edit':
+                        _openEditSheet(store);
+                        break;
+                      case 'connect':
+                        _connectStore(store);
+                        break;
+                      case 'validate':
+                        _validateStore(store);
+                        break;
+                      case 'disconnect':
+                        _disconnectStore(store);
+                        break;
+                      case 'delete':
+                        _deleteStore(store);
+                        break;
+                    }
+                  },
+                  itemBuilder: (context) => <PopupMenuEntry<String>>[
+                    const PopupMenuItem(value: 'edit', child: Text('Edit store')),
+                    PopupMenuItem(value: 'connect', child: Text(store.tokenConnected ? 'Reconnect Daraz' : 'Connect Daraz')),
+                    const PopupMenuItem(value: 'validate', child: Text('Validate connection')),
+                    if (store.tokenConnected) const PopupMenuItem(value: 'disconnect', child: Text('Disconnect')),
+                    const PopupMenuItem(value: 'delete', child: Text('Delete')),
+                  ],
+                ),
               ],
             ),
-            const SizedBox(height: 14),
-            Wrap(
-              spacing: 10,
-              runSpacing: 10,
+            const SizedBox(height: 12),
+            Row(
               children: <Widget>[
-                _tag(store.tokenConnected ? 'Connected' : 'Disconnected', store.tokenConnected ? AppTheme.success : AppTheme.danger, store.tokenConnected ? AppTheme.successSoft : AppTheme.dangerSoft),
-                _tag('Token ${store.tokenStatus.replaceAll('_', ' ')}', AppTheme.primary, AppTheme.primarySoft),
-                _tag('${store.syncIntervalMinutes} min interval', AppTheme.textPrimary, AppTheme.background),
+                Expanded(
+                  child: Text('Last sync · ${Formatters.dateTime(store.lastSyncFinishedAt)}', maxLines: 1, overflow: TextOverflow.ellipsis, style: const TextStyle(color: AppTheme.textMuted, fontSize: 11, fontWeight: FontWeight.w700)),
+                ),
+                OutlinedButton.icon(
+                  onPressed: () => _importProductsForStore(store),
+                  style: OutlinedButton.styleFrom(minimumSize: const Size(0, 34), padding: const EdgeInsets.symmetric(horizontal: 10), shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)), side: const BorderSide(color: AppTheme.border)),
+                  icon: const Icon(Icons.download_rounded, size: 14),
+                  label: const Text('Import', style: TextStyle(fontSize: 11, fontWeight: FontWeight.w900)),
+                ),
+                const SizedBox(width: 8),
+                FilledButton.icon(
+                  onPressed: () => _syncStore(store),
+                  style: FilledButton.styleFrom(minimumSize: const Size(0, 34), backgroundColor: AppTheme.primary, foregroundColor: Colors.white, padding: const EdgeInsets.symmetric(horizontal: 10), shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12))),
+                  icon: const Icon(Icons.sync_rounded, size: 14),
+                  label: const Text('Sync', style: TextStyle(fontSize: 11, fontWeight: FontWeight.w900)),
+                ),
               ],
-            ),
-            const SizedBox(height: 12),
-            Text(
-              store.healthReason.isEmpty ? 'No issues reported.' : store.healthReason,
-              style: const TextStyle(color: AppTheme.textMuted, height: 1.35),
-            ),
-            const SizedBox(height: 12),
-            Text(
-              'Last sync: ${Formatters.dateTime(store.lastSyncFinishedAt)}',
-              style: const TextStyle(color: AppTheme.textMuted, fontWeight: FontWeight.w700),
             ),
           ],
         ),
       ),
     );
-  }
-
-  Widget _tag(String text, Color color, Color bg) {
-    return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
-      decoration: BoxDecoration(color: bg, borderRadius: BorderRadius.circular(18)),
-      child: Text(text, style: TextStyle(color: color, fontWeight: FontWeight.w700, fontSize: 12)),
-    );
-  }
-
-  Widget _healthChip(StoreModel store) {
-    switch (store.healthState) {
-      case 'healthy':
-        return const StatusChip(label: 'Active', color: AppTheme.success, softColor: AppTheme.successSoft);
-      case 'attention':
-      case 'setup_required':
-      case 'not_connected':
-        return const StatusChip(label: 'Attention', color: AppTheme.warning, softColor: AppTheme.warningSoft);
-      case 'reconnect_required':
-      case 'sync_error':
-        return const StatusChip(label: 'Issue', color: AppTheme.danger, softColor: AppTheme.dangerSoft);
-      default:
-        return const StatusChip(label: 'Inactive', color: AppTheme.textMuted, softColor: AppTheme.background);
-    }
   }
 }
 

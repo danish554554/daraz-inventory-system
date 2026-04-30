@@ -1,7 +1,6 @@
 import 'package:flutter/material.dart';
 
 import '../services/session_manager.dart';
-import '../widgets/app_theme.dart';
 import 'dashboard_screen.dart';
 import 'inventory_screen.dart';
 import 'settings_screen.dart';
@@ -31,39 +30,44 @@ class _HomeShellState extends State<HomeShell> {
   @override
   Widget build(BuildContext context) {
     return Scaffold(
+      extendBody: true,
       body: IndexedStack(index: _currentIndex, children: _pages),
-      bottomNavigationBar: NavigationBar(
-        selectedIndex: _currentIndex,
-        backgroundColor: Colors.white,
-        indicatorColor: AppTheme.primarySoft,
-        onDestinationSelected: (index) => setState(() => _currentIndex = index),
-        destinations: const <Widget>[
-          NavigationDestination(
-            icon: Icon(Icons.dashboard_outlined),
-            selectedIcon: Icon(Icons.dashboard_rounded),
-            label: 'Dashboard',
+      bottomNavigationBar: Padding(
+        padding: const EdgeInsets.fromLTRB(10, 0, 10, 10),
+        child: ClipRRect(
+          borderRadius: BorderRadius.circular(24),
+          child: NavigationBar(
+            selectedIndex: _currentIndex,
+            onDestinationSelected: (index) => setState(() => _currentIndex = index),
+            destinations: const <Widget>[
+              NavigationDestination(
+                icon: Icon(Icons.dashboard_outlined),
+                selectedIcon: Icon(Icons.dashboard_rounded),
+                label: 'Home',
+              ),
+              NavigationDestination(
+                icon: Icon(Icons.storefront_outlined),
+                selectedIcon: Icon(Icons.storefront),
+                label: 'Stores',
+              ),
+              NavigationDestination(
+                icon: Icon(Icons.inventory_2_outlined),
+                selectedIcon: Icon(Icons.inventory_2_rounded),
+                label: 'Stock',
+              ),
+              NavigationDestination(
+                icon: Icon(Icons.sync_outlined),
+                selectedIcon: Icon(Icons.sync),
+                label: 'Sync',
+              ),
+              NavigationDestination(
+                icon: Icon(Icons.settings_outlined),
+                selectedIcon: Icon(Icons.settings),
+                label: 'Settings',
+              ),
+            ],
           ),
-          NavigationDestination(
-            icon: Icon(Icons.storefront_outlined),
-            selectedIcon: Icon(Icons.storefront),
-            label: 'Stores',
-          ),
-          NavigationDestination(
-            icon: Icon(Icons.inventory_2_outlined),
-            selectedIcon: Icon(Icons.inventory_2_rounded),
-            label: 'Inventory',
-          ),
-          NavigationDestination(
-            icon: Icon(Icons.sync_outlined),
-            selectedIcon: Icon(Icons.sync),
-            label: 'Sync',
-          ),
-          NavigationDestination(
-            icon: Icon(Icons.settings_outlined),
-            selectedIcon: Icon(Icons.settings),
-            label: 'Settings',
-          ),
-        ],
+        ),
       ),
     );
   }

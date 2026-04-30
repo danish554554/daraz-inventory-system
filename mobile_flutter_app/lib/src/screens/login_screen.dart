@@ -26,6 +26,17 @@ class _LoginScreenState extends State<LoginScreen> {
   String? _error;
 
   @override
+  void initState() {
+    super.initState();
+    widget.sessionManager.readPreference('saved_login_username').then((value) {
+      if (!mounted) return;
+      if (value != null && value.isNotEmpty) {
+        _usernameController.text = value;
+      }
+    });
+  }
+
+  @override
   void dispose() {
     _usernameController.dispose();
     _passwordController.dispose();
@@ -64,19 +75,6 @@ class _LoginScreenState extends State<LoginScreen> {
     }
   }
 
-  @override
-  void initState() {
-    super.initState();
-    widget.sessionManager.readPreference('saved_login_username').then((value) {
-      if (!mounted) return;
-      if (value != null && value.isNotEmpty) {
-        _usernameController.text = value;
-      }
-    });
-  }
-
-
-
   Future<void> _openServerSettings() async {
     final updated = await showModalBottomSheet<bool>(
       context: context,
@@ -97,73 +95,93 @@ class _LoginScreenState extends State<LoginScreen> {
       body: SafeArea(
         child: Center(
           child: SingleChildScrollView(
-            padding: const EdgeInsets.all(24),
+            padding: const EdgeInsets.fromLTRB(16, 18, 16, 22),
             child: ConstrainedBox(
               constraints: const BoxConstraints(maxWidth: 430),
               child: Column(
+                crossAxisAlignment: CrossAxisAlignment.stretch,
                 children: <Widget>[
-                  AppCard(
-                    padding: const EdgeInsets.fromLTRB(24, 28, 24, 24),
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
+                  Container(
+                    padding: const EdgeInsets.fromLTRB(22, 28, 22, 30),
+                    decoration: BoxDecoration(
+                      gradient: AppTheme.primaryGradient,
+                      borderRadius: const BorderRadius.only(
+                        topLeft: Radius.circular(22),
+                        topRight: Radius.circular(22),
+                      ),
+                    ),
+                    child: Stack(
                       children: <Widget>[
-                        Row(
-                          children: <Widget>[
-                            Container(
-                              padding: const EdgeInsets.all(12),
-                              decoration: BoxDecoration(
-                                color: AppTheme.primary,
-                                borderRadius: BorderRadius.circular(18),
-                              ),
-                              child: const Icon(Icons.inventory_2_outlined, color: Colors.white),
+                        Positioned(
+                          right: -28,
+                          top: -42,
+                          child: Container(
+                            width: 142,
+                            height: 142,
+                            decoration: BoxDecoration(
+                              color: Colors.white.withOpacity(0.12),
+                              shape: BoxShape.circle,
                             ),
-                            const SizedBox(width: 12),
-                            const Expanded(
-                              child: Column(
-                                crossAxisAlignment: CrossAxisAlignment.start,
-                                children: <Widget>[
-                                  Text(
-                                    'Daraz Inventory Control',
-                                    style: TextStyle(
-                                      fontSize: 18,
-                                      fontWeight: FontWeight.w800,
-                                    ),
+                          ),
+                        ),
+                        Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: <Widget>[
+                            Row(
+                              children: <Widget>[
+                                Container(
+                                  width: 32,
+                                  height: 32,
+                                  decoration: BoxDecoration(
+                                    color: Colors.white.withOpacity(0.16),
+                                    borderRadius: BorderRadius.circular(11),
                                   ),
-                                  SizedBox(height: 4),
-                                  Text(
-                                    'Internal stock management',
-                                    style: TextStyle(
-                                      color: AppTheme.textMuted,
-                                      fontWeight: FontWeight.w600,
-                                    ),
-                                  ),
-                                ],
+                                  child: const Icon(Icons.inventory_2_outlined, color: Colors.white, size: 17),
+                                ),
+                                const SizedBox(width: 9),
+                                const Text(
+                                  'Daraz Control',
+                                  style: TextStyle(color: Colors.white, fontWeight: FontWeight.w900, fontSize: 13),
+                                ),
+                              ],
+                            ),
+                            const SizedBox(height: 26),
+                            const Text(
+                              'Welcome back',
+                              style: TextStyle(
+                                color: Colors.white,
+                                fontSize: 28,
+                                fontWeight: FontWeight.w900,
+                                letterSpacing: -0.8,
+                              ),
+                            ),
+                            const SizedBox(height: 6),
+                            Text(
+                              'Sign in to manage your stores, inventory and Daraz syncs.',
+                              style: TextStyle(
+                                color: Colors.white.withOpacity(0.88),
+                                fontSize: 13,
+                                fontWeight: FontWeight.w600,
+                                height: 1.35,
                               ),
                             ),
                           ],
                         ),
-                        const SizedBox(height: 28),
-                        const Text(
-                          'Admin Login',
-                          style: TextStyle(
-                            fontSize: 30,
-                            fontWeight: FontWeight.w900,
-                            letterSpacing: -0.9,
-                          ),
-                        ),
-                        const SizedBox(height: 8),
-                        const Text(
-                          'Sign in to your operations dashboard',
-                          style: TextStyle(
-                            color: AppTheme.textMuted,
-                            fontWeight: FontWeight.w500,
-                          ),
-                        ),
-                        const SizedBox(height: 24),
+                      ],
+                    ),
+                  ),
+                  AppCard(
+                    radius: 0,
+                    shadow: false,
+                    padding: const EdgeInsets.fromLTRB(18, 22, 18, 18),
+                    borderColor: Colors.transparent,
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: <Widget>[
                         AppTextField(
                           controller: _usernameController,
-                          labelText: 'Email / Username',
-                          hintText: 'admin@company.com',
+                          labelText: 'Email',
+                          hintText: 'admin@karachistore.pk',
                           prefixIcon: Icons.mail_outline,
                         ),
                         const SizedBox(height: 14),
@@ -181,21 +199,28 @@ class _LoginScreenState extends State<LoginScreen> {
                         const SizedBox(height: 12),
                         Row(
                           children: <Widget>[
-                            Checkbox(
-                              value: _rememberMe,
-                              activeColor: AppTheme.primary,
-                              onChanged: (value) {
-                                setState(() => _rememberMe = value ?? true);
-                              },
+                            SizedBox(
+                              width: 28,
+                              height: 28,
+                              child: Checkbox(
+                                value: _rememberMe,
+                                activeColor: AppTheme.primary,
+                                onChanged: (value) => setState(() => _rememberMe = value ?? true),
+                              ),
                             ),
-                            const Text(
-                              'Remember me',
-                              style: TextStyle(fontWeight: FontWeight.w600),
+                            const SizedBox(width: 8),
+                            const Expanded(
+                              child: Text(
+                                'Remember this admin account',
+                                maxLines: 1,
+                                overflow: TextOverflow.ellipsis,
+                                style: TextStyle(fontWeight: FontWeight.w700, fontSize: 12),
+                              ),
                             ),
                           ],
                         ),
                         if (_error != null) ...<Widget>[
-                          const SizedBox(height: 6),
+                          const SizedBox(height: 12),
                           InfoBanner(
                             text: _error!,
                             background: AppTheme.dangerSoft,
@@ -206,54 +231,76 @@ class _LoginScreenState extends State<LoginScreen> {
                         const SizedBox(height: 16),
                         PrimaryButton(
                           label: 'Sign In',
-                          icon: Icons.login_rounded,
+                          icon: Icons.arrow_forward_rounded,
                           expanded: true,
                           loading: _loading,
                           onPressed: _submit,
                         ),
-                        const SizedBox(height: 18),
-                        const Center(
-                          child: Text(
-                            'Manual admin access only. Credentials are validated by the existing Node.js backend.',
-                            textAlign: TextAlign.center,
-                            style: TextStyle(
-                              color: AppTheme.textMuted,
-                              fontSize: 12,
-                              height: 1.4,
+                        const SizedBox(height: 16),
+                        Row(
+                          mainAxisAlignment: MainAxisAlignment.center,
+                          children: const <Widget>[
+                            Icon(Icons.lock_outline, size: 14, color: AppTheme.textMuted),
+                            SizedBox(width: 5),
+                            Text(
+                              'Secure session — encrypted in transit',
+                              style: TextStyle(color: AppTheme.textMuted, fontSize: 11, fontWeight: FontWeight.w700),
                             ),
-                          ),
-                        ),
-                        const SizedBox(height: 12),
-                        Center(
-                          child: Column(
-                            children: <Widget>[
-                              Text(
-                                'Backend: ${AppConfig.apiBaseUrl}',
-                                textAlign: TextAlign.center,
-                                style: const TextStyle(
-                                  color: AppTheme.textMuted,
-                                  fontSize: 12,
-                                  height: 1.35,
-                                ),
-                              ),
-                              const SizedBox(height: 4),
-                              TextButton.icon(
-                                onPressed: _loading ? null : _openServerSettings,
-                                icon: const Icon(Icons.settings_ethernet_outlined),
-                                label: const Text('Change backend URL'),
-                              ),
-                            ],
-                          ),
+                          ],
                         ),
                       ],
                     ),
                   ),
-                  const SizedBox(height: 18),
-                  const Text(
-                    'SSL • Secured Login',
-                    style: TextStyle(
-                      color: AppTheme.textMuted,
-                      fontWeight: FontWeight.w700,
+                  AppCard(
+                    radius: 0,
+                    shadow: false,
+                    padding: const EdgeInsets.fromLTRB(18, 14, 18, 18),
+                    borderColor: Colors.transparent,
+                    child: AppCard(
+                      padding: const EdgeInsets.all(13),
+                      backgroundColor: AppTheme.background,
+                      shadow: false,
+                      child: Row(
+                        children: <Widget>[
+                          const MiniIcon(icon: Icons.dns_outlined, size: 34),
+                          const SizedBox(width: 12),
+                          Expanded(
+                            child: Column(
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              children: <Widget>[
+                                const Text('API endpoint', style: TextStyle(fontWeight: FontWeight.w900, fontSize: 12)),
+                                const SizedBox(height: 3),
+                                Text(
+                                  AppConfig.apiBaseUrl,
+                                  maxLines: 1,
+                                  overflow: TextOverflow.ellipsis,
+                                  style: const TextStyle(color: AppTheme.textMuted, fontSize: 11, fontWeight: FontWeight.w700),
+                                ),
+                              ],
+                            ),
+                          ),
+                          TextButton(
+                            onPressed: _loading ? null : _openServerSettings,
+                            child: const Text('Change', style: TextStyle(fontSize: 12, fontWeight: FontWeight.w900)),
+                          ),
+                        ],
+                      ),
+                    ),
+                  ),
+                  Container(
+                    padding: const EdgeInsets.fromLTRB(18, 0, 18, 18),
+                    decoration: const BoxDecoration(
+                      color: Colors.white,
+                      borderRadius: BorderRadius.only(
+                        bottomLeft: Radius.circular(22),
+                        bottomRight: Radius.circular(22),
+                      ),
+                    ),
+                    child: const Center(
+                      child: Text(
+                        'v2.4.1 · Daraz Inventory Control',
+                        style: TextStyle(color: AppTheme.textMuted, fontSize: 11, fontWeight: FontWeight.w700),
+                      ),
                     ),
                   ),
                 ],
