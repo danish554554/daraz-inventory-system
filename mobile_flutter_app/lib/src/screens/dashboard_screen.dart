@@ -208,21 +208,53 @@ class _DashboardScreenState extends State<DashboardScreen> {
     return alerts;
   }
 
+
+  List<_PurchaseCandidate> get _purchaseCandidates {
+    final grouped = <String, List<InventoryItem>>{};
+    for (final item in _inventory) {
+      final key = item.masterSku.isNotEmpty ? item.masterSku : item.sellerSku;
+      grouped.putIfAbsent(key, () => <InventoryItem>[]).add(item);
+    }
+
+    final candidates = grouped.entries.map((entry) {
+      final rows = entry.value;
+      final totalStock = rows.fold<int>(0, (sum, item) => sum + item.stock);
+      final totalAvailable = rows.fold<int>(0, (sum, item) => sum + item.availableStock);
+      final threshold = rows.fold<int>(0, (sum, item) => sum + item.lowStockLimit);
+      final stores = rows.map((item) => item.storeCode).toSet().join(', ');
+      final productName = rows.first.productName.isEmpty ? entry.key : rows.first.productName;
+      return _PurchaseCandidate(
+        sku: entry.key,
+        productName: productName,
+        stock: totalStock,
+        available: totalAvailable,
+        threshold: threshold,
+        stores: stores,
+      );
+    }).where((item) => item.stock <= item.threshold).toList()
+      ..sort((a, b) => a.stock.compareTo(b.stock));
+
+    return candidates;
+  }
+
   @override
   Widget build(BuildContext context) {
+    final candidates = _purchaseCandidates;
+
     return Scaffold(
       appBar: AppBar(
-        title: const Text('Operations'),
+        title: const Text('Dashboard'),
         actions: <Widget>[
           IconButton(
+            tooltip: 'Refresh',
             onPressed: _loading ? null : _load,
-            icon: const Icon(Icons.notifications_none_rounded),
+            icon: const Icon(Icons.refresh_rounded),
           ),
         ],
       ),
       body: SafeArea(
         child: _loading
-            ? const AppLoader(label: 'Loading your control center...')
+            ? const AppLoader(label: 'Loading dashboard...')
             : _error != null
                 ? Padding(
                     padding: const EdgeInsets.all(20),
@@ -246,86 +278,65 @@ class _DashboardScreenState extends State<DashboardScreen> {
                         ),
                         const SizedBox(height: 4),
                         const Text(
-                          'Operations',
+                          'Inventory Control',
                           style: TextStyle(
-                            fontSize: 34,
+                            fontSize: 32,
                             fontWeight: FontWeight.w900,
                             letterSpacing: -1.0,
                           ),
                         ),
-                        const SizedBox(height: 14),
-                        InfoBanner(
-                          text: _syncStatus?.syncRunningNow == true
-                              ? 'The sync engine is currently running. Inventory numbers may refresh within a few seconds.'
-                              : 'This app manages internal stock only. Daraz orders reduce ledger stock without changing listing quantity.',
-                          background: _syncStatus?.syncRunningNow == true
-                              ? AppTheme.infoSoft
-                              : AppTheme.dangerSoft.withValues(alpha: 0.45),
-                          foreground: _syncStatus?.syncRunningNow == true
-                              ? AppTheme.info
-                              : AppTheme.primary,
-                          icon: _syncStatus?.syncRunningNow == true
-                              ? Icons.sync
-                              : Icons.warning_amber_rounded,
-                        ),
-                        const SizedBox(height: 22),
-                        const SectionHeader(
-                          title: 'Stock Overview',
-                          subtitle:
-                              'Live summary from the same backend APIs used by the web dashboard.',
-                        ),
-                        const SizedBox(height: 14),
+                        const SizedBox(height: 16),
+                        _todayStatusCard(candidates.length),
+                        const SizedBox(height: 18),
+                        const SectionHeader(title: 'Stock Summary'),
+                        const SizedBox(height: 12),
                         _metricsGrid(context),
-                        const SizedBox(height: 22),
-                        const SectionHeader(
-                          title: 'Operations',
-                          subtitle:
-                              'High-signal operational totals to watch throughout the day.',
-                        ),
-                        const SizedBox(height: 14),
-                        _operationsGrid(context),
-                        const SizedBox(height: 22),
+                        const SizedBox(height: 20),
                         SectionHeader(
-                          title: 'Active Alerts',
-                          subtitle:
-                              'Critical inventory and store connection issues.',
-                          action: TextButton(
-                            onPressed: () {},
-                            child: const Text('View all'),
-                          ),
+                          title: 'Buy Again',
+                          action: candidates.isEmpty
+                              ? null
+                              : StatusChip(
+                                  label: '${candidates.length} low',
+                                  color: AppTheme.danger,
+                                  softColor: AppTheme.dangerSoft,
+                                ),
                         ),
-                        const SizedBox(height: 14),
+                        const SizedBox(height: 12),
+                        if (candidates.isEmpty)
+                          const EmptyState(
+                            title: 'Stock is healthy',
+                            message: 'No products are below their reorder limit.',
+                            icon: Icons.check_circle_outline,
+                          )
+                        else
+                          ...candidates.take(5).map(_buildPurchaseCard),
+                        const SizedBox(height: 20),
+                        const SectionHeader(title: 'Store Status'),
+                        const SizedBox(height: 12),
+                        _operationsGrid(context),
+                        const SizedBox(height: 20),
+                        const SectionHeader(title: 'Alerts'),
+                        const SizedBox(height: 12),
                         if (_alerts.isEmpty)
                           const EmptyState(
-                            title: 'No active alerts',
-                            message: 'Everything looks stable right now.',
+                            title: 'No alerts',
+                            message: 'All connected stores and stock levels look okay.',
                             icon: Icons.shield_outlined,
                           )
                         else
                           ..._alerts.map(_buildAlertCard),
-                        const SizedBox(height: 22),
-                        const SectionHeader(
-                          title: 'Sync Activity',
-                          subtitle: 'Latest store status and recent sync outcomes.',
-                        ),
-                        const SizedBox(height: 14),
-                        ..._stores.take(4).map(_buildSyncActivityCard),
-                        const SizedBox(height: 22),
-                        const SectionHeader(
-                          title: 'Recent Transactions',
-                          subtitle:
-                              'Newest stock movements recorded in the central ledger.',
-                        ),
-                        const SizedBox(height: 14),
+                        const SizedBox(height: 20),
+                        const SectionHeader(title: 'Recent Stock Movement'),
+                        const SizedBox(height: 12),
                         if (_transactions.isEmpty)
                           const EmptyState(
-                            title: 'No transactions yet',
-                            message:
-                                'Transactions will appear here after sync, restock, or adjustment actions.',
+                            title: 'No movement yet',
+                            message: 'Orders, restocks, and adjustments will appear here.',
                             icon: Icons.receipt_long_outlined,
                           )
                         else
-                          ..._transactions.take(6).map(_buildTransactionCard),
+                          ..._transactions.take(5).map(_buildTransactionCard),
                       ],
                     ),
                   ),
@@ -333,9 +344,97 @@ class _DashboardScreenState extends State<DashboardScreen> {
     );
   }
 
+
+  Widget _todayStatusCard(int lowProducts) {
+    final syncRunning = _syncStatus?.syncRunningNow == true;
+    final hasDisconnectedStores = _connectedStores < _stores.length;
+    final message = syncRunning
+        ? 'Sync is running now.'
+        : hasDisconnectedStores
+            ? 'Reconnect disconnected stores before relying on order sync.'
+            : lowProducts > 0
+                ? 'Review low stock products and purchase before overselling.'
+                : 'Inventory is up to date.';
+
+    return AppCard(
+      borderColor: lowProducts > 0 || hasDisconnectedStores ? AppTheme.warningSoft : AppTheme.successSoft,
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: <Widget>[
+          Container(
+            padding: const EdgeInsets.all(12),
+            decoration: BoxDecoration(
+              color: lowProducts > 0 || hasDisconnectedStores ? AppTheme.warningSoft : AppTheme.successSoft,
+              borderRadius: BorderRadius.circular(18),
+            ),
+            child: Icon(
+              lowProducts > 0 || hasDisconnectedStores ? Icons.priority_high_rounded : Icons.done_rounded,
+              color: lowProducts > 0 || hasDisconnectedStores ? AppTheme.warning : AppTheme.success,
+            ),
+          ),
+          const SizedBox(width: 14),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: <Widget>[
+                const Text('Today', style: TextStyle(fontSize: 18, fontWeight: FontWeight.w900)),
+                const SizedBox(height: 6),
+                Text(message, style: const TextStyle(color: AppTheme.textMuted, height: 1.35)),
+              ],
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildPurchaseCard(_PurchaseCandidate item) {
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 12),
+      child: AppCard(
+        borderColor: item.stock <= 0 ? AppTheme.dangerSoft : AppTheme.warningSoft,
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: <Widget>[
+            Row(
+              children: <Widget>[
+                Expanded(
+                  child: Text(
+                    item.productName,
+                    maxLines: 2,
+                    overflow: TextOverflow.ellipsis,
+                    style: const TextStyle(fontWeight: FontWeight.w900, fontSize: 16),
+                  ),
+                ),
+                StatusChip(
+                  label: item.stock <= 0 ? 'Out' : 'Low',
+                  color: item.stock <= 0 ? AppTheme.danger : AppTheme.warning,
+                  softColor: item.stock <= 0 ? AppTheme.dangerSoft : AppTheme.warningSoft,
+                ),
+              ],
+            ),
+            const SizedBox(height: 8),
+            Text(item.sku, maxLines: 1, overflow: TextOverflow.ellipsis, style: const TextStyle(color: AppTheme.textMuted, fontWeight: FontWeight.w700)),
+            const SizedBox(height: 12),
+            Wrap(
+              spacing: 10,
+              runSpacing: 8,
+              children: <Widget>[
+                _miniTag('Stock', '${item.stock}'),
+                _miniTag('Available', '${item.available}'),
+                _miniTag('Limit', '${item.threshold}'),
+                _miniTag('Stores', item.stores),
+              ],
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
   Widget _metricsGrid(BuildContext context) {
     final width = MediaQuery.of(context).size.width;
-    final itemWidth = (width - 56) / 2;
+    final itemWidth = width < 380 ? width - 40 : (width - 56) / 2;
 
     return Wrap(
       spacing: 12,
@@ -386,7 +485,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
 
   Widget _operationsGrid(BuildContext context) {
     final width = MediaQuery.of(context).size.width;
-    final itemWidth = (width - 56) / 2;
+    final itemWidth = width < 380 ? width - 40 : (width - 56) / 2;
 
     return Wrap(
       spacing: 12,
@@ -470,6 +569,8 @@ class _DashboardScreenState extends State<DashboardScreen> {
                       Expanded(
                         child: Text(
                           alert.type,
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
                           style: const TextStyle(
                             fontWeight: FontWeight.w800,
                             fontSize: 16,
@@ -484,10 +585,17 @@ class _DashboardScreenState extends State<DashboardScreen> {
                     ],
                   ),
                   const SizedBox(height: 8),
-                  Text(alert.message, style: const TextStyle(height: 1.4)),
+                  Text(
+                    alert.message,
+                    maxLines: 3,
+                    overflow: TextOverflow.ellipsis,
+                    style: const TextStyle(height: 1.4),
+                  ),
                   const SizedBox(height: 8),
                   Text(
                     alert.meta,
+                    maxLines: 2,
+                    overflow: TextOverflow.ellipsis,
                     style: const TextStyle(
                       color: AppTheme.textMuted,
                       fontWeight: FontWeight.w700,
@@ -523,6 +631,8 @@ class _DashboardScreenState extends State<DashboardScreen> {
                     children: <Widget>[
                       Text(
                         store.name,
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
                         style: const TextStyle(
                           fontWeight: FontWeight.w800,
                           fontSize: 16,
@@ -531,6 +641,8 @@ class _DashboardScreenState extends State<DashboardScreen> {
                       const SizedBox(height: 4),
                       Text(
                         '${store.code} • ${Formatters.dateTime(store.lastSyncFinishedAt)}',
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
                         style: const TextStyle(
                           color: AppTheme.textMuted,
                           fontWeight: FontWeight.w600,
@@ -559,6 +671,8 @@ class _DashboardScreenState extends State<DashboardScreen> {
               const SizedBox(height: 10),
               Text(
                 store.healthReason,
+                maxLines: 3,
+                overflow: TextOverflow.ellipsis,
                 style: const TextStyle(
                   color: AppTheme.textMuted,
                   height: 1.35,
@@ -600,6 +714,8 @@ class _DashboardScreenState extends State<DashboardScreen> {
                       Expanded(
                         child: Text(
                           tx.productName,
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
                           style: const TextStyle(fontWeight: FontWeight.w800),
                         ),
                       ),
@@ -615,6 +731,8 @@ class _DashboardScreenState extends State<DashboardScreen> {
                   const SizedBox(height: 6),
                   Text(
                     '${tx.storeCode} • ${tx.sellerSku} • ${tx.transactionType.replaceAll('_', ' ')}',
+                    maxLines: 2,
+                    overflow: TextOverflow.ellipsis,
                     style: const TextStyle(
                       color: AppTheme.textMuted,
                       fontWeight: FontWeight.w600,
@@ -623,6 +741,8 @@ class _DashboardScreenState extends State<DashboardScreen> {
                   const SizedBox(height: 6),
                   Text(
                     'Stock ${tx.stockBefore} → ${tx.stockAfter} • ${Formatters.dateTime(tx.createdAt)}',
+                    maxLines: 2,
+                    overflow: TextOverflow.ellipsis,
                     style: const TextStyle(color: AppTheme.textMuted),
                   ),
                 ],
@@ -695,6 +815,24 @@ class _DashboardScreenState extends State<DashboardScreen> {
     if (hour < 18) return 'Good afternoon';
     return 'Good evening';
   }
+}
+
+class _PurchaseCandidate {
+  _PurchaseCandidate({
+    required this.sku,
+    required this.productName,
+    required this.stock,
+    required this.available,
+    required this.threshold,
+    required this.stores,
+  });
+
+  final String sku;
+  final String productName;
+  final int stock;
+  final int available;
+  final int threshold;
+  final String stores;
 }
 
 class _DashboardAlert {

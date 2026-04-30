@@ -17,6 +17,25 @@ const centralInventorySchema = new mongoose.Schema(
       default: "",
       trim: true
     },
+    daraz_product_id: {
+      type: String,
+      default: "",
+      trim: true
+    },
+    daraz_item_id: {
+      type: String,
+      default: "",
+      trim: true
+    },
+    daraz_sku_id: {
+      type: String,
+      default: "",
+      trim: true
+    },
+    last_product_import_at: {
+      type: Date,
+      default: null
+    },
     stock: {
       type: Number,
       required: true,

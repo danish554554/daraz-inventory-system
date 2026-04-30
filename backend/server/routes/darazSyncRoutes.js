@@ -6,6 +6,7 @@ const {
   syncStoreById,
   getSyncLockState
 } = require("../services/centralInventorySyncService");
+const { importProductsForStore } = require("../services/darazProductImportService");
 
 const router = express.Router();
 
@@ -83,6 +84,27 @@ router.post("/run-store/:storeId", async (req, res) => {
     res.status(statusCode).json({
       success: false,
       message: "Error syncing store",
+      error: error.message
+    });
+  }
+});
+
+
+router.post("/import-products/:storeId", async (req, res) => {
+  try {
+    const result = await importProductsForStore(req.params.storeId, req.body || {});
+
+    res.json({
+      success: true,
+      message: "Daraz active products imported successfully",
+      result
+    });
+  } catch (error) {
+    const statusCode = error.message === "Store not found" ? 404 : 500;
+
+    res.status(statusCode).json({
+      success: false,
+      message: "Error importing Daraz products",
       error: error.message
     });
   }

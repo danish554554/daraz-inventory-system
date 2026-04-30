@@ -59,53 +59,69 @@ class MetricCard extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return AppCard(
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: <Widget>[
-          Row(
-            mainAxisAlignment: MainAxisAlignment.spaceBetween,
-            children: <Widget>[
-              Container(
-                padding: const EdgeInsets.all(10),
-                decoration: BoxDecoration(
-                  color: tint,
-                  borderRadius: BorderRadius.circular(14),
+    return ConstrainedBox(
+      constraints: const BoxConstraints(minHeight: 140),
+      child: AppCard(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: <Widget>[
+            Row(
+              mainAxisAlignment: MainAxisAlignment.spaceBetween,
+              children: <Widget>[
+                Container(
+                  padding: const EdgeInsets.all(10),
+                  decoration: BoxDecoration(
+                    color: tint,
+                    borderRadius: BorderRadius.circular(14),
+                  ),
+                  child: Icon(icon, color: iconColor, size: 18),
                 ),
-                child: Icon(icon, color: iconColor, size: 18),
-              ),
-              if (trailing != null) trailing!,
-            ],
-          ),
-          const SizedBox(height: 14),
-          Text(
-            value,
-            style: const TextStyle(
-              fontSize: 28,
-              fontWeight: FontWeight.w800,
-              letterSpacing: -0.8,
+                if (trailing != null)
+                  Flexible(
+                    child: Align(
+                      alignment: Alignment.centerRight,
+                      child: trailing!,
+                    ),
+                  ),
+              ],
             ),
-          ),
-          const SizedBox(height: 6),
-          Text(
-            label,
-            style: const TextStyle(
-              color: AppTheme.textMuted,
-              fontWeight: FontWeight.w600,
-            ),
-          ),
-          if (caption != null) ...<Widget>[
-            const SizedBox(height: 8),
+            const SizedBox(height: 14),
             Text(
-              caption!,
+              value,
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
               style: const TextStyle(
-                color: AppTheme.success,
-                fontSize: 12,
-                fontWeight: FontWeight.w700,
+                fontSize: 28,
+                fontWeight: FontWeight.w800,
+                letterSpacing: -0.8,
               ),
             ),
+            const SizedBox(height: 6),
+            Text(
+              label,
+              maxLines: 2,
+              overflow: TextOverflow.ellipsis,
+              style: const TextStyle(
+                color: AppTheme.textMuted,
+                fontWeight: FontWeight.w600,
+              ),
+            ),
+            if (caption != null) ...<Widget>[
+              const SizedBox(height: 8),
+              Text(
+                caption!,
+                maxLines: 2,
+                overflow: TextOverflow.ellipsis,
+                style: const TextStyle(
+                  color: AppTheme.success,
+                  fontSize: 12,
+                  fontWeight: FontWeight.w700,
+                ),
+              ),
+            ],
           ],
-        ],
+        ),
       ),
     );
   }
@@ -120,18 +136,24 @@ class StatusChip extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
-      decoration: BoxDecoration(
-        color: softColor,
-        borderRadius: BorderRadius.circular(20),
-      ),
-      child: Text(
-        label,
-        style: TextStyle(
-          color: color,
-          fontSize: 12,
-          fontWeight: FontWeight.w700,
+    return ConstrainedBox(
+      constraints: const BoxConstraints(maxWidth: 140),
+      child: Container(
+        padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+        decoration: BoxDecoration(
+          color: softColor,
+          borderRadius: BorderRadius.circular(20),
+        ),
+        child: Text(
+          label,
+          maxLines: 1,
+          overflow: TextOverflow.ellipsis,
+          textAlign: TextAlign.center,
+          style: TextStyle(
+            color: color,
+            fontSize: 12,
+            fontWeight: FontWeight.w700,
+          ),
         ),
       ),
     );
@@ -161,6 +183,8 @@ class SectionHeader extends StatelessWidget {
             children: <Widget>[
               Text(
                 title,
+                maxLines: 2,
+                overflow: TextOverflow.ellipsis,
                 style: const TextStyle(
                   fontSize: 24,
                   fontWeight: FontWeight.w800,
@@ -171,6 +195,8 @@ class SectionHeader extends StatelessWidget {
                 const SizedBox(height: 4),
                 Text(
                   subtitle!,
+                  maxLines: 3,
+                  overflow: TextOverflow.ellipsis,
                   style: const TextStyle(
                     color: AppTheme.textMuted,
                     fontWeight: FontWeight.w500,
@@ -221,6 +247,8 @@ class PrimaryButton extends StatelessWidget {
           : Icon(icon ?? Icons.arrow_forward, size: 18),
       label: Text(
         label,
+        maxLines: 1,
+        overflow: TextOverflow.ellipsis,
         style: const TextStyle(fontWeight: FontWeight.w800),
       ),
     );
@@ -253,6 +281,8 @@ class SecondaryButton extends StatelessWidget {
       icon: Icon(icon ?? Icons.tune, size: 18),
       label: Text(
         label,
+        maxLines: 1,
+        overflow: TextOverflow.ellipsis,
         style: const TextStyle(fontWeight: FontWeight.w700),
       ),
     );

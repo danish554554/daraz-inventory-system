@@ -1,6 +1,5 @@
 import 'package:flutter/material.dart';
 import 'package:package_info_plus/package_info_plus.dart';
-import 'package:url_launcher/url_launcher.dart';
 
 import '../services/app_config.dart';
 import '../services/session_manager.dart';
@@ -66,16 +65,6 @@ class _SettingsScreenState extends State<SettingsScreen> {
     }
   }
 
-  Future<void> _openUrl(String url) async {
-    final uri = Uri.parse(url);
-    final launched = await launchUrl(uri, mode: LaunchMode.externalApplication);
-    if (!launched && mounted) {
-      showAppSnackBar(context, 'Could not open $url', error: true);
-    }
-  }
-
-
-
   Future<void> _openApiSettings() async {
     final updated = await showModalBottomSheet<bool>(
       context: context,
@@ -100,14 +89,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
           children: <Widget>[
             const SectionHeader(
               title: 'Settings',
-              subtitle: 'Session, environment, and app details for the mobile client.',
-            ),
-            const SizedBox(height: 16),
-            const InfoBanner(
-              text: 'This Flutter app keeps the original server logic intact. Orders, sync scheduling, inventory deductions, and audit records still live on your existing Node.js backend.',
-              background: AppTheme.infoSoft,
-              foreground: AppTheme.info,
-              icon: Icons.info_outline,
+              subtitle: 'Manage your login session and backend connection.',
             ),
             const SizedBox(height: 18),
             AppCard(
@@ -129,7 +111,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: <Widget>[
-                  const Text('Environment', style: TextStyle(fontSize: 18, fontWeight: FontWeight.w800)),
+                  const Text('Backend / Environment', style: TextStyle(fontSize: 18, fontWeight: FontWeight.w800)),
                   const SizedBox(height: 14),
                   _settingRow('API base URL', AppConfig.apiBaseUrl),
                   const SizedBox(height: 10),
@@ -139,36 +121,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
                     icon: Icons.edit_location_alt_outlined,
                   ),
                   const SizedBox(height: 10),
-                  _settingRow('App build', _loadingVersion ? 'Loading...' : _version),
-                  const SizedBox(height: 10),
-                  _settingRow('Mode', 'Material 3 mobile client'),
-                ],
-              ),
-            ),
-            const SizedBox(height: 14),
-            AppCard(
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: <Widget>[
-                  const Text('Quick Links', style: TextStyle(fontSize: 18, fontWeight: FontWeight.w800)),
-                  const SizedBox(height: 14),
-                  SecondaryButton(
-                    label: 'Open Backend Base URL',
-                    onPressed: () => _openUrl(AppConfig.apiBaseUrl.replaceFirst('/api', '')),
-                    icon: Icons.open_in_browser,
-                  ),
-                  const SizedBox(height: 12),
-                  SecondaryButton(
-                    label: 'Open Flutter Documentation',
-                    onPressed: () => _openUrl('https://docs.flutter.dev/'),
-                    icon: Icons.menu_book_outlined,
-                  ),
-                  const SizedBox(height: 12),
-                  SecondaryButton(
-                    label: 'Open Pub.dev Packages',
-                    onPressed: () => _openUrl('https://pub.dev/'),
-                    icon: Icons.extension_outlined,
-                  ),
+                  _settingRow('App build/version', _loadingVersion ? 'Loading...' : _version),
                 ],
               ),
             ),
@@ -177,10 +130,20 @@ class _SettingsScreenState extends State<SettingsScreen> {
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: <Widget>[
-                  Text('Notes', style: TextStyle(fontSize: 18, fontWeight: FontWeight.w800)),
+                  Text('App Information', style: TextStyle(fontSize: 18, fontWeight: FontWeight.w800)),
                   SizedBox(height: 14),
                   Text(
-                    'Connect Daraz from the Stores screen. The app now starts the backend OAuth flow and returns straight back into the mobile app after seller authorization.',
+                    'Use this page to manage your login session and backend connection.',
+                    style: TextStyle(color: AppTheme.textMuted, height: 1.45),
+                  ),
+                  SizedBox(height: 8),
+                  Text(
+                    'Daraz store connection is managed from the Stores screen.',
+                    style: TextStyle(color: AppTheme.textMuted, height: 1.45),
+                  ),
+                  SizedBox(height: 8),
+                  Text(
+                    'Inventory and product import are managed from the Inventory screen.',
                     style: TextStyle(color: AppTheme.textMuted, height: 1.45),
                   ),
                 ],
@@ -198,7 +161,12 @@ class _SettingsScreenState extends State<SettingsScreen> {
       children: <Widget>[
         Text(label, style: const TextStyle(color: AppTheme.textMuted, fontWeight: FontWeight.w600)),
         const SizedBox(height: 4),
-        Text(value, style: const TextStyle(fontWeight: FontWeight.w700)),
+        Text(
+          value,
+          maxLines: 3,
+          overflow: TextOverflow.ellipsis,
+          style: const TextStyle(fontWeight: FontWeight.w700),
+        ),
       ],
     );
   }

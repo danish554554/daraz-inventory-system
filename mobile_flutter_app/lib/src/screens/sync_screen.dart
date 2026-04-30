@@ -159,6 +159,27 @@ class _SyncScreenState extends State<SyncScreen> {
     }
   }
 
+  Future<void> _importProductsForStore(StoreModel store) async {
+    setState(() => _working = true);
+    try {
+      await ApiClient.instance.post('/daraz-sync/import-products/${store.id}');
+      if (mounted) {
+        showAppSnackBar(context, 'Active Daraz products imported successfully.');
+      }
+      await _load();
+    } catch (_) {
+      if (mounted) {
+        showAppSnackBar(
+          context,
+          'Failed to import Daraz products. Please try again.',
+          error: true,
+        );
+      }
+    } finally {
+      if (mounted) setState(() => _working = false);
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
     return Scaffold(
@@ -222,22 +243,27 @@ class _SyncScreenState extends State<SyncScreen> {
                                 loading: _working,
                               ),
                               const SizedBox(height: 12),
-                              SizedBox(
-                                height: 52,
-                                child: DropdownButtonFormField<String>(
-                                  initialValue: _storeFilter,
-                                  decoration: const InputDecoration(labelText: 'Focus on store'),
-                                  items: <DropdownMenuItem<String>>[
-                                    const DropdownMenuItem<String>(value: 'all', child: Text('All stores')),
-                                    ..._stores.map(
-                                      (store) => DropdownMenuItem<String>(
-                                        value: store.id,
-                                        child: Text('${store.name} (${store.code})'),
+                              DropdownButtonFormField<String>(
+                                initialValue: _storeFilter,
+                                isExpanded: true,
+                                decoration: const InputDecoration(labelText: 'Focus on store'),
+                                items: <DropdownMenuItem<String>>[
+                                  const DropdownMenuItem<String>(
+                                    value: 'all',
+                                    child: Text('All stores', maxLines: 1, overflow: TextOverflow.ellipsis),
+                                  ),
+                                  ..._stores.map(
+                                    (store) => DropdownMenuItem<String>(
+                                      value: store.id,
+                                      child: Text(
+                                        '${store.name} (${store.code})',
+                                        maxLines: 1,
+                                        overflow: TextOverflow.ellipsis,
                                       ),
                                     ),
-                                  ],
-                                  onChanged: (value) => setState(() => _storeFilter = value ?? 'all'),
-                                ),
+                                  ),
+                                ],
+                                onChanged: (value) => setState(() => _storeFilter = value ?? 'all'),
                               ),
                             ],
                           ),
@@ -312,7 +338,7 @@ class _SyncScreenState extends State<SyncScreen> {
     final deducted = _orderItems.where((item) => item.stockDeducted).length;
     final errors = _orderItems.where((item) => item.errorMessage.trim().isNotEmpty).length;
     final width = MediaQuery.of(context).size.width;
-    final itemWidth = (width - 56) / 2;
+    final itemWidth = width < 380 ? width - 40 : (width - 56) / 2;
 
     return Wrap(
       spacing: 12,
@@ -341,9 +367,9 @@ class _SyncScreenState extends State<SyncScreen> {
                   child: Column(
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: <Widget>[
-                      Text(store.name, style: const TextStyle(fontWeight: FontWeight.w800, fontSize: 16)),
+                      Text(store.name, maxLines: 1, overflow: TextOverflow.ellipsis, style: const TextStyle(fontWeight: FontWeight.w800, fontSize: 16)),
                       const SizedBox(height: 4),
-                      Text('${store.code} • ${store.country} • ${store.deductStage}', style: const TextStyle(color: AppTheme.textMuted)),
+                      Text('${store.code} • ${store.country} • ${store.deductStage}', maxLines: 1, overflow: TextOverflow.ellipsis, style: const TextStyle(color: AppTheme.textMuted)),
                     ],
                   ),
                 ),
@@ -357,20 +383,41 @@ class _SyncScreenState extends State<SyncScreen> {
             const SizedBox(height: 10),
             Text(
               store.lastSyncMessage.isNotEmpty ? store.lastSyncMessage : store.healthReason,
+              maxLines: 3,
+              overflow: TextOverflow.ellipsis,
               style: const TextStyle(fontWeight: FontWeight.w600),
             ),
             const SizedBox(height: 6),
             Text(
               'Last sync ${Formatters.dateTime(store.lastSyncFinishedAt)} • Duration ${Formatters.durationMs(store.lastSyncDurationMs)}',
+              maxLines: 2,
+              overflow: TextOverflow.ellipsis,
               style: const TextStyle(color: AppTheme.textMuted),
             ),
             const SizedBox(height: 12),
-            PrimaryButton(
-              label: 'Sync ${store.code}',
-              onPressed: _working || !store.tokenConnected ? null : () => _runStoreSync(store),
-              icon: Icons.sync,
-              expanded: true,
-              loading: syncingThisStore,
+            Wrap(
+              spacing: 10,
+              runSpacing: 10,
+              children: <Widget>[
+                SizedBox(
+                  width: 160,
+                  child: PrimaryButton(
+                    label: 'Sync ${store.code}',
+                    onPressed: _working || !store.tokenConnected ? null : () => _runStoreSync(store),
+                    icon: Icons.sync,
+                    expanded: true,
+                    loading: syncingThisStore,
+                  ),
+                ),
+                SizedBox(
+                  width: 180,
+                  child: SecondaryButton(
+                    label: 'Import Products',
+                    onPressed: _working || !store.tokenConnected ? null : () => _importProductsForStore(store),
+                    icon: Icons.cloud_download_outlined,
+                  ),
+                ),
+              ],
             ),
           ],
         ),
@@ -391,7 +438,7 @@ class _SyncScreenState extends State<SyncScreen> {
             Row(
               children: <Widget>[
                 Expanded(
-                  child: Text(order.orderNumber.isEmpty ? order.externalOrderId : order.orderNumber, style: const TextStyle(fontWeight: FontWeight.w800)),
+                  child: Text(order.orderNumber.isEmpty ? order.externalOrderId : order.orderNumber, maxLines: 1, overflow: TextOverflow.ellipsis, style: const TextStyle(fontWeight: FontWeight.w800)),
                 ),
                 StatusChip(label: order.status.isEmpty ? 'Unknown' : order.status, color: color, softColor: softColor),
               ],
@@ -444,7 +491,7 @@ class _SyncScreenState extends State<SyncScreen> {
             Row(
               children: <Widget>[
                 Expanded(
-                  child: Text(item.productName.isEmpty ? item.sellerSku : item.productName, style: const TextStyle(fontWeight: FontWeight.w800)),
+                  child: Text(item.productName.isEmpty ? item.sellerSku : item.productName, maxLines: 1, overflow: TextOverflow.ellipsis, style: const TextStyle(fontWeight: FontWeight.w800)),
                 ),
                 StatusChip(label: label, color: color, softColor: softColor),
               ],

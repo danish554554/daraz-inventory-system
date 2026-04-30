@@ -13,8 +13,8 @@ const darazOauthRoutes = require('./routes/darazOauthRoutes');
 const authRoutes = require('./routes/authRoutes');
 const storeRoutes = require('./routes/storeRoutes');
 const centralInventoryRoutes = require('./routes/centralInventoryRoutes');
-const productRoutes = require('./routes/productRoutes');
 const darazSyncRoutes = require('./routes/darazSyncRoutes');
+const productRoutes = require('./routes/productRoutes');
 const { startOrderSyncScheduler } = require('./services/orderSyncScheduler');
 const { getSecurityConfigSummary } = require('./utils/adminAuth');
 
@@ -116,8 +116,8 @@ app.use('/api/stores/oauth', darazOauthRoutes);
 app.use('/api/daraz/oauth', darazOauthRoutes);
 app.use('/api/stores', protectAdmin, storeRoutes);
 app.use('/api/central-inventory', protectAdmin, centralInventoryRoutes);
-app.use('/api/products', protectAdmin, productRoutes);
 app.use('/api/daraz-sync', protectAdmin, darazSyncRoutes);
+app.use('/api/products', protectAdmin, productRoutes);
 
 app.use((req, res) => {
   return res.status(404).json({

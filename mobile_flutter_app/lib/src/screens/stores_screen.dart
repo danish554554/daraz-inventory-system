@@ -197,6 +197,24 @@ class _StoresScreenState extends State<StoresScreen> {
     }
   }
 
+  Future<void> _importProductsForStore(StoreModel store) async {
+    try {
+      await ApiClient.instance.post('/daraz-sync/import-products/${store.id}');
+      await _load();
+      if (mounted) {
+        showAppSnackBar(context, 'Active Daraz products imported successfully.');
+      }
+    } catch (_) {
+      if (mounted) {
+        showAppSnackBar(
+          context,
+          'Failed to import Daraz products. Please try again.',
+          error: true,
+        );
+      }
+    }
+  }
+
   Future<bool> _confirm({required String title, required String message, required String confirmText}) async {
     final result = await showDialog<bool>(
       context: context,
@@ -283,7 +301,7 @@ class _StoresScreenState extends State<StoresScreen> {
     final summary = _summary;
     if (summary == null) return const SizedBox.shrink();
     final width = MediaQuery.of(context).size.width;
-    final itemWidth = (width - 56) / 2;
+    final itemWidth = width < 380 ? width - 40 : (width - 56) / 2;
 
     return Wrap(
       spacing: 12,
@@ -317,6 +335,7 @@ class _StoresScreenState extends State<StoresScreen> {
               onDisconnect: () => _disconnectStore(store),
               onDelete: () => _deleteStore(store),
               onSync: () => _syncStore(store),
+              onImportProducts: () => _importProductsForStore(store),
             ),
           );
         },
@@ -344,9 +363,9 @@ class _StoresScreenState extends State<StoresScreen> {
                   child: Column(
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: <Widget>[
-                      Text(store.name, style: const TextStyle(fontWeight: FontWeight.w800, fontSize: 17)),
+                      Text(store.name, maxLines: 1, overflow: TextOverflow.ellipsis, style: const TextStyle(fontWeight: FontWeight.w800, fontSize: 17)),
                       const SizedBox(height: 4),
-                      Text('${store.code} • ${store.account.isEmpty ? 'Seller not linked' : store.account}', style: const TextStyle(color: AppTheme.textMuted, fontWeight: FontWeight.w600)),
+                      Text('${store.code} • ${store.account.isEmpty ? 'Seller not linked' : store.account}', maxLines: 1, overflow: TextOverflow.ellipsis, style: const TextStyle(color: AppTheme.textMuted, fontWeight: FontWeight.w600)),
                     ],
                   ),
                 ),
@@ -577,6 +596,7 @@ class StoreDetailSheet extends StatefulWidget {
     required this.onDisconnect,
     required this.onDelete,
     required this.onSync,
+    required this.onImportProducts,
   });
 
   final StoreModel store;
@@ -586,6 +606,7 @@ class StoreDetailSheet extends StatefulWidget {
   final VoidCallback onDisconnect;
   final VoidCallback onDelete;
   final VoidCallback onSync;
+  final VoidCallback onImportProducts;
 
   @override
   State<StoreDetailSheet> createState() => _StoreDetailSheetState();
@@ -651,11 +672,11 @@ class _StoreDetailSheetState extends State<StoreDetailSheet> {
                       ],
                     ),
                     const SizedBox(height: 14),
-                    Text(_detail!.store.healthReason, style: const TextStyle(color: AppTheme.textMuted, height: 1.4)),
+                    Text(_detail!.store.healthReason, maxLines: 3, overflow: TextOverflow.ellipsis, style: const TextStyle(color: AppTheme.textMuted, height: 1.4)),
                     const SizedBox(height: 10),
                     Text('Last sync: ${Formatters.dateTime(_detail!.store.lastSyncFinishedAt)}', style: const TextStyle(fontWeight: FontWeight.w700)),
                     const SizedBox(height: 6),
-                    Text('Latest status: ${_detail!.store.lastSyncMessage.isEmpty ? 'No sync message' : _detail!.store.lastSyncMessage}', style: const TextStyle(color: AppTheme.textMuted)),
+                    Text('Latest status: ${_detail!.store.lastSyncMessage.isEmpty ? 'No sync message' : _detail!.store.lastSyncMessage}', maxLines: 3, overflow: TextOverflow.ellipsis, style: const TextStyle(color: AppTheme.textMuted)),
                   ],
                 ),
               ),
@@ -665,6 +686,7 @@ class _StoreDetailSheetState extends State<StoreDetailSheet> {
                 runSpacing: 10,
                 children: <Widget>[
                   SizedBox(width: 160, child: PrimaryButton(label: 'Sync Now', onPressed: widget.onSync, icon: Icons.sync, expanded: true)),
+                  SizedBox(width: 160, child: SecondaryButton(label: 'Import Products', onPressed: widget.store.tokenConnected ? widget.onImportProducts : null, icon: Icons.cloud_download_outlined)),
                   SizedBox(width: 160, child: SecondaryButton(label: 'Validate', onPressed: widget.onValidate, icon: Icons.verified_outlined)),
                   SizedBox(width: 160, child: SecondaryButton(label: 'Edit', onPressed: widget.onEdit, icon: Icons.edit_outlined)),
                   SizedBox(width: 160, child: SecondaryButton(label: widget.store.tokenConnected ? 'Disconnect' : 'Connect Daraz', onPressed: widget.store.tokenConnected ? widget.onDisconnect : widget.onConnect, icon: widget.store.tokenConnected ? Icons.link_off_outlined : Icons.link_rounded)),

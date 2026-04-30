@@ -154,24 +154,6 @@ function extractOrdersFromData(data) {
   return [];
 }
 
-function extractProductsFromData(data) {
-  if (!data) return [];
-  if (Array.isArray(data.products)) return data.products;
-  if (Array.isArray(data.product_list)) return data.product_list;
-  if (Array.isArray(data.items)) return data.items;
-  if (Array.isArray(data.list)) return data.list;
-
-  const direct = deepFindFirstArray(data, (arr) => {
-    if (!arr.length) return false;
-    const first = arr[0];
-    return first && typeof first === "object" && (
-      "seller_sku" in first || "SellerSku" in first || "item_id" in first ||
-      "product_id" in first || "product_name" in first || "title" in first
-    );
-  });
-  return direct || [];
-}
-
 function extractItemsFromData(data) {
   if (!data) return [];
 
@@ -219,6 +201,61 @@ function extractItemsFromData(data) {
   return [];
 }
 
+
+function extractProductsFromData(data) {
+  if (!data) return [];
+
+  if (Array.isArray(data.products)) return data.products;
+  if (Array.isArray(data.product_list)) return data.product_list;
+  if (Array.isArray(data.products_list)) return data.products_list;
+  if (Array.isArray(data.items)) return data.items;
+  if (Array.isArray(data.list)) return data.list;
+
+  const direct = deepFindFirstArray(data, (arr) => {
+    if (!arr.length) return false;
+    const first = arr[0];
+    return (
+      first &&
+      typeof first === "object" &&
+      (
+        "product_id" in first ||
+        "item_id" in first ||
+        "seller_sku" in first ||
+        "skus" in first ||
+        "sku_list" in first ||
+        "product_name" in first ||
+        "name" in first
+      )
+    );
+  });
+
+  if (direct) return direct;
+
+  const arrays = deepFindAllArrays(data);
+  for (const arr of arrays) {
+    if (!arr.length) continue;
+    const first = arr[0];
+
+    if (
+      first &&
+      typeof first === "object" &&
+      (
+        "product_id" in first ||
+        "item_id" in first ||
+        "seller_sku" in first ||
+        "skus" in first ||
+        "sku_list" in first ||
+        "product_name" in first ||
+        "name" in first
+      )
+    ) {
+      return arr;
+    }
+  }
+
+  return [];
+}
+
 function extractCount(data, listLength = 0) {
   if (!data || typeof data !== "object") return listLength;
 
@@ -226,6 +263,8 @@ function extractCount(data, listLength = 0) {
     data.count ??
     data.total_count ??
     data.total ??
+    data.totalProducts ??
+    data.total_products ??
     data.totalRecords ??
     data.total_records ??
     data.record_count;
@@ -372,9 +411,28 @@ async function getOrders({
   };
 }
 
-async function getProducts({ storeToken, status = "active", offset = 0, limit = 100 }) {
+async function getOrderItems({ storeToken, orderId }) {
+  const result = await darazRequest("/order/items/get", storeToken, {
+    order_id: orderId
+  });
+
+  const items = extractItemsFromData(result.data);
+
+  return {
+    raw: result,
+    items
+  };
+}
+
+
+async function getProducts({
+  storeToken,
+  filter = "live",
+  offset = 0,
+  limit = 50
+}) {
   const result = await darazRequest("/products/get", storeToken, {
-    filter: status,
+    filter,
     offset,
     limit
   });
@@ -392,21 +450,9 @@ async function getProducts({ storeToken, status = "active", offset = 0, limit = 
   };
 }
 
-async function getOrderItems({ storeToken, orderId }) {
-  const result = await darazRequest("/order/items/get", storeToken, {
-    order_id: orderId
-  });
-
-  const items = extractItemsFromData(result.data);
-
-  return {
-    raw: result,
-    items
-  };
-}
-
 module.exports = {
   darazRequest,
   getOrders,
-  getOrderItems
+  getOrderItems,
+  getProducts
 };
