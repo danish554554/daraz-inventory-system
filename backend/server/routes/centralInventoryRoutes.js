@@ -6,96 +6,11 @@ const InventoryTransaction = require('../models/InventoryTransaction');
 const StockReceipt = require('../models/StockReceipt');
 const StockAdjustmentRequest = require('../models/StockAdjustmentRequest');
 const Store = require('../models/Store');
+const InventoryMergeGroup = require('../models/InventoryMergeGroup');
 
 function toNumber(value, fallback = 0) {
-  if (value === undefined || value === null || value === '') return fallback;
-  if (typeof value === 'string') {
-    const cleaned = value.replace(/[^0-9.-]/g, '');
-    const parsed = Number(cleaned);
-    return Number.isFinite(parsed) ? parsed : fallback;
-  }
   const num = Number(value);
   return Number.isFinite(num) ? num : fallback;
-}
-
-function normalizeText(value = '') {
-  return String(value || '')
-    .toLowerCase()
-    .replace(/&/g, ' and ')
-    .replace(/[\u2010-\u2015]/g, '-')
-    .replace(/\b(pack|set|combo|bundle)\b/g, ' ')
-    .replace(/[^a-z0-9]+/g, ' ')
-    .replace(/\s+/g, ' ')
-    .trim();
-}
-
-function baseProductTitle(row = {}) {
-  const title = row.display_title || row.product_name || row.original_title || row.seller_sku || 'Daraz Product';
-  const withoutVariantTail = String(title)
-    .replace(/\s+[-|–—]\s*(black|white|blue|pink|red|green|gold|silver|grey|gray|small|medium|large|xl|xxl|single|pack.*)$/i, '')
-    .trim();
-  return withoutVariantTail || title;
-}
-
-function makeMergeKey(row = {}) {
-  const titleKey = normalizeText(baseProductTitle(row));
-  if (titleKey) return `title:${titleKey}`;
-  const productId = row.daraz_product_id || row.daraz_item_id || '';
-  if (productId) return `product:${productId}`;
-  return `sku:${normalizeText(row.seller_sku)}`;
-}
-
-function mergeInventoryRows(rows = []) {
-  const groups = new Map();
-
-  for (const row of rows) {
-    const key = makeMergeKey(row);
-    if (!groups.has(key)) {
-      groups.set(key, {
-        ...row,
-        product_name: baseProductTitle(row),
-        original_title: baseProductTitle(row),
-        display_title: baseProductTitle(row),
-        stock: 0,
-        reserved_stock: 0,
-        available_stock: 0,
-        low_stock_limit: 0,
-        mapped_sku_count: 0,
-        stores_involved: 0,
-        sku_rows: [],
-        _storeCodes: new Set(),
-        _sellerSkus: []
-      });
-    }
-
-    const group = groups.get(key);
-    group.stock = Math.max(group.stock, toNumber(row.stock, 0));
-    group.reserved_stock = Math.max(group.reserved_stock, toNumber(row.reserved_stock, 0));
-    group.available_stock = Math.max(group.available_stock, toNumber(row.available_stock, 0));
-    group.low_stock_limit = Math.max(group.low_stock_limit, toNumber(row.low_stock_limit, 0));
-    group.mapped_sku_count += 1;
-    if (row.store_code) group._storeCodes.add(row.store_code);
-    if (row.seller_sku) group._sellerSkus.push(row.seller_sku);
-    if (!group.image_url && row.image_url) group.image_url = row.image_url;
-    if (!group.store_id && row.store_id) group.store_id = row.store_id;
-    if (!group.store_name && row.store_name) group.store_name = row.store_name;
-    if (!group.store_code && row.store_code) group.store_code = row.store_code;
-    group.sku_rows.push({ ...row, sku_rows: [] });
-  }
-
-  return Array.from(groups.values()).map((group) => {
-    const storeCodes = Array.from(group._storeCodes);
-    const sellerSkus = Array.from(new Set(group._sellerSkus));
-    delete group._storeCodes;
-    delete group._sellerSkus;
-    group.stores_involved = storeCodes.length || 1;
-    group.store_code = group.stores_involved > 1 ? `${group.stores_involved} stores` : group.store_code;
-    group.store_name = group.stores_involved > 1 ? 'Multiple stores' : group.store_name;
-    group.seller_sku = sellerSkus.length > 1 ? `${sellerSkus[0]} +${sellerSkus.length - 1}` : (sellerSkus[0] || group.seller_sku);
-    group.master_sku = group.seller_sku;
-    group.mapped_skus_text = group.sku_rows.map((row) => `${row.store_code}:${row.seller_sku}`).join(', ');
-    return group;
-  }).sort((a, b) => a.stock - b.stock || String(a.display_title).localeCompare(String(b.display_title)));
 }
 
 function toCsv(rows = [], headers = []) {
@@ -159,52 +74,138 @@ async function findInventoryByPayload({ inventory_id, product_id, store_id, sell
   return null;
 }
 
-function makeInventoryRow(item) {
+function makeInventoryRow(item, extra = {}) {
   const stock = toNumber(item.stock, 0);
   const reserved = toNumber(item.reserved_stock, 0);
   return {
     _id: item._id,
-    inventory_id: item._id,
+    inventory_id: item.inventory_id || item._id,
     store_id: item.store_id?._id || item.store_id,
     store_name: item.store_id?.name || item.store_name || '-',
-    store_code: item.store_id?.code || '-',
+    store_code: item.store_id?.code || item.store_code || '-',
     product_name: item.product_name || item.seller_sku,
     original_title: item.original_product_name || item.product_name || item.seller_sku,
     display_title: item.display_title || item.product_name || item.seller_sku,
     image_url: item.image_url || '',
     seller_sku: item.seller_sku,
-    master_sku: item.seller_sku,
-    daraz_product_id: item.daraz_product_id || '',
-    daraz_item_id: item.daraz_item_id || '',
+    master_sku: item.master_sku || item.seller_sku,
     stock,
     reserved_stock: reserved,
     available_stock: Math.max(stock - reserved, 0),
     low_stock_limit: toNumber(item.low_stock_limit, 5),
     mapped_sku_count: 1,
-    mapped_skus_text: `${item.store_id?.code || item.store_code || '-'}:${item.seller_sku}`,
+    mapped_skus_text: (item.store_id?.code || item.store_code || '-') + ':' + item.seller_sku,
     stores_involved: 1,
-    updatedAt: item.updatedAt || item.createdAt
+    source_inventory_ids: [String(item._id)],
+    is_merged: false,
+    updatedAt: item.updatedAt || item.createdAt,
+    ...extra
   };
 }
 
-async function getInventoryRows({ search = '', lowStockOnly = false, storeId = '', mergeSkus = false } = {}) {
+function normalizeSearch(value = '') {
+  return String(value || '').trim().toLowerCase();
+}
+
+function rowMatchesSearch(row, query) {
+  const search = normalizeSearch(query);
+  if (!search) return true;
+  return [
+    row.product_name,
+    row.display_title,
+    row.original_title,
+    row.seller_sku,
+    row.master_sku,
+    row.store_name,
+    row.store_code,
+    row.mapped_skus_text
+  ].some((value) => String(value || '').toLowerCase().includes(search));
+}
+
+function makeMergedInventoryRow(group, items) {
+  const first = items[0] || {};
+  const stock = items.reduce((sum, item) => sum + toNumber(item.stock, 0), 0);
+  const reserved = items.reduce((sum, item) => sum + toNumber(item.reserved_stock, 0), 0);
+  const lowStockLimit = items.reduce((min, item) => Math.min(min, toNumber(item.low_stock_limit, 5)), 5);
+  const stores = new Map();
+  const skuTexts = [];
+
+  for (const item of items) {
+    const storeId = String(item.store_id?._id || item.store_id || '');
+    const code = item.store_id?.code || item.store_code || '-';
+    if (storeId) stores.set(storeId, code);
+    skuTexts.push(code + ':' + item.seller_sku);
+  }
+
+  return makeInventoryRow(
+    {
+      _id: group._id,
+      inventory_id: first._id,
+      store_id: first.store_id,
+      product_name: group.title || first.display_title || first.product_name || first.seller_sku,
+      original_product_name: first.original_product_name || first.product_name || first.seller_sku,
+      display_title: group.title || first.display_title || first.product_name || first.seller_sku,
+      image_url: group.image_url || first.image_url || '',
+      seller_sku: first.seller_sku || '-',
+      master_sku: first.seller_sku || '-',
+      stock,
+      reserved_stock: reserved,
+      low_stock_limit: lowStockLimit,
+      updatedAt: group.updatedAt || first.updatedAt || first.createdAt
+    },
+    {
+      is_merged: true,
+      merge_group_id: group._id,
+      mapped_sku_count: items.length,
+      mapped_skus_text: skuTexts.join(' • '),
+      stores_involved: stores.size || 1,
+      source_inventory_ids: items.map((item) => String(item._id))
+    }
+  );
+}
+
+async function getInventoryRows({ search = '', lowStockOnly = false, storeId = '' } = {}) {
   const query = {};
   if (storeId) query.store_id = storeId;
   if (search?.trim()) {
     query.$or = [
       { product_name: { $regex: search.trim(), $options: 'i' } },
+      { display_title: { $regex: search.trim(), $options: 'i' } },
       { seller_sku: { $regex: search.trim(), $options: 'i' } }
     ];
   }
 
-  let items = await CentralInventory.find(query)
-    .populate('store_id', 'name code')
-    .sort({ updatedAt: -1, createdAt: -1 })
-    .lean();
+  const [items, groups] = await Promise.all([
+    CentralInventory.find(query)
+      .populate('store_id', 'name code')
+      .sort({ updatedAt: -1, createdAt: -1 })
+      .lean(),
+    InventoryMergeGroup.find({})
+      .populate({ path: 'inventory_ids', populate: { path: 'store_id', select: 'name code' } })
+      .sort({ updatedAt: -1, createdAt: -1 })
+      .lean()
+  ]);
 
-  let rows = items.map(makeInventoryRow);
-  if (mergeSkus) rows = mergeInventoryRows(rows);
+  const groupedInventoryIds = new Set();
+  const mergedRows = [];
+
+  for (const group of groups) {
+    const groupItems = (group.inventory_ids || [])
+      .filter((item) => item && (!storeId || String(item.store_id?._id || item.store_id) === String(storeId)));
+    if (groupItems.length < 2 && !storeId) {
+      continue;
+    }
+    for (const item of groupItems) groupedInventoryIds.add(String(item._id));
+    if (groupItems.length > 0) mergedRows.push(makeMergedInventoryRow(group, groupItems));
+  }
+
+  const singleRows = items
+    .filter((item) => !groupedInventoryIds.has(String(item._id)))
+    .map((item) => makeInventoryRow(item));
+
+  let rows = [...mergedRows, ...singleRows].filter((row) => rowMatchesSearch(row, search));
   if (lowStockOnly) rows = rows.filter((item) => item.stock <= item.low_stock_limit);
+  rows.sort((a, b) => toNumber(a.stock, 0) - toNumber(b.stock, 0));
   return rows;
 }
 
@@ -390,10 +391,65 @@ async function getSupplierAnalytics({ start, end, supplier = '', storeId = '' } 
   return { start: dateStart, end: dateEnd, suppliers, daily, totals };
 }
 
+router.post('/merge', async (req, res, next) => {
+  try {
+    const inventoryIds = Array.from(new Set((req.body.inventory_ids || req.body.inventoryIds || [])
+      .map((value) => String(value || '').trim())
+      .filter(Boolean)));
+
+    if (inventoryIds.length < 2) {
+      return res.status(400).json({ message: 'Select at least 2 matching products to merge.' });
+    }
+
+    const items = await CentralInventory.find({ _id: { $in: inventoryIds } })
+      .populate('store_id', 'name code')
+      .lean();
+
+    if (items.length < 2) {
+      return res.status(400).json({ message: 'At least 2 valid inventory rows are required.' });
+    }
+
+    await InventoryMergeGroup.updateMany(
+      { inventory_ids: { $in: inventoryIds } },
+      { $pull: { inventory_ids: { $in: inventoryIds } } }
+    );
+    await InventoryMergeGroup.deleteMany({ $expr: { $lt: [{ $size: '$inventory_ids' }, 2] } });
+
+    const primary = items.find((item) => item.image_url) || items[0];
+    const title = String(req.body.title || primary.display_title || primary.product_name || primary.seller_sku || 'Merged Product').trim();
+    const imageUrl = String(req.body.image_url || primary.image_url || '').trim();
+
+    const group = await InventoryMergeGroup.create({
+      title,
+      image_url: imageUrl,
+      inventory_ids: items.map((item) => item._id),
+      created_by: String(req.body.created_by || 'admin').trim()
+    });
+
+    const populated = await InventoryMergeGroup.findById(group._id)
+      .populate({ path: 'inventory_ids', populate: { path: 'store_id', select: 'name code' } })
+      .lean();
+
+    res.json({
+      success: true,
+      message: 'Selected SKUs merged successfully.',
+      group: populated,
+      inventory: makeMergedInventoryRow(populated, populated.inventory_ids || [])
+    });
+  } catch (error) { next(error); }
+});
+
+router.delete('/merge/:id', async (req, res, next) => {
+  try {
+    const deleted = await InventoryMergeGroup.findByIdAndDelete(req.params.id);
+    if (!deleted) return res.status(404).json({ message: 'Merge group not found.' });
+    res.json({ success: true, message: 'Merged SKU group removed.' });
+  } catch (error) { next(error); }
+});
+
 router.get('/', async (req, res, next) => {
   try {
-    const mergeSkus = ['1', 'true', 'yes'].includes(String(req.query.merge || '').toLowerCase());
-    const rows = await getInventoryRows({ search: req.query.search, storeId: req.query.store_id || '', lowStockOnly: ['1', 'true', 'yes'].includes(String(req.query.low_stock).toLowerCase()), mergeSkus });
+    const rows = await getInventoryRows({ search: req.query.search, storeId: req.query.store_id || '', lowStockOnly: ['1', 'true', 'yes'].includes(String(req.query.low_stock).toLowerCase()) });
     res.json(rows);
   } catch (error) { next(error); }
 });
@@ -401,7 +457,7 @@ router.get('/', async (req, res, next) => {
 router.get('/summary', async (req, res, next) => {
   try {
     const [inventoryRows, recentRestocks, pendingAdjustments] = await Promise.all([
-      getInventoryRows({ search: req.query.search, storeId: req.query.store_id || '', mergeSkus: ['1', 'true', 'yes'].includes(String(req.query.merge || '').toLowerCase()) }),
+      getInventoryRows({ search: req.query.search, storeId: req.query.store_id || '' }),
       getRecentRestocks(10, req.query.store_id || ''),
       StockAdjustmentRequest.countDocuments(req.query.store_id ? { status: 'pending', store_id: req.query.store_id } : { status: 'pending' })
     ]);

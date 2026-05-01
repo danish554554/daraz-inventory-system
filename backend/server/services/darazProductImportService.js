@@ -10,11 +10,6 @@ function safeString(value) {
 
 function toNumber(value, fallback = 0) {
   if (value === undefined || value === null || value === "") return fallback;
-  if (typeof value === "string") {
-    const cleaned = value.replace(/[^0-9.-]/g, "");
-    const parsed = Number(cleaned);
-    return Number.isFinite(parsed) ? parsed : fallback;
-  }
   const num = Number(value);
   return Number.isFinite(num) ? num : fallback;
 }

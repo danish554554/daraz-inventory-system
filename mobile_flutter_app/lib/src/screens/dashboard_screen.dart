@@ -21,13 +21,13 @@ class _DashboardScreenState extends State<DashboardScreen> {
   bool _loading = true;
   String? _error;
   String _historyPeriod = 'today';
+  Map<String, dynamic> _historySummary = <String, dynamic>{};
 
   List<StoreModel> _stores = <StoreModel>[];
   List<InventoryItem> _inventory = <InventoryItem>[];
   List<InventoryTransactionModel> _transactions = <InventoryTransactionModel>[];
   List<CentralOrder> _orders = <CentralOrder>[];
   List<CentralOrderItem> _orderItems = <CentralOrderItem>[];
-  Map<String, dynamic> _historySummary = <String, dynamic>{};
   SyncStatus? _syncStatus;
 
   @override
@@ -76,7 +76,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
         safe(
           ApiClient.instance.get(
             '/daraz-sync/orders-history',
-            queryParameters: <String, dynamic>{'period': _historyPeriod, 'limit': 80},
+            queryParameters: <String, dynamic>{'period': _historyPeriod, 'limit': 20},
           ),
         ),
       ]);
@@ -101,18 +101,14 @@ class _DashboardScreenState extends State<DashboardScreen> {
         _transactions = JsonReaders.list(results[2])
             .map((item) => InventoryTransactionModel.fromJson(JsonReaders.map(item)))
             .toList();
-        _orders = JsonReaders.list(ordersMap['orders'])
+        final historyOrders = JsonReaders.list(historyMap['orders']);
+        _orders = (historyOrders.isNotEmpty ? historyOrders : JsonReaders.list(ordersMap['orders']))
             .map((item) => CentralOrder.fromJson(JsonReaders.map(item)))
             .toList();
+        _historySummary = JsonReaders.map(historyMap['summary']);
         _orderItems = JsonReaders.list(itemsMap['items'])
             .map((item) => CentralOrderItem.fromJson(JsonReaders.map(item)))
             .toList();
-        _historySummary = JsonReaders.map(historyMap['summary']);
-        if (JsonReaders.list(historyMap['orders']).isNotEmpty) {
-          _orders = JsonReaders.list(historyMap['orders'])
-              .map((item) => CentralOrder.fromJson(JsonReaders.map(item)))
-              .toList();
-        }
         _syncStatus = results[5] == null
             ? SyncStatus(schedulerManagedBy: '', syncEngine: '', syncRunningNow: false)
             : SyncStatus.fromJson(JsonReaders.map(results[5]));
@@ -174,19 +170,6 @@ class _DashboardScreenState extends State<DashboardScreen> {
                         ..._lowStockItems.take(4).map(_lowStockCard),
                       const SizedBox(height: 18),
                       _sectionTitle('Orders History', action: _historyPeriod.toUpperCase()),
-                      const SizedBox(height: 10),
-                      SingleChildScrollView(
-                        scrollDirection: Axis.horizontal,
-                        child: Row(
-                          children: <Widget>[
-                            _historyChip('today', 'Today'),
-                            const SizedBox(width: 8),
-                            _historyChip('week', 'Week'),
-                            const SizedBox(width: 8),
-                            _historyChip('month', 'Month'),
-                          ],
-                        ),
-                      ),
                       const SizedBox(height: 10),
                       _ordersHistoryCard(),
                       const SizedBox(height: 10),
@@ -382,31 +365,37 @@ class _DashboardScreenState extends State<DashboardScreen> {
 
 
   Widget _ordersHistoryCard() {
-    final revenue = _historySummary.isEmpty
-        ? _orderItems.fold<double>(0, (sum, item) => sum + item.amount)
-        : JsonReaders.number(_historySummary, 'revenue');
-    final returns = _historySummary.isEmpty
-        ? _orderItems.where((item) => item.isReturn).length
-        : JsonReaders.integer(_historySummary, 'returns');
-    final failed = _historySummary.isEmpty
-        ? _orderItems.where((item) => item.isFailedDelivery).length
-        : JsonReaders.integer(_historySummary, 'failed_deliveries');
-    final totalOrders = _historySummary.isEmpty
-        ? _orders.length
-        : JsonReaders.integer(_historySummary, 'total_orders');
+    final summaryOrders = JsonReaders.integer(_historySummary, 'total_orders', _orders.length);
+    final revenue = JsonReaders.number(_historySummary, 'revenue', _orderItems.fold<double>(0, (sum, item) => sum + item.amount));
+    final revenueAvailable = JsonReaders.boolean(_historySummary, 'revenue_available', revenue > 0);
+    final returns = JsonReaders.integer(_historySummary, 'returns', _orderItems.where((item) => item.isReturn).length);
+    final failed = JsonReaders.integer(_historySummary, 'failed_deliveries', _orderItems.where((item) => item.isFailedDelivery).length);
+
+    final metrics = <Widget>[
+      Expanded(child: _historyMetric('Orders', Formatters.quantity(summaryOrders))),
+      if (revenueAvailable) Expanded(child: _historyMetric('Revenue', 'Rs. ${Formatters.money(revenue)}')),
+    ];
 
     return AppCard(
       padding: const EdgeInsets.all(13),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: <Widget>[
-          Row(
-            children: <Widget>[
-              Expanded(child: _historyMetric('Total Orders', Formatters.quantity(totalOrders))),
-              Expanded(child: _historyMetric('Revenue', 'Rs. ${Formatters.money(revenue)}')),
-            ],
+          SingleChildScrollView(
+            scrollDirection: Axis.horizontal,
+            child: Row(
+              children: <Widget>[
+                _historyChip('today', 'Today'),
+                const SizedBox(width: 8),
+                _historyChip('week', 'Week'),
+                const SizedBox(width: 8),
+                _historyChip('month', 'Month'),
+              ],
+            ),
           ),
           const SizedBox(height: 12),
+          Row(children: metrics.length == 1 ? <Widget>[metrics.first, const Expanded(child: SizedBox.shrink())] : metrics),
+          const SizedBox(height: 10),
           Row(
             children: <Widget>[
               Expanded(child: _historyMetric('Returns', Formatters.quantity(returns))),
@@ -418,23 +407,13 @@ class _DashboardScreenState extends State<DashboardScreen> {
     );
   }
 
-  Widget _historyMetric(String label, String value) {
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: <Widget>[
-        Text(value, maxLines: 1, overflow: TextOverflow.ellipsis, style: const TextStyle(fontSize: 16, fontWeight: FontWeight.w900)),
-        const SizedBox(height: 2),
-        Text(label, maxLines: 1, overflow: TextOverflow.ellipsis, style: const TextStyle(color: AppTheme.textMuted, fontSize: 11, fontWeight: FontWeight.w800)),
-      ],
-    );
-  }
-
   Widget _historyChip(String value, String label) {
     final selected = _historyPeriod == value;
     return ChoiceChip(
       selected: selected,
       label: Text(label),
       onSelected: (_) async {
+        if (selected || _loading) return;
         setState(() => _historyPeriod = value);
         await _load();
       },
@@ -443,6 +422,17 @@ class _DashboardScreenState extends State<DashboardScreen> {
       labelStyle: TextStyle(color: selected ? Colors.white : AppTheme.textPrimary, fontSize: 12, fontWeight: FontWeight.w900),
       side: BorderSide(color: selected ? AppTheme.primary : AppTheme.border),
       shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(24)),
+    );
+  }
+
+  Widget _historyMetric(String label, String value) {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: <Widget>[
+        Text(value, maxLines: 1, overflow: TextOverflow.ellipsis, style: const TextStyle(fontSize: 16, fontWeight: FontWeight.w900)),
+        const SizedBox(height: 2),
+        Text(label, maxLines: 1, overflow: TextOverflow.ellipsis, style: const TextStyle(color: AppTheme.textMuted, fontSize: 11, fontWeight: FontWeight.w800)),
+      ],
     );
   }
 
@@ -466,6 +456,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
   }
 
   Widget _dashboardOrderCard(CentralOrder order) {
+    final amountText = order.amount > 0 ? ' · Rs. ${Formatters.money(order.amount)}' : '';
     final color = order.status.toLowerCase().contains('cancel') ? AppTheme.danger : AppTheme.success;
     final soft = order.status.toLowerCase().contains('cancel') ? AppTheme.dangerSoft : AppTheme.successSoft;
     return Padding(
@@ -482,7 +473,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
                 children: <Widget>[
                   Text(order.productTitle, maxLines: 1, overflow: TextOverflow.ellipsis, style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w900)),
                   const SizedBox(height: 3),
-                  Text('Order ${order.orderNumber.isEmpty ? order.externalOrderId : order.orderNumber} · ${order.storeName} · Rs. ${Formatters.money(order.amount)}', maxLines: 1, overflow: TextOverflow.ellipsis, style: const TextStyle(fontSize: 11, color: AppTheme.textMuted, fontWeight: FontWeight.w700)),
+                  Text('Order ${order.orderNumber.isEmpty ? order.externalOrderId : order.orderNumber} · ${order.storeName}$amountText', maxLines: 1, overflow: TextOverflow.ellipsis, style: const TextStyle(fontSize: 11, color: AppTheme.textMuted, fontWeight: FontWeight.w700)),
                 ],
               ),
             ),
