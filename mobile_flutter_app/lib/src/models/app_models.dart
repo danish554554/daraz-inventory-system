@@ -333,6 +333,10 @@ class InventoryItem {
     required this.reservedStock,
     required this.availableStock,
     required this.lowStockLimit,
+    required this.mappedSkuCount,
+    required this.mappedSkusText,
+    required this.storesInvolved,
+    required this.skuRows,
     required this.updatedAt,
   });
 
@@ -351,8 +355,13 @@ class InventoryItem {
   final int reservedStock;
   final int availableStock;
   final int lowStockLimit;
+  final int mappedSkuCount;
+  final String mappedSkusText;
+  final int storesInvolved;
+  final List<InventoryItem> skuRows;
   final DateTime? updatedAt;
 
+  bool get isMerged => mappedSkuCount > 1 || storesInvolved > 1 || skuRows.isNotEmpty;
   bool get isLowStock => stock <= lowStockLimit;
   bool get isCritical => stock <= 0 || stock <= 2;
   bool get isInStock => stock > lowStockLimit;
@@ -361,6 +370,9 @@ class InventoryItem {
   factory InventoryItem.fromJson(Map<String, dynamic> json) {
     final productName = JsonReaders.string(json, 'product_name');
     final displayTitle = JsonReaders.string(json, 'display_title', productName);
+    final rows = JsonReaders.list(json['sku_rows'])
+        .map((item) => InventoryItem.fromJson(JsonReaders.map(item)))
+        .toList();
     return InventoryItem(
       id: JsonReaders.string(json, '_id'),
       inventoryId: JsonReaders.string(json, 'inventory_id'),
@@ -377,6 +389,10 @@ class InventoryItem {
       reservedStock: JsonReaders.integer(json, 'reserved_stock'),
       availableStock: JsonReaders.integer(json, 'available_stock'),
       lowStockLimit: JsonReaders.integer(json, 'low_stock_limit', 5),
+      mappedSkuCount: JsonReaders.integer(json, 'mapped_sku_count', rows.isEmpty ? 1 : rows.length),
+      mappedSkusText: JsonReaders.string(json, 'mapped_skus_text'),
+      storesInvolved: JsonReaders.integer(json, 'stores_involved', rows.isEmpty ? 1 : rows.map((row) => row.storeCode).toSet().length),
+      skuRows: rows,
       updatedAt: JsonReaders.date(json, 'updatedAt'),
     );
   }
@@ -826,7 +842,7 @@ class CentralOrder {
       orderNumber: JsonReaders.string(json, 'order_number'),
       status: JsonReaders.string(json, 'status'),
       processingStatus: JsonReaders.string(json, 'processing_status'),
-      productTitle: JsonReaders.string(json, 'product_title', 'Order items'),
+      productTitle: JsonReaders.string(json, 'product_title', 'Order item'),
       productImageUrl: JsonReaders.string(json, 'product_image_url'),
       itemCount: JsonReaders.integer(json, 'item_count', 1),
       amount: JsonReaders.number(json, 'amount'),

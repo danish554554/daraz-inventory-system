@@ -20,12 +20,14 @@ class DashboardScreen extends StatefulWidget {
 class _DashboardScreenState extends State<DashboardScreen> {
   bool _loading = true;
   String? _error;
+  String _historyPeriod = 'today';
 
   List<StoreModel> _stores = <StoreModel>[];
   List<InventoryItem> _inventory = <InventoryItem>[];
   List<InventoryTransactionModel> _transactions = <InventoryTransactionModel>[];
   List<CentralOrder> _orders = <CentralOrder>[];
   List<CentralOrderItem> _orderItems = <CentralOrderItem>[];
+  Map<String, dynamic> _historySummary = <String, dynamic>{};
   SyncStatus? _syncStatus;
 
   @override
@@ -71,12 +73,19 @@ class _DashboardScreenState extends State<DashboardScreen> {
           ),
         ),
         safe(ApiClient.instance.get('/daraz-sync/status')),
+        safe(
+          ApiClient.instance.get(
+            '/daraz-sync/orders-history',
+            queryParameters: <String, dynamic>{'period': _historyPeriod, 'limit': 80},
+          ),
+        ),
       ]);
 
       final storesMap = JsonReaders.map(results[0]);
       final inventoryList = JsonReaders.list(results[1]);
       final ordersMap = JsonReaders.map(results[3]);
       final itemsMap = JsonReaders.map(results[4]);
+      final historyMap = JsonReaders.map(results[6]);
 
       if (storesMap.isEmpty && inventoryList.isEmpty) {
         throw ApiException(message: 'Could not load the dashboard. Check the backend URL and session.');
@@ -98,6 +107,12 @@ class _DashboardScreenState extends State<DashboardScreen> {
         _orderItems = JsonReaders.list(itemsMap['items'])
             .map((item) => CentralOrderItem.fromJson(JsonReaders.map(item)))
             .toList();
+        _historySummary = JsonReaders.map(historyMap['summary']);
+        if (JsonReaders.list(historyMap['orders']).isNotEmpty) {
+          _orders = JsonReaders.list(historyMap['orders'])
+              .map((item) => CentralOrder.fromJson(JsonReaders.map(item)))
+              .toList();
+        }
         _syncStatus = results[5] == null
             ? SyncStatus(schedulerManagedBy: '', syncEngine: '', syncRunningNow: false)
             : SyncStatus.fromJson(JsonReaders.map(results[5]));
@@ -158,14 +173,27 @@ class _DashboardScreenState extends State<DashboardScreen> {
                       else
                         ..._lowStockItems.take(4).map(_lowStockCard),
                       const SizedBox(height: 18),
-                      _sectionTitle('Orders History', action: 'Today'),
+                      _sectionTitle('Orders History', action: _historyPeriod.toUpperCase()),
+                      const SizedBox(height: 10),
+                      SingleChildScrollView(
+                        scrollDirection: Axis.horizontal,
+                        child: Row(
+                          children: <Widget>[
+                            _historyChip('today', 'Today'),
+                            const SizedBox(width: 8),
+                            _historyChip('week', 'Week'),
+                            const SizedBox(width: 8),
+                            _historyChip('month', 'Month'),
+                          ],
+                        ),
+                      ),
                       const SizedBox(height: 10),
                       _ordersHistoryCard(),
                       const SizedBox(height: 10),
                       if (_orders.isEmpty)
                         const EmptyState(
                           title: 'No orders yet',
-                          message: 'Today, weekly, monthly and custom order history appears here after sync.',
+                          message: 'Today, weekly and monthly order history appears here after sync.',
                           icon: Icons.receipt_long_outlined,
                         )
                       else
@@ -354,12 +382,18 @@ class _DashboardScreenState extends State<DashboardScreen> {
 
 
   Widget _ordersHistoryCard() {
-    final revenue = _orderItems.fold<double>(0, (sum, item) => sum + item.amount);
-    final returns = _orderItems.where((item) => item.isReturn).length;
-    final failed = _orderItems.where((item) => item.isFailedDelivery).length;
-    final maxOrders = _orders.isEmpty ? 1 : _orders.length;
-    final ordersFraction = (_orders.length / maxOrders).clamp(0.05, 1.0).toDouble();
-    final revenueFraction = revenue <= 0 ? 0.05 : 1.0;
+    final revenue = _historySummary.isEmpty
+        ? _orderItems.fold<double>(0, (sum, item) => sum + item.amount)
+        : JsonReaders.number(_historySummary, 'revenue');
+    final returns = _historySummary.isEmpty
+        ? _orderItems.where((item) => item.isReturn).length
+        : JsonReaders.integer(_historySummary, 'returns');
+    final failed = _historySummary.isEmpty
+        ? _orderItems.where((item) => item.isFailedDelivery).length
+        : JsonReaders.integer(_historySummary, 'failed_deliveries');
+    final totalOrders = _historySummary.isEmpty
+        ? _orders.length
+        : JsonReaders.integer(_historySummary, 'total_orders');
 
     return AppCard(
       padding: const EdgeInsets.all(13),
@@ -368,21 +402,17 @@ class _DashboardScreenState extends State<DashboardScreen> {
         children: <Widget>[
           Row(
             children: <Widget>[
-              Expanded(child: _historyMetric('Orders', Formatters.quantity(_orders.length))),
+              Expanded(child: _historyMetric('Total Orders', Formatters.quantity(totalOrders))),
               Expanded(child: _historyMetric('Revenue', 'Rs. ${Formatters.money(revenue)}')),
             ],
           ),
-          const SizedBox(height: 10),
+          const SizedBox(height: 12),
           Row(
             children: <Widget>[
               Expanded(child: _historyMetric('Returns', Formatters.quantity(returns))),
               Expanded(child: _historyMetric('Failed Delivery', Formatters.quantity(failed))),
             ],
           ),
-          const SizedBox(height: 12),
-          _miniBar('Orders graph', ordersFraction),
-          const SizedBox(height: 8),
-          _miniBar('Revenue graph', revenueFraction),
         ],
       ),
     );
@@ -396,6 +426,23 @@ class _DashboardScreenState extends State<DashboardScreen> {
         const SizedBox(height: 2),
         Text(label, maxLines: 1, overflow: TextOverflow.ellipsis, style: const TextStyle(color: AppTheme.textMuted, fontSize: 11, fontWeight: FontWeight.w800)),
       ],
+    );
+  }
+
+  Widget _historyChip(String value, String label) {
+    final selected = _historyPeriod == value;
+    return ChoiceChip(
+      selected: selected,
+      label: Text(label),
+      onSelected: (_) async {
+        setState(() => _historyPeriod = value);
+        await _load();
+      },
+      selectedColor: AppTheme.primary,
+      backgroundColor: Colors.white,
+      labelStyle: TextStyle(color: selected ? Colors.white : AppTheme.textPrimary, fontSize: 12, fontWeight: FontWeight.w900),
+      side: BorderSide(color: selected ? AppTheme.primary : AppTheme.border),
+      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(24)),
     );
   }
 

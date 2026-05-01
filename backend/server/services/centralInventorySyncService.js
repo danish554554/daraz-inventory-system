@@ -32,6 +32,12 @@ function safeString(value) {
 }
 
 function safeNumber(value, fallback = 0) {
+  if (value === undefined || value === null || value === '') return fallback;
+  if (typeof value === 'string') {
+    const cleaned = value.replace(/[^0-9.-]/g, '');
+    const parsed = Number(cleaned);
+    return Number.isFinite(parsed) ? parsed : fallback;
+  }
   const num = Number(value);
   return Number.isFinite(num) ? num : fallback;
 }
@@ -54,6 +60,22 @@ function statusReached(currentStatus, targetStatus) {
 
 function isCanceledStatus(status) {
   return ['canceled', 'cancelled', 'failed', 'returned', 'closed'].includes(normalizeStatus(status));
+}
+
+function isReturnStatus(status = '') {
+  const normalized = normalizeStatus(status);
+  return ['return', 'returned', 'returning', 'refund', 'refunded', 'claim', 'claimed'].some((key) => normalized.includes(key));
+}
+
+function isFailedDeliveryStatus(status = '') {
+  const normalized = normalizeStatus(status);
+  return normalized.includes('failed_delivery') ||
+    normalized.includes('delivery_failed') ||
+    normalized.includes('undelivered') ||
+    normalized.includes('returned_to_shipper') ||
+    normalized.includes('return_to_shipper') ||
+    normalized.includes('return_to_seller') ||
+    normalized.includes('failed');
 }
 
 function getOrderId(order) {
@@ -85,7 +107,17 @@ function getItemSellerSku(item) {
 }
 
 function getItemStatus(item, orderStatus) {
-  return safeString(item?.status || item?.order_item_status || orderStatus);
+  const status = safeString(
+    item?.status ||
+      item?.order_item_status ||
+      item?.shipment_status ||
+      item?.logistics_status ||
+      item?.delivery_status ||
+      item?.return_status ||
+      item?.statuses?.[0] ||
+      orderStatus
+  );
+  return status;
 }
 
 function getItemName(item) {
@@ -97,7 +129,31 @@ function getItemQuantity(item) {
 }
 
 function getItemPrice(item) {
-  return safeNumber(item?.paid_price || item?.unit_price || item?.price || item?.item_price || 0, 0);
+  const quantity = getItemQuantity(item);
+  const unit = safeNumber(
+    item?.paid_price ??
+      item?.unit_price ??
+      item?.item_price ??
+      item?.sku_price ??
+      item?.price ??
+      item?.sale_price ??
+      item?.product_price ??
+      item?.original_price,
+    NaN
+  );
+  if (Number.isFinite(unit) && unit > 0) return unit;
+
+  const total = safeNumber(
+    item?.amount ??
+      item?.total_amount ??
+      item?.paid_amount ??
+      item?.order_amount ??
+      item?.item_total ??
+      item?.row_total ??
+      item?.subtotal,
+    0
+  );
+  return total > 0 && quantity > 0 ? total / quantity : 0;
 }
 
 
@@ -152,15 +208,35 @@ function getItemImage(item = {}) {
 }
 
 function getReturnReason(item = {}) {
-  return safeString(item?.return_reason || item?.reason || item?.cancel_reason || item?.buyer_note || item?.seller_note);
+  return safeString(
+    item?.return_reason ||
+      item?.returnReason ||
+      item?.reason ||
+      item?.reason_detail ||
+      item?.cancel_reason ||
+      item?.buyer_note ||
+      item?.seller_note
+  );
 }
 
 function getClaimDate(item = {}) {
-  return toDate(item?.claim_date) || toDate(item?.return_claim_date) || toDate(item?.return_initiated_at) || toDate(item?.updated_at) || null;
+  return toDate(item?.claim_date) ||
+    toDate(item?.return_claim_date) ||
+    toDate(item?.return_initiated_at) ||
+    toDate(item?.return_created_at) ||
+    toDate(item?.refund_created_at) ||
+    toDate(item?.updated_at) ||
+    null;
 }
 
 function getLogisticFacilityDate(item = {}) {
-  return toDate(item?.logistic_facility_at) || toDate(item?.failed_delivery_received_at) || toDate(item?.updated_at) || null;
+  return toDate(item?.logistic_facility_at) ||
+    toDate(item?.failed_delivery_received_at) ||
+    toDate(item?.collection_ready_at) ||
+    toDate(item?.returned_to_shipper_at) ||
+    toDate(item?.return_to_seller_at) ||
+    toDate(item?.updated_at) ||
+    null;
 }
 
 function makeSyncWindow(lastSyncAt) {
@@ -407,6 +483,10 @@ async function upsertOrderItems(store, orderDoc, itemsPayload, stats) {
     const displayTitle = getItemEnglishTitle(item) || buildDisplayTitle(productName, sellerSku);
     const imageUrl = getItemImage(item);
     const itemStatus = getItemStatus(item, orderDoc.status) || orderDoc.status || 'pending';
+    const returnReason = getReturnReason(item);
+    const claimDate = getClaimDate(item);
+    const logisticFacilityAt = getLogisticFacilityDate(item);
+    const needsCollection = isFailedDeliveryStatus(itemStatus) || normalizeStatus(item?.collection_status).includes('needs_collection') || !!logisticFacilityAt && isFailedDeliveryStatus(itemStatus);
     const inventory = sellerSku ? await resolveCentralInventory({ store, sellerSku, productName, displayTitle, imageUrl }) : null;
 
     await CentralOrderItem.findOneAndUpdate(
@@ -422,10 +502,10 @@ async function upsertOrderItems(store, orderDoc, itemsPayload, stats) {
           quantity: getItemQuantity(item),
           unit_price: getItemPrice(item),
           status: itemStatus,
-          return_reason: getReturnReason(item),
-          claim_date: getClaimDate(item),
-          logistic_facility_at: getLogisticFacilityDate(item),
-          collection_status: normalizeStatus(itemStatus).includes('failed') ? 'needs_collection' : 'pending',
+          return_reason: returnReason,
+          claim_date: isReturnStatus(itemStatus) || returnReason ? claimDate : null,
+          logistic_facility_at: needsCollection ? logisticFacilityAt : null,
+          collection_status: needsCollection ? 'needs_collection' : 'pending',
           raw_payload: item,
           product_id: null,
           mapping_status: inventory ? 'mapped' : 'unmapped'

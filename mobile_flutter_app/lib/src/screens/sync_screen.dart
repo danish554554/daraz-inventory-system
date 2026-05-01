@@ -21,6 +21,8 @@ class _SyncScreenState extends State<SyncScreen> {
   String _storeFilter = 'all';
   String _itemFilter = 'all';
   String _historyPeriod = 'today';
+  DateTime? _historyStartDate;
+  DateTime? _historyEndDate;
 
   SyncStatus? _status;
   List<StoreModel> _stores = <StoreModel>[];
@@ -35,6 +37,66 @@ class _SyncScreenState extends State<SyncScreen> {
   void initState() {
     super.initState();
     _load();
+  }
+
+  String _dateParam(DateTime value) {
+    final date = DateTime(value.year, value.month, value.day);
+    return date.toIso8601String().split('T').first;
+  }
+
+  Map<String, dynamic> _historyParams({int limit = 80}) {
+    final params = <String, dynamic>{'period': _historyPeriod, 'limit': limit};
+    if (_historyStartDate != null) params['start'] = _dateParam(_historyStartDate!);
+    if (_historyEndDate != null) params['end'] = _dateParam(_historyEndDate!);
+    return params;
+  }
+
+  String _periodLabel() {
+    if (_historyStartDate == null || _historyEndDate == null) return _historyPeriod.toUpperCase();
+    if (_historyPeriod == 'today') return 'TODAY';
+    return '${Formatters.date(_historyStartDate)} - ${Formatters.date(_historyEndDate)}';
+  }
+
+  DateTime _startOfWeek(DateTime date) {
+    final clean = DateTime(date.year, date.month, date.day);
+    return clean.subtract(Duration(days: clean.weekday - DateTime.monday));
+  }
+
+  DateTime _endOfWeek(DateTime date) => _startOfWeek(date).add(const Duration(days: 6));
+
+  Future<void> _selectHistoryPeriod(String value) async {
+    if (_busy) return;
+    final now = DateTime.now();
+    if (value == 'today') {
+      setState(() {
+        _historyPeriod = value;
+        _historyStartDate = null;
+        _historyEndDate = null;
+      });
+      await _load(silent: true);
+      return;
+    }
+
+    final picked = await showDatePicker(
+      context: context,
+      initialDate: _historyStartDate ?? now,
+      firstDate: DateTime(now.year - 3),
+      lastDate: DateTime(now.year + 1),
+      helpText: value == 'week' ? 'Select any date in the week' : 'Select any date in the month',
+    );
+    if (picked == null) return;
+
+    setState(() {
+      _historyPeriod = value;
+      if (value == 'week') {
+        _historyStartDate = _startOfWeek(picked);
+        _historyEndDate = _endOfWeek(picked);
+      } else {
+        _historyStartDate = DateTime(picked.year, picked.month, 1);
+        _historyEndDate = DateTime(picked.year, picked.month + 1, 0);
+      }
+    });
+    await _load(silent: true);
   }
 
   Future<void> _load({bool silent = false}) async {
@@ -54,14 +116,17 @@ class _SyncScreenState extends State<SyncScreen> {
     }
 
     try {
+      final historyParams = _historyParams(limit: 80);
+      final collectionParams = _historyParams(limit: 60);
+
       final results = await Future.wait<dynamic>(<Future<dynamic>>[
         safe(ApiClient.instance.get('/daraz-sync/status')),
         safe(ApiClient.instance.get('/stores')),
         safe(ApiClient.instance.get('/daraz-sync/orders', queryParameters: <String, dynamic>{'limit': 50})),
         safe(ApiClient.instance.get('/daraz-sync/order-items', queryParameters: <String, dynamic>{'limit': 80})),
-        safe(ApiClient.instance.get('/daraz-sync/return-orders', queryParameters: <String, dynamic>{'limit': 60})),
-        safe(ApiClient.instance.get('/daraz-sync/failed-delivery', queryParameters: <String, dynamic>{'limit': 60})),
-        safe(ApiClient.instance.get('/daraz-sync/orders-history', queryParameters: <String, dynamic>{'period': _historyPeriod, 'limit': 80})),
+        safe(ApiClient.instance.get('/daraz-sync/return-orders', queryParameters: collectionParams)),
+        safe(ApiClient.instance.get('/daraz-sync/failed-delivery', queryParameters: collectionParams)),
+        safe(ApiClient.instance.get('/daraz-sync/orders-history', queryParameters: historyParams)),
       ]);
 
       final storesMap = JsonReaders.map(results[1]);
@@ -80,7 +145,10 @@ class _SyncScreenState extends State<SyncScreen> {
             ? SyncStatus(schedulerManagedBy: '', syncEngine: '', syncRunningNow: false)
             : SyncStatus.fromJson(JsonReaders.map(results[0]));
         _stores = JsonReaders.list(storesMap['stores']).map((item) => StoreModel.fromJson(JsonReaders.map(item))).toList();
-        _orders = JsonReaders.list(ordersMap['orders']).map((item) => CentralOrder.fromJson(JsonReaders.map(item))).toList();
+        final historyOrders = JsonReaders.list(historyMap['orders']);
+        _orders = (historyOrders.isNotEmpty ? historyOrders : JsonReaders.list(ordersMap['orders']))
+            .map((item) => CentralOrder.fromJson(JsonReaders.map(item)))
+            .toList();
         _orderItems = JsonReaders.list(itemsMap['items']).map((item) => CentralOrderItem.fromJson(JsonReaders.map(item))).toList();
         _returns = JsonReaders.list(returnsMap['returns']).map((item) => CentralOrderItem.fromJson(JsonReaders.map(item))).toList();
         _failedDeliveries = JsonReaders.list(failedMap['failed_deliveries']).map((item) => CentralOrderItem.fromJson(JsonReaders.map(item))).toList();
@@ -189,15 +257,17 @@ class _SyncScreenState extends State<SyncScreen> {
 
   Future<void> _refreshReturns() async {
     await _runAction('returns', () async {
+      await ApiClient.instance.post('/daraz-sync/run-all');
       await _load(silent: true);
-      if (mounted) showAppSnackBar(context, 'Return orders refreshed.');
+      if (mounted) showAppSnackBar(context, 'Return orders refreshed from Daraz sync.');
     });
   }
 
   Future<void> _refreshFailedDelivery() async {
     await _runAction('failed', () async {
+      await ApiClient.instance.post('/daraz-sync/run-all');
       await _load(silent: true);
-      if (mounted) showAppSnackBar(context, 'Failed delivery records refreshed.');
+      if (mounted) showAppSnackBar(context, 'Failed delivery records refreshed from Daraz sync.');
     });
   }
 
@@ -395,7 +465,7 @@ class _SyncScreenState extends State<SyncScreen> {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: <Widget>[
-        _sectionTitle('Orders History', action: _historyPeriod.toUpperCase()),
+        _sectionTitle('Orders History', action: _periodLabel()),
         const SizedBox(height: 10),
         SingleChildScrollView(
           scrollDirection: Axis.horizontal,
@@ -406,12 +476,6 @@ class _SyncScreenState extends State<SyncScreen> {
               _historyChip('week', 'Week'),
               const SizedBox(width: 8),
               _historyChip('month', 'Month'),
-              const SizedBox(width: 8),
-              _historyChip('custom', 'Custom Date'),
-              const SizedBox(width: 8),
-              _historyChip('custom_week', 'Custom Week'),
-              const SizedBox(width: 8),
-              _historyChip('custom_month', 'Custom Month'),
             ],
           ),
         ),
@@ -487,12 +551,7 @@ class _SyncScreenState extends State<SyncScreen> {
     return ChoiceChip(
       selected: selected,
       label: Text(label),
-      onSelected: _busy
-          ? null
-          : (_) async {
-              setState(() => _historyPeriod = value);
-              await _load(silent: true);
-            },
+      onSelected: _busy ? null : (_) => _selectHistoryPeriod(value),
       selectedColor: AppTheme.primary,
       backgroundColor: Colors.white,
       labelStyle: TextStyle(color: selected ? Colors.white : AppTheme.textPrimary, fontSize: 12, fontWeight: FontWeight.w900),
@@ -515,10 +574,38 @@ class _SyncScreenState extends State<SyncScreen> {
     );
   }
 
+  String _orderStatusLabel(String status) {
+    final clean = status.trim();
+    if (clean.isEmpty) return 'Unknown';
+    return clean
+        .replaceAll('_', ' ')
+        .split(' ')
+        .where((part) => part.isNotEmpty)
+        .map((part) => '${part[0].toUpperCase()}${part.substring(1).toLowerCase()}')
+        .join(' ');
+  }
+
+  Color _statusColor(String status) {
+    final value = status.toLowerCase();
+    if (value.contains('cancel') || value.contains('failed')) return AppTheme.danger;
+    if (value.contains('return') || value.contains('refund')) return AppTheme.warning;
+    if (value.contains('delivered') || value.contains('completed')) return AppTheme.success;
+    if (value.contains('ship') || value.contains('pack') || value.contains('ready')) return AppTheme.info;
+    return AppTheme.warning;
+  }
+
+  Color _statusSoftColor(String status) {
+    final color = _statusColor(status);
+    if (color == AppTheme.danger) return AppTheme.dangerSoft;
+    if (color == AppTheme.success) return AppTheme.successSoft;
+    if (color == AppTheme.info) return AppTheme.infoSoft;
+    return AppTheme.warningSoft;
+  }
+
   Widget _buildOrderCard(CentralOrder order) {
-    final statusText = order.processingStatus.isEmpty ? order.status : order.processingStatus;
-    final color = order.status.toLowerCase().contains('cancel') ? AppTheme.danger : AppTheme.success;
-    final softColor = order.status.toLowerCase().contains('cancel') ? AppTheme.dangerSoft : AppTheme.successSoft;
+    final statusText = _orderStatusLabel(order.status);
+    final color = _statusColor(order.status);
+    final softColor = _statusSoftColor(order.status);
     return Padding(
       padding: const EdgeInsets.only(bottom: 10),
       child: AppCard(

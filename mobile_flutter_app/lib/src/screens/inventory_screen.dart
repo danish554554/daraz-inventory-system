@@ -18,6 +18,7 @@ class InventoryScreen extends StatefulWidget {
 class _InventoryScreenState extends State<InventoryScreen> {
   bool _loading = true;
   bool _importingProducts = false;
+  bool _mergeSkus = true;
   String? _error;
   String _search = '';
   String _filter = 'all';
@@ -50,7 +51,7 @@ class _InventoryScreenState extends State<InventoryScreen> {
     }
 
     try {
-      final params = <String, dynamic>{};
+      final params = <String, dynamic>{'merge': _mergeSkus};
       if (_search.trim().isNotEmpty) params['search'] = _search.trim();
       if (_filter == 'low') params['low_stock'] = true;
 
@@ -96,7 +97,11 @@ class _InventoryScreenState extends State<InventoryScreen> {
       final matchesSearch = query.isEmpty ||
           item.title.toLowerCase().contains(query) ||
           item.sellerSku.toLowerCase().contains(query) ||
-          item.storeCode.toLowerCase().contains(query);
+          item.storeCode.toLowerCase().contains(query) ||
+          item.skuRows.any((row) =>
+              row.sellerSku.toLowerCase().contains(query) ||
+              row.storeCode.toLowerCase().contains(query) ||
+              row.storeName.toLowerCase().contains(query));
       if (!matchesSearch) return false;
       switch (_filter) {
         case 'critical':
@@ -113,6 +118,23 @@ class _InventoryScreenState extends State<InventoryScreen> {
     }).toList();
     source.sort((a, b) => a.stock.compareTo(b.stock));
     return source;
+  }
+
+  List<InventoryItem> get _actionRows {
+    final rows = <InventoryItem>[];
+    for (final item in _inventory) {
+      if (item.skuRows.isEmpty) {
+        rows.add(item);
+      } else {
+        rows.addAll(item.skuRows);
+      }
+    }
+    return rows;
+  }
+
+  InventoryItem? _singleSku(InventoryItem? item) {
+    if (item == null) return null;
+    return item.skuRows.isNotEmpty ? item.skuRows.first : item;
   }
 
   Future<void> _importProducts() async {
@@ -152,7 +174,7 @@ class _InventoryScreenState extends State<InventoryScreen> {
       context: context,
       isScrollControlled: true,
       useSafeArea: true,
-      builder: (context) => RestockSheet(inventory: _inventory, selected: item),
+      builder: (context) => RestockSheet(inventory: _actionRows, selected: _singleSku(item)),
     );
     if (done == true) {
       await _load();
@@ -165,7 +187,7 @@ class _InventoryScreenState extends State<InventoryScreen> {
       context: context,
       isScrollControlled: true,
       useSafeArea: true,
-      builder: (context) => QuickAdjustmentSheet(inventory: _inventory, selected: item),
+      builder: (context) => QuickAdjustmentSheet(inventory: _actionRows, selected: _singleSku(item)),
     );
     if (done == true) {
       await _load();
@@ -316,11 +338,15 @@ class _InventoryScreenState extends State<InventoryScreen> {
                         ),
                       ),
                       const SizedBox(height: 14),
+                      _mergeSkuControl(),
+                      const SizedBox(height: 12),
                       Row(
                         children: <Widget>[
                           Expanded(
                             child: Text(
-                              'Showing ${_visibleItems.length} of ${_inventory.length}',
+                              _mergeSkus
+                                  ? 'Showing ${_visibleItems.length} merged products from ${_inventory.fold<int>(0, (sum, item) => sum + item.mappedSkuCount)} SKUs'
+                                  : 'Showing ${_visibleItems.length} of ${_inventory.length} SKUs',
                               style: const TextStyle(color: AppTheme.textMuted, fontSize: 11, fontWeight: FontWeight.w800),
                             ),
                           ),
@@ -357,6 +383,48 @@ class _InventoryScreenState extends State<InventoryScreen> {
     );
   }
 
+  Widget _mergeSkuControl() {
+    return AppCard(
+      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+      child: Row(
+        children: <Widget>[
+          MiniIcon(
+            icon: Icons.merge_type_rounded,
+            color: _mergeSkus ? AppTheme.primary : AppTheme.textMuted,
+            background: _mergeSkus ? AppTheme.primarySoft : AppTheme.softGrey,
+            size: 36,
+          ),
+          const SizedBox(width: 12),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: <Widget>[
+                const Text('Merge SKUs', style: TextStyle(fontSize: 13, fontWeight: FontWeight.w900)),
+                const SizedBox(height: 3),
+                Text(
+                  _mergeSkus
+                      ? 'Same products are shown once; stock is not duplicated.'
+                      : 'Each store SKU is shown separately.',
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: const TextStyle(color: AppTheme.textMuted, fontSize: 11, fontWeight: FontWeight.w700),
+                ),
+              ],
+            ),
+          ),
+          Switch.adaptive(
+            value: _mergeSkus,
+            activeColor: AppTheme.primary,
+            onChanged: (value) async {
+              setState(() => _mergeSkus = value);
+              await _load();
+            },
+          ),
+        ],
+      ),
+    );
+  }
+
   Widget _summaryCards(BuildContext context) {
     final summary = _summary;
     if (summary == null) return const SizedBox.shrink();
@@ -366,7 +434,7 @@ class _InventoryScreenState extends State<InventoryScreen> {
       spacing: 8,
       runSpacing: 8,
       children: <Widget>[
-        SizedBox(width: itemWidth, child: MetricCard(label: 'Total SKUs', value: '${summary.totalProducts}', icon: Icons.local_fire_department_outlined)),
+        SizedBox(width: itemWidth, child: MetricCard(label: _mergeSkus ? 'Products' : 'Total SKUs', value: '${summary.totalProducts}', icon: Icons.local_fire_department_outlined)),
         SizedBox(width: itemWidth, child: MetricCard(label: 'Low stock', value: '${summary.lowStockProducts}', icon: Icons.warning_amber_rounded, tint: AppTheme.warningSoft, iconColor: AppTheme.warning)),
         SizedBox(width: itemWidth, child: MetricCard(label: 'Out', value: '${summary.zeroStockProducts}', icon: Icons.dangerous_outlined, tint: AppTheme.dangerSoft, iconColor: AppTheme.danger)),
       ],
@@ -418,9 +486,18 @@ class _InventoryScreenState extends State<InventoryScreen> {
             useSafeArea: true,
             builder: (context) => InventoryItemActionsSheet(
               item: item,
-              onRestock: () => _openRestockSheet(item: item),
-              onAdjust: () => _openQuickAdjustment(item: item),
-              onRequest: () => _createAdjustmentRequest(item),
+              onRestock: (selected) {
+                Navigator.pop(context);
+                _openRestockSheet(item: selected);
+              },
+              onAdjust: (selected) {
+                Navigator.pop(context);
+                _openQuickAdjustment(item: selected);
+              },
+              onRequest: (selected) {
+                Navigator.pop(context);
+                _createAdjustmentRequest(selected);
+              },
             ),
           );
         },
@@ -440,7 +517,14 @@ class _InventoryScreenState extends State<InventoryScreen> {
                     ],
                   ),
                   const SizedBox(height: 3),
-                  Text('${item.sellerSku} · ${item.storeCode}', maxLines: 1, overflow: TextOverflow.ellipsis, style: const TextStyle(color: AppTheme.textMuted, fontSize: 11, fontWeight: FontWeight.w700)),
+                  Text(
+                    item.isMerged
+                        ? '${item.mappedSkuCount} SKUs · ${item.storesInvolved} stores'
+                        : '${item.sellerSku} · ${item.storeCode}',
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: const TextStyle(color: AppTheme.textMuted, fontSize: 11, fontWeight: FontWeight.w700),
+                  ),
                   const SizedBox(height: 8),
                   Row(
                     children: <Widget>[
@@ -448,7 +532,9 @@ class _InventoryScreenState extends State<InventoryScreen> {
                       const SizedBox(width: 8),
                       Expanded(
                         child: Text(
-                          'Available ${item.availableStock} · Alert at ${item.lowStockLimit}',
+                          item.isMerged
+                              ? 'Available ${item.availableStock} · ${item.mappedSkuCount} SKUs'
+                              : 'Available ${item.availableStock} · Alert at ${item.lowStockLimit}',
                           maxLines: 1,
                           overflow: TextOverflow.ellipsis,
                           textAlign: TextAlign.right,
@@ -743,13 +829,13 @@ class InventoryItemActionsSheet extends StatelessWidget {
   });
 
   final InventoryItem item;
-  final VoidCallback onRestock;
-  final VoidCallback onAdjust;
-  final VoidCallback onRequest;
-
+  final ValueChanged<InventoryItem> onRestock;
+  final ValueChanged<InventoryItem> onAdjust;
+  final ValueChanged<InventoryItem> onRequest;
 
   @override
   Widget build(BuildContext context) {
+    final rows = item.skuRows.isEmpty ? <InventoryItem>[item] : item.skuRows;
     return Padding(
       padding: const EdgeInsets.fromLTRB(20, 20, 20, 24),
       child: SingleChildScrollView(
@@ -759,43 +845,116 @@ class InventoryItemActionsSheet extends StatelessWidget {
           children: <Widget>[
             SectionHeader(
               title: item.title,
-              subtitle: '${item.sellerSku} • ${item.storeName}',
+              subtitle: item.isMerged
+                  ? '${item.mappedSkuCount} SKUs • ${item.storesInvolved} stores • Total stock ${item.stock}'
+                  : '${item.sellerSku} • ${item.storeName}',
               action: IconButton(
                 onPressed: () => Navigator.pop(context),
                 icon: const Icon(Icons.close),
               ),
             ),
-          const SizedBox(height: 14),
-          Wrap(
-            spacing: 10,
-            runSpacing: 10,
-            children: <Widget>[
-              _metric('Stock', '${item.stock}'),
-              _metric('Reserved', '${item.reservedStock}'),
-              _metric('Available', '${item.availableStock}'),
-              _metric('Low Limit', '${item.lowStockLimit}'),
+            const SizedBox(height: 14),
+            Wrap(
+              spacing: 10,
+              runSpacing: 10,
+              children: <Widget>[
+                _metric('Stock', '${item.stock}'),
+                _metric('Reserved', '${item.reservedStock}'),
+                _metric('Available', '${item.availableStock}'),
+                _metric('SKUs', '${item.mappedSkuCount}'),
+              ],
+            ),
+            const SizedBox(height: 16),
+            if (item.isMerged) ...<Widget>[
+              const InfoBanner(
+                text: 'This product is merged for clean viewing. Stock is shown once, while all linked store SKUs remain available below.',
+                icon: Icons.merge_type_rounded,
+              ),
+              const SizedBox(height: 12),
+              ...rows.map(_skuRow),
+            ] else ...<Widget>[
+              PrimaryButton(
+                label: 'Restock',
+                onPressed: () => onRestock(item),
+                icon: Icons.add_box_outlined,
+                expanded: true,
+              ),
+              const SizedBox(height: 12),
+              SecondaryButton(
+                label: 'Quick Adjust',
+                onPressed: () => onAdjust(item),
+                icon: Icons.tune_rounded,
+              ),
+              const SizedBox(height: 12),
+              SecondaryButton(
+                label: 'Create Adjustment Request',
+                onPressed: () => onRequest(item),
+                icon: Icons.rule_folder_outlined,
+              ),
             ],
-          ),
-          const SizedBox(height: 16),
-          PrimaryButton(
-            label: 'Restock',
-            onPressed: onRestock,
-            icon: Icons.add_box_outlined,
-            expanded: true,
-          ),
-          const SizedBox(height: 12),
-          SecondaryButton(
-            label: 'Quick Adjust',
-            onPressed: onAdjust,
-            icon: Icons.tune_rounded,
-          ),
-          const SizedBox(height: 12),
-          SecondaryButton(
-            label: 'Create Adjustment Request',
-            onPressed: onRequest,
-            icon: Icons.rule_folder_outlined,
-          ),
-        ],
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _skuRow(InventoryItem row) {
+    final critical = row.isCritical;
+    final color = critical ? AppTheme.danger : row.isLowStock ? AppTheme.warning : AppTheme.success;
+    final soft = critical ? AppTheme.dangerSoft : row.isLowStock ? AppTheme.warningSoft : AppTheme.successSoft;
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 10),
+      child: AppCard(
+        padding: const EdgeInsets.all(12),
+        shadow: false,
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: <Widget>[
+            Row(
+              children: <Widget>[
+                ProductImageBox(imageUrl: row.imageUrl, size: 40),
+                const SizedBox(width: 10),
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: <Widget>[
+                      Text(row.storeName, maxLines: 1, overflow: TextOverflow.ellipsis, style: const TextStyle(fontSize: 12, fontWeight: FontWeight.w900)),
+                      const SizedBox(height: 3),
+                      Text('${row.storeCode} • ${row.sellerSku}', maxLines: 1, overflow: TextOverflow.ellipsis, style: const TextStyle(color: AppTheme.textMuted, fontSize: 11, fontWeight: FontWeight.w700)),
+                    ],
+                  ),
+                ),
+                const SizedBox(width: 8),
+                StatusChip(label: '${row.stock}', color: color, softColor: soft),
+              ],
+            ),
+            const SizedBox(height: 10),
+            Row(
+              children: <Widget>[
+                Expanded(
+                  child: SecondaryButton(
+                    label: 'Restock',
+                    icon: Icons.add_box_outlined,
+                    onPressed: () => onRestock(row),
+                  ),
+                ),
+                const SizedBox(width: 8),
+                Expanded(
+                  child: SecondaryButton(
+                    label: 'Adjust',
+                    icon: Icons.tune_rounded,
+                    onPressed: () => onAdjust(row),
+                  ),
+                ),
+              ],
+            ),
+            const SizedBox(height: 8),
+            SecondaryButton(
+              label: 'Create Adjustment Request',
+              icon: Icons.rule_folder_outlined,
+              onPressed: () => onRequest(row),
+            ),
+          ],
         ),
       ),
     );

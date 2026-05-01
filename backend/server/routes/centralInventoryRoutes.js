@@ -8,8 +8,94 @@ const StockAdjustmentRequest = require('../models/StockAdjustmentRequest');
 const Store = require('../models/Store');
 
 function toNumber(value, fallback = 0) {
+  if (value === undefined || value === null || value === '') return fallback;
+  if (typeof value === 'string') {
+    const cleaned = value.replace(/[^0-9.-]/g, '');
+    const parsed = Number(cleaned);
+    return Number.isFinite(parsed) ? parsed : fallback;
+  }
   const num = Number(value);
   return Number.isFinite(num) ? num : fallback;
+}
+
+function normalizeText(value = '') {
+  return String(value || '')
+    .toLowerCase()
+    .replace(/&/g, ' and ')
+    .replace(/[\u2010-\u2015]/g, '-')
+    .replace(/\b(pack|set|combo|bundle)\b/g, ' ')
+    .replace(/[^a-z0-9]+/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+function baseProductTitle(row = {}) {
+  const title = row.display_title || row.product_name || row.original_title || row.seller_sku || 'Daraz Product';
+  const withoutVariantTail = String(title)
+    .replace(/\s+[-|–—]\s*(black|white|blue|pink|red|green|gold|silver|grey|gray|small|medium|large|xl|xxl|single|pack.*)$/i, '')
+    .trim();
+  return withoutVariantTail || title;
+}
+
+function makeMergeKey(row = {}) {
+  const titleKey = normalizeText(baseProductTitle(row));
+  if (titleKey) return `title:${titleKey}`;
+  const productId = row.daraz_product_id || row.daraz_item_id || '';
+  if (productId) return `product:${productId}`;
+  return `sku:${normalizeText(row.seller_sku)}`;
+}
+
+function mergeInventoryRows(rows = []) {
+  const groups = new Map();
+
+  for (const row of rows) {
+    const key = makeMergeKey(row);
+    if (!groups.has(key)) {
+      groups.set(key, {
+        ...row,
+        product_name: baseProductTitle(row),
+        original_title: baseProductTitle(row),
+        display_title: baseProductTitle(row),
+        stock: 0,
+        reserved_stock: 0,
+        available_stock: 0,
+        low_stock_limit: 0,
+        mapped_sku_count: 0,
+        stores_involved: 0,
+        sku_rows: [],
+        _storeCodes: new Set(),
+        _sellerSkus: []
+      });
+    }
+
+    const group = groups.get(key);
+    group.stock = Math.max(group.stock, toNumber(row.stock, 0));
+    group.reserved_stock = Math.max(group.reserved_stock, toNumber(row.reserved_stock, 0));
+    group.available_stock = Math.max(group.available_stock, toNumber(row.available_stock, 0));
+    group.low_stock_limit = Math.max(group.low_stock_limit, toNumber(row.low_stock_limit, 0));
+    group.mapped_sku_count += 1;
+    if (row.store_code) group._storeCodes.add(row.store_code);
+    if (row.seller_sku) group._sellerSkus.push(row.seller_sku);
+    if (!group.image_url && row.image_url) group.image_url = row.image_url;
+    if (!group.store_id && row.store_id) group.store_id = row.store_id;
+    if (!group.store_name && row.store_name) group.store_name = row.store_name;
+    if (!group.store_code && row.store_code) group.store_code = row.store_code;
+    group.sku_rows.push({ ...row, sku_rows: [] });
+  }
+
+  return Array.from(groups.values()).map((group) => {
+    const storeCodes = Array.from(group._storeCodes);
+    const sellerSkus = Array.from(new Set(group._sellerSkus));
+    delete group._storeCodes;
+    delete group._sellerSkus;
+    group.stores_involved = storeCodes.length || 1;
+    group.store_code = group.stores_involved > 1 ? `${group.stores_involved} stores` : group.store_code;
+    group.store_name = group.stores_involved > 1 ? 'Multiple stores' : group.store_name;
+    group.seller_sku = sellerSkus.length > 1 ? `${sellerSkus[0]} +${sellerSkus.length - 1}` : (sellerSkus[0] || group.seller_sku);
+    group.master_sku = group.seller_sku;
+    group.mapped_skus_text = group.sku_rows.map((row) => `${row.store_code}:${row.seller_sku}`).join(', ');
+    return group;
+  }).sort((a, b) => a.stock - b.stock || String(a.display_title).localeCompare(String(b.display_title)));
 }
 
 function toCsv(rows = [], headers = []) {
@@ -88,6 +174,8 @@ function makeInventoryRow(item) {
     image_url: item.image_url || '',
     seller_sku: item.seller_sku,
     master_sku: item.seller_sku,
+    daraz_product_id: item.daraz_product_id || '',
+    daraz_item_id: item.daraz_item_id || '',
     stock,
     reserved_stock: reserved,
     available_stock: Math.max(stock - reserved, 0),
@@ -99,7 +187,7 @@ function makeInventoryRow(item) {
   };
 }
 
-async function getInventoryRows({ search = '', lowStockOnly = false, storeId = '' } = {}) {
+async function getInventoryRows({ search = '', lowStockOnly = false, storeId = '', mergeSkus = false } = {}) {
   const query = {};
   if (storeId) query.store_id = storeId;
   if (search?.trim()) {
@@ -115,6 +203,7 @@ async function getInventoryRows({ search = '', lowStockOnly = false, storeId = '
     .lean();
 
   let rows = items.map(makeInventoryRow);
+  if (mergeSkus) rows = mergeInventoryRows(rows);
   if (lowStockOnly) rows = rows.filter((item) => item.stock <= item.low_stock_limit);
   return rows;
 }
@@ -303,7 +392,8 @@ async function getSupplierAnalytics({ start, end, supplier = '', storeId = '' } 
 
 router.get('/', async (req, res, next) => {
   try {
-    const rows = await getInventoryRows({ search: req.query.search, storeId: req.query.store_id || '', lowStockOnly: ['1', 'true', 'yes'].includes(String(req.query.low_stock).toLowerCase()) });
+    const mergeSkus = ['1', 'true', 'yes'].includes(String(req.query.merge || '').toLowerCase());
+    const rows = await getInventoryRows({ search: req.query.search, storeId: req.query.store_id || '', lowStockOnly: ['1', 'true', 'yes'].includes(String(req.query.low_stock).toLowerCase()), mergeSkus });
     res.json(rows);
   } catch (error) { next(error); }
 });
@@ -311,7 +401,7 @@ router.get('/', async (req, res, next) => {
 router.get('/summary', async (req, res, next) => {
   try {
     const [inventoryRows, recentRestocks, pendingAdjustments] = await Promise.all([
-      getInventoryRows({ search: req.query.search, storeId: req.query.store_id || '' }),
+      getInventoryRows({ search: req.query.search, storeId: req.query.store_id || '', mergeSkus: ['1', 'true', 'yes'].includes(String(req.query.merge || '').toLowerCase()) }),
       getRecentRestocks(10, req.query.store_id || ''),
       StockAdjustmentRequest.countDocuments(req.query.store_id ? { status: 'pending', store_id: req.query.store_id } : { status: 'pending' })
     ]);

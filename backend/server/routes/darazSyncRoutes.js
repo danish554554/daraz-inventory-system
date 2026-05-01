@@ -19,6 +19,12 @@ function normalizeStatus(value) {
 }
 
 function toNumber(value, fallback = 0) {
+  if (value === undefined || value === null || value === '') return fallback;
+  if (typeof value === 'string') {
+    const cleaned = value.replace(/[^0-9.-]/g, '');
+    const parsed = Number(cleaned);
+    return Number.isFinite(parsed) ? parsed : fallback;
+  }
   const num = Number(value);
   return Number.isFinite(num) ? num : fallback;
 }
@@ -58,6 +64,17 @@ function resolveHistoryWindow({ period = "today", start, end } = {}) {
   }
 
   return { startDate, endDate: endOfDay(now) };
+}
+
+function applyDateWindow(query, fields = [], { start, end } = {}) {
+  if (!start && !end) return query;
+  const startDate = start ? startOfDay(toDate(start) || new Date()) : new Date(0);
+  const endDate = end ? endOfDay(toDate(end) || new Date()) : endOfDay(new Date());
+  query.$and = query.$and || [];
+  query.$and.push({
+    $or: fields.map((field) => ({ [field]: { $gte: startDate, $lte: endDate } }))
+  });
+  return query;
 }
 
 function isReturnStatus(status = "") {
@@ -133,7 +150,7 @@ async function enrichOrder(order) {
     .sort({ createdAt: 1 })
     .lean();
   const count = await CentralOrderItem.countDocuments({ order_id: order._id });
-  const title = item?.display_title || item?.product_name || item?.seller_sku || "Order items";
+  const title = item?.display_title || item?.product_name || item?.seller_sku || (count > 1 ? `${count} order items` : "Order item");
   const amountRows = await CentralOrderItem.find({ order_id: order._id }).select("unit_price quantity").lean();
   const amount = amountRows.reduce((sum, row) => sum + toNumber(row.unit_price, 0) * toNumber(row.quantity, 1), 0);
 
@@ -314,15 +331,16 @@ router.get("/order-items", async (req, res) => {
 
 router.get("/return-orders", async (req, res) => {
   try {
-    const { store_id, limit = 100 } = req.query;
+    const { store_id, limit = 100, start, end } = req.query;
     const query = {
       $or: [
-        { status: { $regex: "return|refund|claim", $options: "i" } },
+        { status: { $regex: "return|refund|claim|returned", $options: "i" } },
         { return_reason: { $ne: "" } },
         { claim_date: { $ne: null } }
       ]
     };
     if (store_id) query.store_id = store_id;
+    applyDateWindow(query, ['claim_date', 'updatedAt', 'createdAt'], { start, end });
 
     const items = await CentralOrderItem.find(query)
       .populate("store_id", "name code")
@@ -347,15 +365,16 @@ router.get("/return-orders", async (req, res) => {
 
 router.get("/failed-delivery", async (req, res) => {
   try {
-    const { store_id, limit = 100 } = req.query;
+    const { store_id, limit = 100, start, end } = req.query;
     const query = {
       $or: [
-        { status: { $regex: "failed|undelivered|return_to_seller|returned_to_shipper", $options: "i" } },
+        { status: { $regex: "failed|undelivered|return_to_seller|returned_to_shipper|return_to_shipper|delivery_failed", $options: "i" } },
         { collection_status: "needs_collection" },
         { logistic_facility_at: { $ne: null } }
       ]
     };
     if (store_id) query.store_id = store_id;
+    applyDateWindow(query, ['logistic_facility_at', 'updatedAt', 'createdAt'], { start, end });
 
     const items = await CentralOrderItem.find(query)
       .populate("store_id", "name code")
@@ -367,7 +386,7 @@ router.get("/failed-delivery", async (req, res) => {
     res.json({
       success: true,
       count: items.length,
-      failed_deliveries: items.map(itemPayload).filter((item) => isFailedDeliveryStatus(item.status))
+      failed_deliveries: items.map(itemPayload).filter((item) => isFailedDeliveryStatus(item.status) || item.collection_status === 'needs_collection' || item.logistic_facility_at)
     });
   } catch (error) {
     res.status(500).json({
@@ -395,8 +414,8 @@ router.get("/orders-history", async (req, res) => {
     const orderIds = orders.map((order) => order._id);
     const items = await CentralOrderItem.find({ order_id: { $in: orderIds } }).lean();
     const revenue = items.reduce((sum, item) => sum + toNumber(item.unit_price, 0) * toNumber(item.quantity, 1), 0);
-    const returns = items.filter((item) => isReturnStatus(item.status)).length;
-    const failedDeliveries = items.filter((item) => isFailedDeliveryStatus(item.status)).length;
+    const returns = items.filter((item) => isReturnStatus(item.status) || normalizeString(item.return_reason) || item.claim_date).length;
+    const failedDeliveries = items.filter((item) => isFailedDeliveryStatus(item.status) || item.collection_status === 'needs_collection' || item.logistic_facility_at).length;
 
     const seriesMap = new Map();
     for (const order of orders) {
