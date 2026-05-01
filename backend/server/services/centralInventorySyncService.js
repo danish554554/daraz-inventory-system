@@ -100,14 +100,85 @@ function getItemPrice(item) {
   return safeNumber(item?.paid_price || item?.unit_price || item?.price || item?.item_price || 0, 0);
 }
 
+
+function hasNonLatin(text = '') {
+  return /[^\u0000-\u007f]/.test(safeString(text));
+}
+
+function buildDisplayTitle(title = '', sku = '') {
+  const cleanTitle = safeString(title);
+  if (cleanTitle && !hasNonLatin(cleanTitle)) return cleanTitle;
+  const skuText = safeString(sku).replace(/[_-]+/g, ' ').replace(/\s+/g, ' ').trim();
+  return skuText || cleanTitle || 'Daraz Product';
+}
+
+function getItemEnglishTitle(item = {}) {
+  return safeString(
+    item?.display_title ||
+      item?.english_title ||
+      item?.title_en ||
+      item?.name_en ||
+      item?.product_name_en
+  );
+}
+
+function normalizeImageValue(value) {
+  if (!value) return '';
+  if (typeof value === 'string') return safeString(value);
+  if (Array.isArray(value)) {
+    for (const entry of value) {
+      const url = normalizeImageValue(entry);
+      if (url) return url;
+    }
+  }
+  if (typeof value === 'object') {
+    return safeString(value.url || value.image_url || value.image || value.src || value.main_image || value.thumbnail || value.large || value.medium);
+  }
+  return '';
+}
+
+function getItemImage(item = {}) {
+  return normalizeImageValue(
+    item?.main_image ||
+      item?.primary_image ||
+      item?.image_url ||
+      item?.product_image ||
+      item?.image ||
+      item?.thumbnail ||
+      item?.images ||
+      item?.Images ||
+      item?.product_images
+  );
+}
+
+function getReturnReason(item = {}) {
+  return safeString(item?.return_reason || item?.reason || item?.cancel_reason || item?.buyer_note || item?.seller_note);
+}
+
+function getClaimDate(item = {}) {
+  return toDate(item?.claim_date) || toDate(item?.return_claim_date) || toDate(item?.return_initiated_at) || toDate(item?.updated_at) || null;
+}
+
+function getLogisticFacilityDate(item = {}) {
+  return toDate(item?.logistic_facility_at) || toDate(item?.failed_delivery_received_at) || toDate(item?.updated_at) || null;
+}
+
 function makeSyncWindow(lastSyncAt) {
   if (!lastSyncAt) return new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString();
   return new Date(new Date(lastSyncAt).getTime() - 10 * 60 * 1000).toISOString();
 }
 
-async function resolveCentralInventory({ store, sellerSku, productName = '' }) {
+async function resolveCentralInventory({ store, sellerSku, productName = '', displayTitle = '', imageUrl = '' }) {
   const normalizedSku = safeString(sellerSku);
   if (!normalizedSku) return null;
+
+  const cleanProductName = safeString(productName) || normalizedSku;
+  const cleanDisplayTitle = safeString(displayTitle) || buildDisplayTitle(cleanProductName, normalizedSku);
+  const setUpdate = {};
+  if (cleanProductName) setUpdate.product_name = cleanProductName;
+  if (cleanProductName) setUpdate.original_product_name = cleanProductName;
+  if (cleanDisplayTitle) setUpdate.display_title = cleanDisplayTitle;
+  if (safeString(imageUrl)) setUpdate.image_url = safeString(imageUrl);
 
   const inventory = await CentralInventory.findOneAndUpdate(
     { store_id: store._id, seller_sku: normalizedSku },
@@ -115,12 +186,15 @@ async function resolveCentralInventory({ store, sellerSku, productName = '' }) {
       $setOnInsert: {
         store_id: store._id,
         seller_sku: normalizedSku,
-        product_name: safeString(productName) || normalizedSku,
+        product_name: cleanProductName,
+        original_product_name: cleanProductName,
+        display_title: cleanDisplayTitle,
+        image_url: safeString(imageUrl),
         stock: 0,
         reserved_stock: 0,
         low_stock_limit: 5
       },
-      $set: safeString(productName) ? { product_name: safeString(productName) } : {}
+      $set: setUpdate
     },
     { upsert: true, new: true }
   );
@@ -185,7 +259,7 @@ async function deductStockForOrderItem({ store, orderDoc, itemDoc, stats }) {
     return { action: 'canceled_skip' };
   }
 
-  const inventory = await resolveCentralInventory({ store, sellerSku: itemDoc.seller_sku, productName: itemDoc.product_name });
+  const inventory = await resolveCentralInventory({ store, sellerSku: itemDoc.seller_sku, productName: itemDoc.product_name, displayTitle: itemDoc.display_title, imageUrl: itemDoc.image_url });
   const qty = safeNumber(itemDoc.quantity, 1);
 
   if ((inventory.stock || 0) < qty) {
@@ -252,7 +326,7 @@ async function restoreStockForCanceledItem({ store, orderDoc, itemDoc, stats }) 
     return { action: 'not_canceled' };
   }
 
-  const inventory = await resolveCentralInventory({ store, sellerSku: itemDoc.seller_sku, productName: itemDoc.product_name });
+  const inventory = await resolveCentralInventory({ store, sellerSku: itemDoc.seller_sku, productName: itemDoc.product_name, displayTitle: itemDoc.display_title, imageUrl: itemDoc.image_url });
   if (!inventory) {
     itemDoc.processing_status = 'failed';
     itemDoc.error_message = 'Central inventory not found for restore';
@@ -329,7 +403,11 @@ async function upsertOrderItems(store, orderDoc, itemsPayload, stats) {
     if (!externalOrderItemId) continue;
 
     const sellerSku = getItemSellerSku(item);
-    const inventory = sellerSku ? await resolveCentralInventory({ store, sellerSku, productName: getItemName(item) }) : null;
+    const productName = getItemName(item);
+    const displayTitle = getItemEnglishTitle(item) || buildDisplayTitle(productName, sellerSku);
+    const imageUrl = getItemImage(item);
+    const itemStatus = getItemStatus(item, orderDoc.status) || orderDoc.status || 'pending';
+    const inventory = sellerSku ? await resolveCentralInventory({ store, sellerSku, productName, displayTitle, imageUrl }) : null;
 
     await CentralOrderItem.findOneAndUpdate(
       { store_id: store._id, external_order_item_id: externalOrderItemId },
@@ -337,10 +415,17 @@ async function upsertOrderItems(store, orderDoc, itemsPayload, stats) {
         $set: {
           order_id: orderDoc._id,
           seller_sku: sellerSku,
-          product_name: getItemName(item),
+          product_name: productName,
+          original_product_name: productName,
+          display_title: displayTitle,
+          image_url: imageUrl,
           quantity: getItemQuantity(item),
           unit_price: getItemPrice(item),
-          status: getItemStatus(item, orderDoc.status) || orderDoc.status || 'pending',
+          status: itemStatus,
+          return_reason: getReturnReason(item),
+          claim_date: getClaimDate(item),
+          logistic_facility_at: getLogisticFacilityDate(item),
+          collection_status: normalizeStatus(itemStatus).includes('failed') ? 'needs_collection' : 'pending',
           raw_payload: item,
           product_id: null,
           mapping_status: inventory ? 'mapped' : 'unmapped'

@@ -324,6 +324,9 @@ class InventoryItem {
     required this.storeName,
     required this.storeCode,
     required this.productName,
+    required this.originalTitle,
+    required this.displayTitle,
+    required this.imageUrl,
     required this.sellerSku,
     required this.masterSku,
     required this.stock,
@@ -339,6 +342,9 @@ class InventoryItem {
   final String storeName;
   final String storeCode;
   final String productName;
+  final String originalTitle;
+  final String displayTitle;
+  final String imageUrl;
   final String sellerSku;
   final String masterSku;
   final int stock;
@@ -350,15 +356,21 @@ class InventoryItem {
   bool get isLowStock => stock <= lowStockLimit;
   bool get isCritical => stock <= 0 || stock <= 2;
   bool get isInStock => stock > lowStockLimit;
+  String get title => displayTitle.isNotEmpty ? displayTitle : productName;
 
   factory InventoryItem.fromJson(Map<String, dynamic> json) {
+    final productName = JsonReaders.string(json, 'product_name');
+    final displayTitle = JsonReaders.string(json, 'display_title', productName);
     return InventoryItem(
       id: JsonReaders.string(json, '_id'),
       inventoryId: JsonReaders.string(json, 'inventory_id'),
       storeId: JsonReaders.string(json, 'store_id'),
       storeName: JsonReaders.string(json, 'store_name'),
       storeCode: JsonReaders.string(json, 'store_code'),
-      productName: JsonReaders.string(json, 'product_name'),
+      productName: productName,
+      originalTitle: JsonReaders.string(json, 'original_title', productName),
+      displayTitle: displayTitle,
+      imageUrl: JsonReaders.string(json, 'image_url'),
       sellerSku: JsonReaders.string(json, 'seller_sku'),
       masterSku: JsonReaders.string(json, 'master_sku'),
       stock: JsonReaders.integer(json, 'stock'),
@@ -780,6 +792,10 @@ class CentralOrder {
     required this.orderNumber,
     required this.status,
     required this.processingStatus,
+    required this.productTitle,
+    required this.productImageUrl,
+    required this.itemCount,
+    required this.amount,
     required this.orderCreatedAt,
     required this.orderUpdatedAt,
   });
@@ -792,6 +808,10 @@ class CentralOrder {
   final String orderNumber;
   final String status;
   final String processingStatus;
+  final String productTitle;
+  final String productImageUrl;
+  final int itemCount;
+  final double amount;
   final DateTime? orderCreatedAt;
   final DateTime? orderUpdatedAt;
 
@@ -799,13 +819,17 @@ class CentralOrder {
     final storeRaw = json['store_id'];
     return CentralOrder(
       id: JsonReaders.string(json, '_id'),
-      storeId: JsonReaders.nestedId(storeRaw),
-      storeName: JsonReaders.nestedString(storeRaw, 'name', '-'),
-      storeCode: JsonReaders.nestedString(storeRaw, 'code', '-'),
+      storeId: JsonReaders.nestedId(storeRaw).isNotEmpty ? JsonReaders.nestedId(storeRaw) : JsonReaders.string(json, 'store_id'),
+      storeName: JsonReaders.string(json, 'store_name', JsonReaders.nestedString(storeRaw, 'name', '-')),
+      storeCode: JsonReaders.string(json, 'store_code', JsonReaders.nestedString(storeRaw, 'code', '-')),
       externalOrderId: JsonReaders.string(json, 'external_order_id'),
       orderNumber: JsonReaders.string(json, 'order_number'),
       status: JsonReaders.string(json, 'status'),
       processingStatus: JsonReaders.string(json, 'processing_status'),
+      productTitle: JsonReaders.string(json, 'product_title', 'Order items'),
+      productImageUrl: JsonReaders.string(json, 'product_image_url'),
+      itemCount: JsonReaders.integer(json, 'item_count', 1),
+      amount: JsonReaders.number(json, 'amount'),
       orderCreatedAt: JsonReaders.date(json, 'order_created_at'),
       orderUpdatedAt: JsonReaders.date(json, 'order_updated_at'),
     );
@@ -824,8 +848,19 @@ class CentralOrderItem {
     required this.externalOrderItemId,
     required this.sellerSku,
     required this.productName,
+    required this.displayTitle,
+    required this.imageUrl,
     required this.quantity,
+    required this.unitPrice,
+    required this.amount,
     required this.status,
+    required this.returnStatus,
+    required this.returnReason,
+    required this.claimDate,
+    required this.logisticFacilityAt,
+    required this.collectionDeadlineAt,
+    required this.daysLeftToCollect,
+    required this.collectionStatus,
     required this.processingStatus,
     required this.stockDeducted,
     required this.stockRestored,
@@ -843,30 +878,59 @@ class CentralOrderItem {
   final String externalOrderItemId;
   final String sellerSku;
   final String productName;
+  final String displayTitle;
+  final String imageUrl;
   final int quantity;
+  final double unitPrice;
+  final double amount;
   final String status;
+  final String returnStatus;
+  final String returnReason;
+  final DateTime? claimDate;
+  final DateTime? logisticFacilityAt;
+  final DateTime? collectionDeadlineAt;
+  final int? daysLeftToCollect;
+  final String collectionStatus;
   final String processingStatus;
   final bool stockDeducted;
   final bool stockRestored;
   final String errorMessage;
   final DateTime? createdAt;
 
+  String get title => displayTitle.isNotEmpty ? displayTitle : (productName.isEmpty ? sellerSku : productName);
+  bool get isReturn => status.toLowerCase().contains('return') || returnStatus.isNotEmpty || returnReason.isNotEmpty;
+  bool get isFailedDelivery => status.toLowerCase().contains('failed') || status.toLowerCase().contains('undelivered') || collectionStatus == 'needs_collection';
+
   factory CentralOrderItem.fromJson(Map<String, dynamic> json) {
     final storeRaw = json['store_id'];
     final orderRaw = json['order_id'];
+    final productName = JsonReaders.string(json, 'product_name');
+    final quantity = JsonReaders.integer(json, 'quantity', 1);
+    final unitPrice = JsonReaders.number(json, 'unit_price');
     return CentralOrderItem(
       id: JsonReaders.string(json, '_id'),
-      storeId: JsonReaders.nestedId(storeRaw),
-      storeName: JsonReaders.nestedString(storeRaw, 'name', '-'),
-      storeCode: JsonReaders.nestedString(storeRaw, 'code', '-'),
-      orderId: JsonReaders.nestedId(orderRaw),
-      orderNumber: JsonReaders.nestedString(orderRaw, 'order_number', '-'),
-      orderStatus: JsonReaders.nestedString(orderRaw, 'status', '-'),
+      storeId: JsonReaders.nestedId(storeRaw).isNotEmpty ? JsonReaders.nestedId(storeRaw) : JsonReaders.string(json, 'store_id'),
+      storeName: JsonReaders.string(json, 'store_name', JsonReaders.nestedString(storeRaw, 'name', '-')),
+      storeCode: JsonReaders.string(json, 'store_code', JsonReaders.nestedString(storeRaw, 'code', '-')),
+      orderId: JsonReaders.nestedId(orderRaw).isNotEmpty ? JsonReaders.nestedId(orderRaw) : JsonReaders.string(json, 'order_id'),
+      orderNumber: JsonReaders.string(json, 'order_number', JsonReaders.nestedString(orderRaw, 'order_number', '-')),
+      orderStatus: JsonReaders.string(json, 'order_status', JsonReaders.nestedString(orderRaw, 'status', '-')),
       externalOrderItemId: JsonReaders.string(json, 'external_order_item_id'),
       sellerSku: JsonReaders.string(json, 'seller_sku'),
-      productName: JsonReaders.string(json, 'product_name'),
-      quantity: JsonReaders.integer(json, 'quantity'),
+      productName: productName,
+      displayTitle: JsonReaders.string(json, 'display_title', productName),
+      imageUrl: JsonReaders.string(json, 'image_url'),
+      quantity: quantity,
+      unitPrice: unitPrice,
+      amount: JsonReaders.number(json, 'amount', unitPrice * quantity),
       status: JsonReaders.string(json, 'status'),
+      returnStatus: JsonReaders.string(json, 'return_status'),
+      returnReason: JsonReaders.string(json, 'return_reason'),
+      claimDate: JsonReaders.date(json, 'claim_date'),
+      logisticFacilityAt: JsonReaders.date(json, 'logistic_facility_at'),
+      collectionDeadlineAt: JsonReaders.date(json, 'collection_deadline_at'),
+      daysLeftToCollect: json['days_left_to_collect'] == null ? null : JsonReaders.integer(json, 'days_left_to_collect'),
+      collectionStatus: JsonReaders.string(json, 'collection_status'),
       processingStatus: JsonReaders.string(json, 'processing_status'),
       stockDeducted: JsonReaders.boolean(json, 'stock_deducted'),
       stockRestored: JsonReaders.boolean(json, 'stock_restored'),

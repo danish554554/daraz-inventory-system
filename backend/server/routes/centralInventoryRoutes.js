@@ -57,11 +57,14 @@ async function findInventoryByPayload({ inventory_id, product_id, store_id, sell
           store_id,
           seller_sku: String(seller_sku).trim(),
           product_name: String(product_name || seller_sku).trim(),
+          original_product_name: String(product_name || seller_sku).trim(),
+          display_title: String(product_name || seller_sku).trim(),
+          image_url: '',
           stock: 0,
           reserved_stock: 0,
           low_stock_limit: 5
         },
-        $set: product_name ? { product_name: String(product_name).trim() } : {}
+        $set: product_name ? { product_name: String(product_name).trim(), original_product_name: String(product_name).trim(), display_title: String(product_name).trim() } : {}
       },
       { upsert: true, new: true }
     );
@@ -80,6 +83,9 @@ function makeInventoryRow(item) {
     store_name: item.store_id?.name || item.store_name || '-',
     store_code: item.store_id?.code || '-',
     product_name: item.product_name || item.seller_sku,
+    original_title: item.original_product_name || item.product_name || item.seller_sku,
+    display_title: item.display_title || item.product_name || item.seller_sku,
+    image_url: item.image_url || '',
     seller_sku: item.seller_sku,
     master_sku: item.seller_sku,
     stock,
@@ -625,6 +631,31 @@ router.get('/export/purchase-analytics.csv', async (req, res, next) => {
     res.setHeader('Content-Type', 'text/csv');
     res.setHeader('Content-Disposition', 'attachment; filename="supplier-purchase-analytics.csv"');
     res.send(csv);
+  } catch (error) { next(error); }
+});
+
+router.put('/:id/alert-settings', async (req, res, next) => {
+  try {
+    const inventory = await CentralInventory.findById(req.params.id);
+    if (!inventory) return res.status(404).json({ message: 'Inventory row not found' });
+
+    const threshold = Math.max(0, Math.floor(toNumber(req.body.low_stock_limit, inventory.low_stock_limit || 5)));
+    inventory.low_stock_limit = threshold;
+    await inventory.save();
+
+    res.json({
+      success: true,
+      message: 'Low stock threshold updated',
+      inventory: makeInventoryRow(await CentralInventory.findById(inventory._id).populate('store_id', 'name code').lean())
+    });
+  } catch (error) { next(error); }
+});
+
+router.post('/alert-settings/global', async (req, res, next) => {
+  try {
+    const threshold = Math.max(0, Math.floor(toNumber(req.body.low_stock_limit, 5)));
+    const result = await CentralInventory.updateMany({}, { $set: { low_stock_limit: threshold } });
+    res.json({ success: true, message: 'Global low stock threshold updated', modified: result.modifiedCount || 0, low_stock_limit: threshold });
   } catch (error) { next(error); }
 });
 

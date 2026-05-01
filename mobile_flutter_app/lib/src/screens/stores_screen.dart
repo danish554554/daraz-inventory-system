@@ -230,7 +230,6 @@ class _StoresScreenState extends State<StoresScreen> {
                       SectionHeader(
                         title: 'Stores',
                         subtitle: '${_stores.length} connected · ${_stores.where((s) => !s.tokenConnected).length} needs attention',
-                        action: CircleIconButton(icon: Icons.add_rounded, onPressed: _openCreateSheet),
                       ),
                       const SizedBox(height: 14),
                       TextField(

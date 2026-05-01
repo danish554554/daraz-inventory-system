@@ -469,6 +469,63 @@ class AppTextField extends StatelessWidget {
   }
 }
 
+class ProductImageBox extends StatelessWidget {
+  const ProductImageBox({
+    super.key,
+    required this.imageUrl,
+    this.size = 54,
+    this.radius = 14,
+    this.icon = Icons.inventory_2_outlined,
+  });
+
+  final String imageUrl;
+  final double size;
+  final double radius;
+  final IconData icon;
+
+  @override
+  Widget build(BuildContext context) {
+    final url = imageUrl.trim();
+    final fallback = Container(
+      width: size,
+      height: size,
+      decoration: BoxDecoration(
+        color: AppTheme.softGrey,
+        borderRadius: BorderRadius.circular(radius),
+        gradient: LinearGradient(colors: <Color>[AppTheme.softGrey, Colors.grey.shade300]),
+      ),
+      child: Icon(icon, color: AppTheme.textMuted, size: size * 0.38),
+    );
+
+    if (url.isEmpty) return fallback;
+
+    return ClipRRect(
+      borderRadius: BorderRadius.circular(radius),
+      child: Image.network(
+        url,
+        width: size,
+        height: size,
+        fit: BoxFit.cover,
+        errorBuilder: (_, __, ___) => fallback,
+        loadingBuilder: (context, child, progress) {
+          if (progress == null) return child;
+          return Container(
+            width: size,
+            height: size,
+            decoration: BoxDecoration(
+              color: AppTheme.softGrey,
+              borderRadius: BorderRadius.circular(radius),
+            ),
+            child: const Center(
+              child: SizedBox(width: 16, height: 16, child: CircularProgressIndicator(strokeWidth: 2)),
+            ),
+          );
+        },
+      ),
+    );
+  }
+}
+
 class EmptyState extends StatelessWidget {
   const EmptyState({
     super.key,

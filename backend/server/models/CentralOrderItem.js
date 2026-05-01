@@ -32,6 +32,21 @@ const centralOrderItemSchema = new mongoose.Schema(
       default: "",
       trim: true
     },
+    original_product_name: {
+      type: String,
+      default: "",
+      trim: true
+    },
+    display_title: {
+      type: String,
+      default: "",
+      trim: true
+    },
+    image_url: {
+      type: String,
+      default: "",
+      trim: true
+    },
     quantity: {
       type: Number,
       required: true,
@@ -42,6 +57,24 @@ const centralOrderItemSchema = new mongoose.Schema(
       default: 0
     },
     status: {
+      type: String,
+      default: "pending",
+      trim: true
+    },
+    return_reason: {
+      type: String,
+      default: "",
+      trim: true
+    },
+    claim_date: {
+      type: Date,
+      default: null
+    },
+    logistic_facility_at: {
+      type: Date,
+      default: null
+    },
+    collection_status: {
       type: String,
       default: "pending",
       trim: true

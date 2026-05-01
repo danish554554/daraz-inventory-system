@@ -21,6 +21,7 @@ class _InventoryScreenState extends State<InventoryScreen> {
   String? _error;
   String _search = '';
   String _filter = 'all';
+  final Set<String> _notifiedLowStockIds = <String>{};
 
   List<StoreModel> _stores = <StoreModel>[];
   List<InventoryItem> _inventory = <InventoryItem>[];
@@ -75,6 +76,11 @@ class _InventoryScreenState extends State<InventoryScreen> {
         _restocks = JsonReaders.list(results[2]).map((item) => RestockEntry.fromJson(JsonReaders.map(item))).toList();
         _adjustments = JsonReaders.list(results[3]).map((item) => AdjustmentRequestModel.fromJson(JsonReaders.map(item))).toList();
       });
+
+      if (mounted) {
+        final lowItems = _inventory.where((item) => item.isLowStock).toList();
+        WidgetsBinding.instance.addPostFrameCallback((_) => _notifyLowStockItems(lowItems));
+      }
     } on ApiException catch (error) {
       setState(() => _error = error.message);
     } catch (_) {
@@ -88,7 +94,7 @@ class _InventoryScreenState extends State<InventoryScreen> {
     final query = _search.trim().toLowerCase();
     final source = _inventory.where((item) {
       final matchesSearch = query.isEmpty ||
-          item.productName.toLowerCase().contains(query) ||
+          item.title.toLowerCase().contains(query) ||
           item.sellerSku.toLowerCase().contains(query) ||
           item.storeCode.toLowerCase().contains(query);
       if (!matchesSearch) return false;
@@ -209,6 +215,39 @@ class _InventoryScreenState extends State<InventoryScreen> {
     if (done == true) {
       await _load();
       if (mounted) showAppSnackBar(context, 'Adjustment request created.');
+    }
+  }
+
+
+  void _notifyLowStockItems(List<InventoryItem> lowItems) {
+    if (!mounted || lowItems.isEmpty) return;
+    final fresh = lowItems.where((item) => !_notifiedLowStockIds.contains(item.id)).toList();
+    if (fresh.isEmpty) return;
+
+    for (final item in fresh) {
+      _notifiedLowStockIds.add(item.id);
+    }
+
+    final first = fresh.first;
+    showAppSnackBar(
+      context,
+      fresh.length == 1
+          ? 'Low stock alert: ${first.title} has only ${first.stock} left in ${first.storeName}.'
+          : 'Low stock alert: ${fresh.length} products need restock attention.',
+      error: first.isCritical,
+    );
+  }
+
+  Future<void> _openAlertSettings({InventoryItem? item}) async {
+    final updated = await showModalBottomSheet<bool>(
+      context: context,
+      isScrollControlled: true,
+      useSafeArea: true,
+      builder: (context) => LowStockSettingsSheet(selected: item),
+    );
+    if (updated == true) {
+      await _load();
+      if (mounted) showAppSnackBar(context, 'Low stock alert settings updated.');
     }
   }
 
@@ -358,6 +397,7 @@ class _InventoryScreenState extends State<InventoryScreen> {
         SizedBox(width: itemWidth, child: ActionTile(title: 'Import Products', subtitle: 'Refresh active Daraz SKUs', icon: Icons.cloud_download_outlined, onTap: _importProducts, highlight: true, loading: _importingProducts)),
         SizedBox(width: itemWidth, child: ActionTile(title: 'Bulk Restock', subtitle: 'Add new purchase stock', icon: Icons.add_box_outlined, onTap: _openBulkRestockSheet)),
         SizedBox(width: itemWidth, child: ActionTile(title: 'Adjust Stock', subtitle: 'Manual correction', icon: Icons.tune_rounded, onTap: () => _openQuickAdjustment())),
+        SizedBox(width: itemWidth, child: ActionTile(title: 'Low Stock Alerts', subtitle: 'Threshold and reminders', icon: Icons.notifications_active_outlined, onTap: () => _openAlertSettings())),
         SizedBox(width: itemWidth, child: ActionTile(title: 'Approvals', subtitle: '${_adjustments.length} pending requests', icon: Icons.fact_check_outlined, onTap: _openAdjustmentQueue)),
       ],
     );
@@ -386,16 +426,7 @@ class _InventoryScreenState extends State<InventoryScreen> {
         },
         child: Row(
           children: <Widget>[
-            Container(
-              width: 54,
-              height: 54,
-              decoration: BoxDecoration(
-                color: AppTheme.softGrey,
-                borderRadius: BorderRadius.circular(14),
-                gradient: LinearGradient(colors: <Color>[AppTheme.softGrey, Colors.grey.shade300]),
-              ),
-              child: const Icon(Icons.inventory_2_outlined, color: AppTheme.textMuted),
-            ),
+            ProductImageBox(imageUrl: item.imageUrl),
             const SizedBox(width: 12),
             Expanded(
               child: Column(
@@ -403,7 +434,7 @@ class _InventoryScreenState extends State<InventoryScreen> {
                 children: <Widget>[
                   Row(
                     children: <Widget>[
-                      Expanded(child: Text(item.productName, maxLines: 1, overflow: TextOverflow.ellipsis, style: const TextStyle(fontWeight: FontWeight.w900, fontSize: 13))),
+                      Expanded(child: Text(item.title, maxLines: 1, overflow: TextOverflow.ellipsis, style: const TextStyle(fontWeight: FontWeight.w900, fontSize: 13))),
                       const SizedBox(width: 8),
                       Text('${item.stock}', style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w900)),
                     ],
@@ -414,12 +445,16 @@ class _InventoryScreenState extends State<InventoryScreen> {
                   Row(
                     children: <Widget>[
                       StatusChip(label: statusText, color: color, softColor: softColor),
-                      const Spacer(),
-                      _roundAction(Icons.remove_rounded, () => _openQuickAdjustment(item: item)),
                       const SizedBox(width: 8),
-                      Text('${item.stock}', style: const TextStyle(fontSize: 12, fontWeight: FontWeight.w900)),
-                      const SizedBox(width: 8),
-                      _roundAction(Icons.add_rounded, () => _openRestockSheet(item: item)),
+                      Expanded(
+                        child: Text(
+                          'Available ${item.availableStock} · Alert at ${item.lowStockLimit}',
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                          textAlign: TextAlign.right,
+                          style: const TextStyle(color: AppTheme.textMuted, fontSize: 11, fontWeight: FontWeight.w800),
+                        ),
+                      ),
                     ],
                   ),
                 ],
@@ -427,19 +462,6 @@ class _InventoryScreenState extends State<InventoryScreen> {
             ),
           ],
         ),
-      ),
-    );
-  }
-
-  Widget _roundAction(IconData icon, VoidCallback onTap) {
-    return InkWell(
-      onTap: onTap,
-      borderRadius: BorderRadius.circular(14),
-      child: Container(
-        width: 26,
-        height: 26,
-        decoration: BoxDecoration(color: Colors.white, borderRadius: BorderRadius.circular(12), border: Border.all(color: AppTheme.border)),
-        child: Icon(icon, size: 15, color: AppTheme.textPrimary),
       ),
     );
   }
@@ -494,7 +516,7 @@ class _InventoryScreenState extends State<InventoryScreen> {
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: <Widget>[
-                  Text(item.productName, maxLines: 1, overflow: TextOverflow.ellipsis, style: const TextStyle(fontWeight: FontWeight.w900, fontSize: 13)),
+                  Text(item.title, maxLines: 1, overflow: TextOverflow.ellipsis, style: const TextStyle(fontWeight: FontWeight.w900, fontSize: 13)),
                   const SizedBox(height: 3),
                   Text('${item.adjustmentType} ${item.quantity} · ${item.reasonCode}', maxLines: 1, overflow: TextOverflow.ellipsis, style: const TextStyle(color: AppTheme.textMuted, fontSize: 11, fontWeight: FontWeight.w700)),
                 ],
@@ -512,10 +534,133 @@ class _InventoryScreenState extends State<InventoryScreen> {
   }
 }
 
+
+class LowStockSettingsSheet extends StatefulWidget {
+  const LowStockSettingsSheet({super.key, this.selected});
+
+  final InventoryItem? selected;
+
+  @override
+  State<LowStockSettingsSheet> createState() => _LowStockSettingsSheetState();
+}
+
+class _LowStockSettingsSheetState extends State<LowStockSettingsSheet> {
+  late final TextEditingController _threshold;
+  bool _global = false;
+  bool _notificationsEnabled = true;
+  bool _saving = false;
+
+  @override
+  void initState() {
+    super.initState();
+    _threshold = TextEditingController(text: '${widget.selected?.lowStockLimit ?? 5}');
+  }
+
+  @override
+  void dispose() {
+    _threshold.dispose();
+    super.dispose();
+  }
+
+  Future<void> _submit() async {
+    final threshold = int.tryParse(_threshold.text.trim());
+    if (threshold == null || threshold < 0) {
+      showAppSnackBar(context, 'Enter a valid threshold.', error: true);
+      return;
+    }
+
+    setState(() => _saving = true);
+    try {
+      if (_global || widget.selected == null) {
+        await ApiClient.instance.post(
+          '/central-inventory/alert-settings/global',
+          body: <String, dynamic>{'low_stock_limit': threshold},
+        );
+      } else {
+        await ApiClient.instance.put(
+          '/central-inventory/${widget.selected!.id}/alert-settings',
+          body: <String, dynamic>{'low_stock_limit': threshold},
+        );
+      }
+      if (mounted) Navigator.pop(context, true);
+    } on ApiException catch (error) {
+      if (mounted) showAppSnackBar(context, error.message, error: true);
+    } finally {
+      if (mounted) setState(() => _saving = false);
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final selected = widget.selected;
+    return SafeArea(
+      child: Padding(
+        padding: EdgeInsets.only(
+          left: 20,
+          right: 20,
+          top: 20,
+          bottom: MediaQuery.of(context).viewInsets.bottom + 24,
+        ),
+        child: SingleChildScrollView(
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: <Widget>[
+              SectionHeader(
+                title: 'Low Stock Alerts',
+                subtitle: selected == null ? 'Set the global reorder threshold.' : '${selected.title} • ${selected.storeCode}',
+                action: IconButton(onPressed: () => Navigator.pop(context), icon: const Icon(Icons.close)),
+              ),
+              const SizedBox(height: 16),
+              SwitchListTile.adaptive(
+                value: _notificationsEnabled,
+                contentPadding: EdgeInsets.zero,
+                title: const Text('Enable low stock notifications', style: TextStyle(fontWeight: FontWeight.w900)),
+                subtitle: const Text('The app shows an alert when synced stock reaches the threshold.'),
+                onChanged: (value) => setState(() => _notificationsEnabled = value),
+              ),
+              if (selected != null) ...<Widget>[
+                const SizedBox(height: 8),
+                SwitchListTile.adaptive(
+                  value: _global,
+                  contentPadding: EdgeInsets.zero,
+                  title: const Text('Apply to all products', style: TextStyle(fontWeight: FontWeight.w900)),
+                  subtitle: const Text('Turn off to update only this product.'),
+                  onChanged: (value) => setState(() => _global = value),
+                ),
+              ],
+              const SizedBox(height: 12),
+              AppTextField(
+                controller: _threshold,
+                labelText: 'Low stock threshold',
+                keyboardType: TextInputType.number,
+              ),
+              const SizedBox(height: 10),
+              const Text(
+                'Tip: phone push notifications require notification permission and a background push service. This build records the threshold and shows in-app alerts after sync/load.',
+                style: TextStyle(color: AppTheme.textMuted, fontSize: 11, fontWeight: FontWeight.w700, height: 1.35),
+              ),
+              const SizedBox(height: 18),
+              PrimaryButton(
+                label: 'Save Alert Settings',
+                onPressed: _notificationsEnabled ? _submit : () => Navigator.pop(context, true),
+                icon: Icons.notifications_active_outlined,
+                expanded: true,
+                loading: _saving,
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+}
+
 class ProductImportStoreSheet extends StatelessWidget {
   const ProductImportStoreSheet({super.key, required this.stores});
 
   final List<StoreModel> stores;
+
 
   @override
   Widget build(BuildContext context) {
@@ -602,6 +747,7 @@ class InventoryItemActionsSheet extends StatelessWidget {
   final VoidCallback onAdjust;
   final VoidCallback onRequest;
 
+
   @override
   Widget build(BuildContext context) {
     return Padding(
@@ -612,7 +758,7 @@ class InventoryItemActionsSheet extends StatelessWidget {
           crossAxisAlignment: CrossAxisAlignment.start,
           children: <Widget>[
             SectionHeader(
-              title: item.productName,
+              title: item.title,
               subtitle: '${item.sellerSku} • ${item.storeName}',
               action: IconButton(
                 onPressed: () => Navigator.pop(context),
@@ -735,6 +881,7 @@ class _RestockSheetState extends State<RestockSheet> {
     }
   }
 
+
   @override
   Widget build(BuildContext context) {
     return Padding(
@@ -759,6 +906,7 @@ class _RestockSheetState extends State<RestockSheet> {
             ),
             const SizedBox(height: 16),
             DropdownButtonFormField<String>(
+              isExpanded: true,
               initialValue: _selected?.id,
               decoration: const InputDecoration(labelText: 'Inventory row'),
               items:
@@ -767,7 +915,9 @@ class _RestockSheetState extends State<RestockSheet> {
                         (item) => DropdownMenuItem<String>(
                           value: item.id,
                           child: Text(
-                            '${item.productName} (${item.storeCode}:${item.sellerSku})',
+                            '${item.title} (${item.storeCode}:${item.sellerSku})',
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
                           ),
                         ),
                       )
@@ -870,6 +1020,7 @@ class _QuickAdjustmentSheetState extends State<QuickAdjustmentSheet> {
     }
   }
 
+
   @override
   Widget build(BuildContext context) {
     return Padding(
@@ -893,6 +1044,7 @@ class _QuickAdjustmentSheetState extends State<QuickAdjustmentSheet> {
             ),
             const SizedBox(height: 16),
             DropdownButtonFormField<String>(
+              isExpanded: true,
               initialValue: _selected?.id,
               decoration: const InputDecoration(labelText: 'Inventory row'),
               items:
@@ -901,7 +1053,9 @@ class _QuickAdjustmentSheetState extends State<QuickAdjustmentSheet> {
                         (item) => DropdownMenuItem<String>(
                           value: item.id,
                           child: Text(
-                            '${item.productName} (${item.storeCode}:${item.sellerSku})',
+                            '${item.title} (${item.storeCode}:${item.sellerSku})',
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
                           ),
                         ),
                       )
@@ -986,6 +1140,7 @@ class _BulkRestockSheetState extends State<BulkRestockSheet> {
       if (mounted) setState(() => _saving = false);
     }
   }
+
 
   @override
   Widget build(BuildContext context) {
@@ -1076,6 +1231,7 @@ class _AdjustmentRequestSheetState extends State<AdjustmentRequestSheet> {
       if (mounted) setState(() => _saving = false);
     }
   }
+
 
   @override
   Widget build(BuildContext context) {
@@ -1185,6 +1341,7 @@ class _AdjustmentQueueSheetState extends State<AdjustmentQueueSheet> {
       if (mounted) setState(() => _working = false);
     }
   }
+
 
   @override
   Widget build(BuildContext context) {
@@ -1343,6 +1500,7 @@ class _InventoryReportsSheetState extends State<InventoryReportsSheet> {
       if (mounted) showAppSnackBar(context, error.message, error: true);
     }
   }
+
 
   @override
   Widget build(BuildContext context) {

@@ -158,16 +158,18 @@ class _DashboardScreenState extends State<DashboardScreen> {
                       else
                         ..._lowStockItems.take(4).map(_lowStockCard),
                       const SizedBox(height: 18),
-                      _sectionTitle('Recent activity', action: 'Today'),
+                      _sectionTitle('Orders History', action: 'Today'),
                       const SizedBox(height: 10),
-                      if (_transactions.isEmpty)
+                      _ordersHistoryCard(),
+                      const SizedBox(height: 10),
+                      if (_orders.isEmpty)
                         const EmptyState(
-                          title: 'No movement yet',
-                          message: 'Orders, restocks, and adjustments will appear here.',
+                          title: 'No orders yet',
+                          message: 'Today, weekly, monthly and custom order history appears here after sync.',
                           icon: Icons.receipt_long_outlined,
                         )
                       else
-                        ..._transactions.take(5).map(_activityCard),
+                        ..._orders.take(5).map(_dashboardOrderCard),
                     ],
                   ),
                 ),
@@ -333,7 +335,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: <Widget>[
-                  Text(item.productName, maxLines: 1, overflow: TextOverflow.ellipsis, style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w900)),
+                  Text(item.title, maxLines: 1, overflow: TextOverflow.ellipsis, style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w900)),
                   const SizedBox(height: 3),
                   Text('${item.sellerSku} · ${item.storeCode}', maxLines: 1, overflow: TextOverflow.ellipsis, style: const TextStyle(fontSize: 11, color: AppTheme.textMuted, fontWeight: FontWeight.w700)),
                 ],
@@ -344,6 +346,101 @@ class _DashboardScreenState extends State<DashboardScreen> {
               '${item.stock} left',
               style: TextStyle(color: critical ? AppTheme.danger : AppTheme.warning, fontSize: 12, fontWeight: FontWeight.w900),
             ),
+          ],
+        ),
+      ),
+    );
+  }
+
+
+  Widget _ordersHistoryCard() {
+    final revenue = _orderItems.fold<double>(0, (sum, item) => sum + item.amount);
+    final returns = _orderItems.where((item) => item.isReturn).length;
+    final failed = _orderItems.where((item) => item.isFailedDelivery).length;
+    final maxOrders = _orders.isEmpty ? 1 : _orders.length;
+    final ordersFraction = (_orders.length / maxOrders).clamp(0.05, 1.0).toDouble();
+    final revenueFraction = revenue <= 0 ? 0.05 : 1.0;
+
+    return AppCard(
+      padding: const EdgeInsets.all(13),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: <Widget>[
+          Row(
+            children: <Widget>[
+              Expanded(child: _historyMetric('Orders', Formatters.quantity(_orders.length))),
+              Expanded(child: _historyMetric('Revenue', 'Rs. ${Formatters.money(revenue)}')),
+            ],
+          ),
+          const SizedBox(height: 10),
+          Row(
+            children: <Widget>[
+              Expanded(child: _historyMetric('Returns', Formatters.quantity(returns))),
+              Expanded(child: _historyMetric('Failed Delivery', Formatters.quantity(failed))),
+            ],
+          ),
+          const SizedBox(height: 12),
+          _miniBar('Orders graph', ordersFraction),
+          const SizedBox(height: 8),
+          _miniBar('Revenue graph', revenueFraction),
+        ],
+      ),
+    );
+  }
+
+  Widget _historyMetric(String label, String value) {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: <Widget>[
+        Text(value, maxLines: 1, overflow: TextOverflow.ellipsis, style: const TextStyle(fontSize: 16, fontWeight: FontWeight.w900)),
+        const SizedBox(height: 2),
+        Text(label, maxLines: 1, overflow: TextOverflow.ellipsis, style: const TextStyle(color: AppTheme.textMuted, fontSize: 11, fontWeight: FontWeight.w800)),
+      ],
+    );
+  }
+
+  Widget _miniBar(String label, double value) {
+    return Row(
+      children: <Widget>[
+        SizedBox(width: 96, child: Text(label, style: const TextStyle(color: AppTheme.textMuted, fontSize: 11, fontWeight: FontWeight.w800))),
+        Expanded(
+          child: ClipRRect(
+            borderRadius: BorderRadius.circular(99),
+            child: LinearProgressIndicator(
+              value: value,
+              minHeight: 8,
+              backgroundColor: AppTheme.background,
+              valueColor: const AlwaysStoppedAnimation<Color>(AppTheme.primary),
+            ),
+          ),
+        ),
+      ],
+    );
+  }
+
+  Widget _dashboardOrderCard(CentralOrder order) {
+    final color = order.status.toLowerCase().contains('cancel') ? AppTheme.danger : AppTheme.success;
+    final soft = order.status.toLowerCase().contains('cancel') ? AppTheme.dangerSoft : AppTheme.successSoft;
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 10),
+      child: AppCard(
+        padding: const EdgeInsets.all(12),
+        child: Row(
+          children: <Widget>[
+            ProductImageBox(imageUrl: order.productImageUrl, icon: Icons.shopping_bag_outlined, size: 44),
+            const SizedBox(width: 12),
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: <Widget>[
+                  Text(order.productTitle, maxLines: 1, overflow: TextOverflow.ellipsis, style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w900)),
+                  const SizedBox(height: 3),
+                  Text('Order ${order.orderNumber.isEmpty ? order.externalOrderId : order.orderNumber} · ${order.storeName} · Rs. ${Formatters.money(order.amount)}', maxLines: 1, overflow: TextOverflow.ellipsis, style: const TextStyle(fontSize: 11, color: AppTheme.textMuted, fontWeight: FontWeight.w700)),
+                ],
+              ),
+            ),
+            const SizedBox(width: 8),
+            StatusChip(label: order.status.isEmpty ? 'Order' : order.status, color: color, softColor: soft),
           ],
         ),
       ),

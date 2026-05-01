@@ -25,6 +25,66 @@ function pickFirstString(source, keys = []) {
   return "";
 }
 
+
+function hasNonLatin(text = "") {
+  return /[^\u0000-\u007f]/.test(safeString(text));
+}
+
+function buildDisplayTitle(title = "", sku = "") {
+  const cleanTitle = safeString(title);
+  if (cleanTitle && !hasNonLatin(cleanTitle)) return cleanTitle;
+
+  const skuText = safeString(sku)
+    .replace(/[_-]+/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+
+  if (skuText) return skuText;
+  return cleanTitle || "Daraz Product";
+}
+
+function pickEnglishTitle(product = {}, sku = {}) {
+  return (
+    pickFirstString(sku, ["display_title", "english_title", "title_en", "name_en", "product_name_en"]) ||
+    pickFirstString(product, ["display_title", "english_title", "title_en", "name_en", "product_name_en"]) ||
+    pickFirstString(product.attributes, ["english_title", "title_en", "name_en", "product_name_en"])
+  );
+}
+
+function normalizeImageValue(value) {
+  if (!value) return "";
+  if (typeof value === "string") return safeString(value);
+  if (Array.isArray(value)) {
+    for (const entry of value) {
+      const url = normalizeImageValue(entry);
+      if (url) return url;
+    }
+  }
+  if (typeof value === "object") {
+    return pickFirstString(value, ["url", "image_url", "image", "src", "main_image", "thumbnail", "large", "medium"]);
+  }
+  return "";
+}
+
+function getProductImage(product = {}, sku = {}) {
+  const skuImage = normalizeImageValue(
+    sku.image_url || sku.image || sku.main_image || sku.thumbnail || sku.Images || sku.images
+  );
+  if (skuImage) return skuImage;
+
+  return normalizeImageValue(
+    product.main_image ||
+      product.primary_image ||
+      product.image_url ||
+      product.image ||
+      product.thumbnail ||
+      product.Images ||
+      product.images ||
+      product.product_images ||
+      product.ProductImage
+  );
+}
+
 function findFirstArray(source, keys = []) {
   if (!source || typeof source !== "object") return [];
 
@@ -128,9 +188,16 @@ function normalizeProductPayloads(products = []) {
       for (const sku of skuRows) {
         if (!sku || typeof sku !== "object") continue;
 
+        const sellerSku = getSellerSku(sku);
+        const originalTitle = getProductName(product, sku) || productName;
+        const englishTitle = pickEnglishTitle(product, sku);
+
         rows.push({
-          seller_sku: getSellerSku(sku),
-          product_name: getProductName(product, sku) || productName,
+          seller_sku: sellerSku,
+          product_name: originalTitle,
+          original_product_name: originalTitle,
+          display_title: englishTitle || buildDisplayTitle(originalTitle, sellerSku),
+          image_url: getProductImage(product, sku),
           stock: getSkuStock(sku),
           daraz_product_id: productId,
           daraz_item_id:
@@ -141,9 +208,15 @@ function normalizeProductPayloads(products = []) {
       continue;
     }
 
+    const sellerSku = getSellerSku(product);
+    const englishTitle = pickEnglishTitle(product, {});
+
     rows.push({
-      seller_sku: getSellerSku(product),
+      seller_sku: sellerSku,
       product_name: productName,
+      original_product_name: productName,
+      display_title: englishTitle || buildDisplayTitle(productName, sellerSku),
+      image_url: getProductImage(product, {}),
       stock: getSkuStock(product),
       daraz_product_id: productId,
       daraz_item_id: productId,
@@ -224,6 +297,9 @@ async function importProductsForStore(storeId, options = {}) {
           store_id: store._id,
           seller_sku: sellerSku,
           product_name: safeString(row.product_name) || sellerSku,
+          original_product_name: safeString(row.original_product_name || row.product_name),
+          display_title: safeString(row.display_title) || buildDisplayTitle(row.product_name, sellerSku),
+          image_url: safeString(row.image_url),
           stock: getSkuStock(row),
           daraz_product_id: safeString(row.daraz_product_id),
           daraz_item_id: safeString(row.daraz_item_id),

@@ -17,6 +17,21 @@ const centralInventorySchema = new mongoose.Schema(
       default: "",
       trim: true
     },
+    original_product_name: {
+      type: String,
+      default: "",
+      trim: true
+    },
+    display_title: {
+      type: String,
+      default: "",
+      trim: true
+    },
+    image_url: {
+      type: String,
+      default: "",
+      trim: true
+    },
     daraz_product_id: {
       type: String,
       default: "",
