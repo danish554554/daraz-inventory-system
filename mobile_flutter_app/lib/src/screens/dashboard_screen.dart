@@ -195,7 +195,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
         gradient: AppTheme.primaryGradient,
         borderRadius: BorderRadius.circular(22),
         boxShadow: <BoxShadow>[
-          BoxShadow(color: AppTheme.primary.withOpacity(0.18), blurRadius: 18, offset: const Offset(0, 8)),
+          BoxShadow(color: AppTheme.primary.withValues(alpha: 0.18), blurRadius: 18, offset: const Offset(0, 8)),
         ],
       ),
       child: Stack(
@@ -206,7 +206,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
             child: Container(
               height: 116,
               width: 116,
-              decoration: BoxDecoration(color: Colors.white.withOpacity(0.12), shape: BoxShape.circle),
+              decoration: BoxDecoration(color: Colors.white.withValues(alpha: 0.12), shape: BoxShape.circle),
             ),
           ),
           Column(
@@ -220,7 +220,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
                       children: <Widget>[
                         Text(
                           _greeting(),
-                          style: TextStyle(color: Colors.white.withOpacity(0.82), fontSize: 11, fontWeight: FontWeight.w700),
+                          style: TextStyle(color: Colors.white.withValues(alpha: 0.82), fontSize: 11, fontWeight: FontWeight.w700),
                         ),
                         const SizedBox(height: 3),
                         Text(
@@ -235,13 +235,13 @@ class _DashboardScreenState extends State<DashboardScreen> {
                   CircleIconButton(
                     icon: Icons.refresh_rounded,
                     onPressed: _load,
-                    background: Colors.white.withOpacity(0.17),
+                    background: Colors.white.withValues(alpha: 0.17),
                     foreground: Colors.white,
                   ),
                   const SizedBox(width: 8),
                   CircleAvatar(
                     radius: 19,
-                    backgroundColor: Colors.white.withOpacity(0.18),
+                    backgroundColor: Colors.white.withValues(alpha: 0.18),
                     child: const Text('AR', style: TextStyle(color: Colors.white, fontWeight: FontWeight.w900, fontSize: 12)),
                   ),
                 ],
@@ -517,7 +517,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
   Widget _heroPill(IconData icon, String label) {
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
-      decoration: BoxDecoration(color: Colors.white.withOpacity(0.18), borderRadius: BorderRadius.circular(20)),
+      decoration: BoxDecoration(color: Colors.white.withValues(alpha: 0.18), borderRadius: BorderRadius.circular(20)),
       child: Row(
         mainAxisSize: MainAxisSize.min,
         children: <Widget>[

@@ -33,7 +33,7 @@ class AppCard extends StatelessWidget {
         boxShadow: shadow
             ? <BoxShadow>[
                 BoxShadow(
-                  color: Colors.black.withOpacity(0.035),
+                  color: Colors.black.withValues(alpha: 0.035),
                   blurRadius: 14,
                   offset: const Offset(0, 7),
                 ),
@@ -615,7 +615,7 @@ class ActionTile extends StatelessWidget {
               : MiniIcon(
                   icon: icon,
                   color: highlight ? AppTheme.primary : AppTheme.primary,
-                  background: highlight ? Colors.white.withOpacity(0.9) : AppTheme.primarySoft,
+                  background: highlight ? Colors.white.withValues(alpha: 0.9) : AppTheme.primarySoft,
                 ),
           const SizedBox(height: 12),
           Text(
@@ -634,7 +634,7 @@ class ActionTile extends StatelessWidget {
             maxLines: 2,
             overflow: TextOverflow.ellipsis,
             style: TextStyle(
-              color: highlight ? Colors.white.withOpacity(0.82) : AppTheme.textMuted,
+              color: highlight ? Colors.white.withValues(alpha: 0.82) : AppTheme.textMuted,
               fontSize: 11,
               fontWeight: FontWeight.w700,
               height: 1.25,

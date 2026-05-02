@@ -7,6 +7,12 @@ const StockReceipt = require('../models/StockReceipt');
 const StockAdjustmentRequest = require('../models/StockAdjustmentRequest');
 const Store = require('../models/Store');
 const InventoryMergeGroup = require('../models/InventoryMergeGroup');
+const {
+  buildMasterSku,
+  resolveStockTarget,
+  updateTargetStock,
+  setTargetLowStockLimit
+} = require('../services/inventoryStockTargetService');
 
 function toNumber(value, fallback = 0) {
   const num = Number(value);
@@ -124,9 +130,11 @@ function rowMatchesSearch(row, query) {
 
 function makeMergedInventoryRow(group, items) {
   const first = items[0] || {};
-  const stock = items.reduce((sum, item) => sum + toNumber(item.stock, 0), 0);
-  const reserved = items.reduce((sum, item) => sum + toNumber(item.reserved_stock, 0), 0);
-  const lowStockLimit = items.reduce((min, item) => Math.min(min, toNumber(item.low_stock_limit, 5)), 5);
+  const stock = toNumber(group.stock, toNumber(first.stock, 0));
+  const reserved = toNumber(group.reserved_stock, 0);
+  const lowStockLimit = toNumber(group.low_stock_limit, toNumber(first.low_stock_limit, 5));
+  const title = group.title || first.display_title || first.product_name || first.seller_sku || 'Merged Product';
+  const masterSku = group.master_sku || buildMasterSku(title, group._id);
   const stores = new Map();
   const skuTexts = [];
 
@@ -140,14 +148,14 @@ function makeMergedInventoryRow(group, items) {
   return makeInventoryRow(
     {
       _id: group._id,
-      inventory_id: first._id,
+      inventory_id: group._id,
       store_id: first.store_id,
-      product_name: group.title || first.display_title || first.product_name || first.seller_sku,
-      original_product_name: first.original_product_name || first.product_name || first.seller_sku,
-      display_title: group.title || first.display_title || first.product_name || first.seller_sku,
+      product_name: title,
+      original_product_name: title,
+      display_title: title,
       image_url: group.image_url || first.image_url || '',
-      seller_sku: first.seller_sku || '-',
-      master_sku: first.seller_sku || '-',
+      seller_sku: masterSku,
+      master_sku: masterSku,
       stock,
       reserved_stock: reserved,
       low_stock_limit: lowStockLimit,
@@ -290,8 +298,8 @@ async function getDailyReport(dateInput, search = '', storeId = '') {
   const map = new Map();
 
   for (const tx of transactions) {
-    const sku = tx.seller_sku || tx.master_sku || 'UNKNOWN';
-    const rowKey = `${String(tx.store_id || '')}:${sku}`;
+    const sku = tx.master_sku || tx.seller_sku || 'UNKNOWN';
+    const rowKey = sku;
     if (!map.has(rowKey)) {
       map.set(rowKey, {
         store_id: tx.store_id,
@@ -418,10 +426,17 @@ router.post('/merge', async (req, res, next) => {
     const primary = items.find((item) => item.image_url) || items[0];
     const title = String(req.body.title || primary.display_title || primary.product_name || primary.seller_sku || 'Merged Product').trim();
     const imageUrl = String(req.body.image_url || primary.image_url || '').trim();
+    const openingStock = Math.max(0, Math.floor(toNumber(req.body.stock ?? req.body.actual_stock, toNumber(primary.stock, 0))));
+    const lowStockLimit = Math.max(0, Math.floor(toNumber(req.body.low_stock_limit, toNumber(primary.low_stock_limit, 5))));
+    const masterSku = String(req.body.master_sku || buildMasterSku(title, primary.seller_sku)).trim();
 
     const group = await InventoryMergeGroup.create({
       title,
       image_url: imageUrl,
+      master_sku: masterSku,
+      stock: openingStock,
+      reserved_stock: 0,
+      low_stock_limit: lowStockLimit,
       inventory_ids: items.map((item) => item._id),
       created_by: String(req.body.created_by || 'admin').trim()
     });
@@ -507,22 +522,25 @@ router.get('/restocks', async (req, res, next) => {
 
 router.post('/restock', async (req, res, next) => {
   try {
-    const inventory = await findInventoryByPayload(req.body);
-    if (!inventory) return res.status(400).json({ message: 'inventory_id or store_id + seller_sku is required' });
+    const target = await resolveStockTarget(req.body);
+    if (!target) return res.status(400).json({ message: 'inventory_id, master product id, or store_id + seller_sku is required' });
 
     const qty = Math.max(1, Math.floor(toNumber(req.body.quantity, 0)));
     const unitCost = Math.max(0, toNumber(req.body.unit_cost, 0));
-    const stockBefore = toNumber(inventory.stock, 0);
-    inventory.stock = stockBefore + qty;
-    if (req.body.product_name) inventory.product_name = String(req.body.product_name).trim();
-    if (req.body.low_stock_limit !== undefined) inventory.low_stock_limit = Math.max(0, Math.floor(toNumber(req.body.low_stock_limit, 5)));
-    await inventory.save();
+    const result = await updateTargetStock(target, {
+      type: 'increase',
+      quantity: qty,
+      product_name: req.body.product_name,
+      low_stock_limit: req.body.low_stock_limit
+    });
+    if (!result.ok) return res.status(400).json({ message: 'Unable to restock inventory target' });
+    const refreshed = result.target || target;
 
     const receipt = await StockReceipt.create({
-      inventory_id: inventory._id,
-      store_id: inventory.store_id,
-      seller_sku: inventory.seller_sku,
-      product_name: inventory.product_name,
+      inventory_id: refreshed.stock_doc_id,
+      store_id: refreshed.store_id,
+      seller_sku: refreshed.seller_sku,
+      product_name: refreshed.product_name,
       quantity: qty,
       unit_cost: unitCost,
       supplier_name: String(req.body.supplier_name || '').trim(),
@@ -534,19 +552,19 @@ router.post('/restock', async (req, res, next) => {
     });
 
     await InventoryTransaction.create({
-      store_id: inventory.store_id,
-      inventory_id: inventory._id,
-      seller_sku: inventory.seller_sku,
-      master_sku: inventory.seller_sku,
-      product_name: inventory.product_name,
+      store_id: refreshed.store_id,
+      inventory_id: refreshed.stock_doc_id,
+      seller_sku: refreshed.seller_sku,
+      master_sku: refreshed.master_sku,
+      product_name: refreshed.product_name,
       transaction_type: 'manual_add',
       quantity: qty,
-      stock_before: stockBefore,
-      stock_after: inventory.stock,
+      stock_before: result.stock_before,
+      stock_after: result.stock_after,
       note: String(req.body.note || 'Manual restock').trim()
     });
 
-    res.json({ message: 'Stock added successfully', inventory, receipt });
+    res.json({ message: 'Stock added successfully', target: refreshed, receipt });
   } catch (error) { next(error); }
 });
 
@@ -565,15 +583,16 @@ router.post('/restock/bulk', async (req, res, next) => {
       try {
         const store = await Store.findOne({ code: storeCode });
         if (!store) throw new Error(`Store not found for code ${storeCode}`);
-        const inventory = await findInventoryByPayload({ store_id: store._id, seller_sku: sellerSku, product_name: productName || sellerSku });
+        const target = await resolveStockTarget({ store_id: store._id, seller_sku: sellerSku, product_name: productName || sellerSku });
+        if (!target) throw new Error(`Inventory target not found for ${storeCode}:${sellerSku}`);
         const qty = Math.max(1, Math.floor(toNumber(qtyRaw, 0)));
         const unitCost = Math.max(0, toNumber(costRaw, 0));
-        const stockBefore = toNumber(inventory.stock, 0);
-        inventory.stock = stockBefore + qty;
-        await inventory.save();
-        await StockReceipt.create({ inventory_id: inventory._id, store_id: inventory.store_id, seller_sku: inventory.seller_sku, product_name: inventory.product_name, quantity: qty, unit_cost: unitCost, supplier_name: supplierName, invoice_number: invoiceNumber, note, receipt_type: 'purchase', created_by: req.body.created_by || 'admin' });
-        await InventoryTransaction.create({ store_id: inventory.store_id, inventory_id: inventory._id, seller_sku: inventory.seller_sku, master_sku: inventory.seller_sku, product_name: inventory.product_name, transaction_type: 'manual_add', quantity: qty, stock_before: stockBefore, stock_after: inventory.stock, note: note || 'Bulk restock' });
-        results.push({ line: index + 1, store_code: storeCode, seller_sku: inventory.seller_sku, product_name: inventory.product_name, quantity: qty, stock_after: inventory.stock });
+        const result = await updateTargetStock(target, { type: 'increase', quantity: qty, product_name: productName });
+        if (!result.ok) throw new Error('Unable to update inventory target');
+        const refreshed = result.target || target;
+        await StockReceipt.create({ inventory_id: refreshed.stock_doc_id, store_id: refreshed.store_id, seller_sku: refreshed.seller_sku, product_name: refreshed.product_name, quantity: qty, unit_cost: unitCost, supplier_name: supplierName, invoice_number: invoiceNumber, note, receipt_type: 'purchase', created_by: req.body.created_by || 'admin' });
+        await InventoryTransaction.create({ store_id: refreshed.store_id, inventory_id: refreshed.stock_doc_id, seller_sku: refreshed.seller_sku, master_sku: refreshed.master_sku, product_name: refreshed.product_name, transaction_type: 'manual_add', quantity: qty, stock_before: result.stock_before, stock_after: result.stock_after, note: note || 'Bulk restock' });
+        results.push({ line: index + 1, store_code: storeCode, seller_sku: refreshed.seller_sku, master_sku: refreshed.master_sku, product_name: refreshed.product_name, quantity: qty, stock_after: result.stock_after, merged: refreshed.kind === 'merge' });
       } catch (error) {
         errors.push({ line: index + 1, value: line, message: error.message || 'Bulk restock failed' });
       }
@@ -585,32 +604,31 @@ router.post('/restock/bulk', async (req, res, next) => {
 
 router.post('/adjust', async (req, res, next) => {
   try {
-    const inventory = await findInventoryByPayload(req.body);
-    if (!inventory) return res.status(400).json({ message: 'inventory_id or store_id + seller_sku is required' });
+    const target = await resolveStockTarget(req.body);
+    if (!target) return res.status(400).json({ message: 'inventory_id, master product id, or store_id + seller_sku is required' });
     const qty = Math.max(1, Math.floor(toNumber(req.body.quantity, 0)));
     const type = String(req.body.type || req.body.adjustment_type || '').trim().toLowerCase();
     if (!['increase', 'decrease'].includes(type)) return res.status(400).json({ message: 'type must be increase or decrease' });
 
-    const stockBefore = toNumber(inventory.stock, 0);
-    const stockAfter = type === 'increase' ? stockBefore + qty : Math.max(0, stockBefore - qty);
-    inventory.stock = stockAfter;
-    await inventory.save();
+    const result = await updateTargetStock(target, { type, quantity: qty });
+    if (!result.ok) return res.status(400).json({ message: 'Insufficient internal central inventory' });
+    const refreshed = result.target || target;
 
     const txType = type === 'increase' ? 'manual_add' : 'manual_deduct';
     const transaction = await InventoryTransaction.create({
-      store_id: inventory.store_id,
-      inventory_id: inventory._id,
-      seller_sku: inventory.seller_sku,
-      master_sku: inventory.seller_sku,
-      product_name: inventory.product_name,
+      store_id: refreshed.store_id,
+      inventory_id: refreshed.stock_doc_id,
+      seller_sku: refreshed.seller_sku,
+      master_sku: refreshed.master_sku,
+      product_name: refreshed.product_name,
       transaction_type: txType,
       quantity: qty,
-      stock_before: stockBefore,
-      stock_after: stockAfter,
+      stock_before: result.stock_before,
+      stock_after: result.stock_after,
       note: String(req.body.note || '').trim()
     });
 
-    res.json({ message: 'Inventory adjusted successfully', inventory, transaction });
+    res.json({ message: 'Inventory adjusted successfully', target: refreshed, transaction });
   } catch (error) { next(error); }
 });
 
@@ -647,21 +665,21 @@ router.get('/adjustment-requests', async (req, res, next) => {
 
 router.post('/adjustment-requests', async (req, res, next) => {
   try {
-    const inventory = await findInventoryByPayload(req.body);
-    if (!inventory) return res.status(400).json({ message: 'inventory_id or store_id + seller_sku is required' });
+    const target = await resolveStockTarget(req.body);
+    if (!target) return res.status(400).json({ message: 'inventory_id, master product id, or store_id + seller_sku is required' });
     if (!req.body.adjustment_type || !req.body.quantity) return res.status(400).json({ message: 'adjustment_type and quantity are required' });
 
     const request = await StockAdjustmentRequest.create({
-      inventory_id: inventory._id,
-      store_id: inventory.store_id,
-      seller_sku: inventory.seller_sku,
-      product_name: inventory.product_name,
+      inventory_id: target.stock_doc_id,
+      store_id: target.store_id,
+      seller_sku: target.seller_sku,
+      product_name: target.product_name,
       adjustment_type: req.body.adjustment_type,
       quantity: Math.max(1, Math.floor(toNumber(req.body.quantity, 0))),
       reason_code: req.body.reason_code || 'other',
       note: String(req.body.note || '').trim(),
       requested_by: String(req.body.requested_by || 'admin').trim(),
-      stock_before: toNumber(inventory.stock, 0)
+      stock_before: toNumber(target.stock, 0)
     });
 
     res.json({ message: 'Adjustment request created', request });
@@ -673,36 +691,36 @@ router.post('/adjustment-requests/:id/approve', async (req, res, next) => {
     const request = await StockAdjustmentRequest.findById(req.params.id);
     if (!request) return res.status(404).json({ message: 'Adjustment request not found' });
     if (request.status !== 'pending') return res.status(400).json({ message: 'Only pending requests can be approved' });
-    const inventory = await CentralInventory.findById(request.inventory_id);
-    if (!inventory) return res.status(404).json({ message: 'Central inventory not found' });
+    const target = await resolveStockTarget({ inventory_id: request.inventory_id }, { allowCreate: false });
+    if (!target) return res.status(404).json({ message: 'Inventory target not found' });
 
-    const stockBefore = toNumber(inventory.stock, 0);
     const qty = toNumber(request.quantity, 0);
-    inventory.stock = request.adjustment_type === 'increase' ? stockBefore + qty : Math.max(0, stockBefore - qty);
-    await inventory.save();
+    const result = await updateTargetStock(target, { type: request.adjustment_type, quantity: qty });
+    if (!result.ok) return res.status(400).json({ message: 'Insufficient internal central inventory' });
+    const refreshed = result.target || target;
 
     request.status = 'approved';
     request.decision_note = String(req.body.decision_note || '').trim();
     request.approved_by = String(req.body.approved_by || 'admin').trim();
     request.approved_at = new Date();
-    request.stock_after = inventory.stock;
+    request.stock_after = result.stock_after;
     await request.save();
 
     const transaction = await InventoryTransaction.create({
-      store_id: inventory.store_id,
-      inventory_id: inventory._id,
-      seller_sku: inventory.seller_sku,
-      master_sku: inventory.seller_sku,
-      product_name: inventory.product_name,
+      store_id: refreshed.store_id,
+      inventory_id: refreshed.stock_doc_id,
+      seller_sku: refreshed.seller_sku,
+      master_sku: refreshed.master_sku,
+      product_name: refreshed.product_name,
       adjustment_request_id: request._id,
       transaction_type: 'adjustment_approved',
       quantity: qty,
-      stock_before: stockBefore,
-      stock_after: inventory.stock,
+      stock_before: result.stock_before,
+      stock_after: result.stock_after,
       note: request.note || request.reason_code
     });
 
-    res.json({ message: 'Adjustment approved successfully', request, inventory, transaction });
+    res.json({ message: 'Adjustment approved successfully', request, target: refreshed, transaction });
   } catch (error) { next(error); }
 });
 
@@ -782,17 +800,17 @@ router.get('/export/purchase-analytics.csv', async (req, res, next) => {
 
 router.put('/:id/alert-settings', async (req, res, next) => {
   try {
-    const inventory = await CentralInventory.findById(req.params.id);
-    if (!inventory) return res.status(404).json({ message: 'Inventory row not found' });
+    const target = await resolveStockTarget({ inventory_id: req.params.id }, { allowCreate: false });
+    if (!target) return res.status(404).json({ message: 'Inventory target not found' });
 
-    const threshold = Math.max(0, Math.floor(toNumber(req.body.low_stock_limit, inventory.low_stock_limit || 5)));
-    inventory.low_stock_limit = threshold;
-    await inventory.save();
+    const threshold = await setTargetLowStockLimit(target, req.body.low_stock_limit);
+    const refreshed = await resolveStockTarget({ inventory_id: target.stock_doc_id }, { allowCreate: false });
 
     res.json({
       success: true,
       message: 'Low stock threshold updated',
-      inventory: makeInventoryRow(await CentralInventory.findById(inventory._id).populate('store_id', 'name code').lean())
+      low_stock_limit: threshold,
+      target: refreshed
     });
   } catch (error) { next(error); }
 });
@@ -800,8 +818,11 @@ router.put('/:id/alert-settings', async (req, res, next) => {
 router.post('/alert-settings/global', async (req, res, next) => {
   try {
     const threshold = Math.max(0, Math.floor(toNumber(req.body.low_stock_limit, 5)));
-    const result = await CentralInventory.updateMany({}, { $set: { low_stock_limit: threshold } });
-    res.json({ success: true, message: 'Global low stock threshold updated', modified: result.modifiedCount || 0, low_stock_limit: threshold });
+    const [inventoryResult, groupResult] = await Promise.all([
+      CentralInventory.updateMany({}, { $set: { low_stock_limit: threshold } }),
+      InventoryMergeGroup.updateMany({}, { $set: { low_stock_limit: threshold } })
+    ]);
+    res.json({ success: true, message: 'Global low stock threshold updated', modified: (inventoryResult.modifiedCount || 0) + (groupResult.modifiedCount || 0), low_stock_limit: threshold });
   } catch (error) { next(error); }
 });
 

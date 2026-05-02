@@ -267,6 +267,17 @@ class _SyncScreenState extends State<SyncScreen> {
     });
   }
 
+  Future<void> _markItemReceived(CentralOrderItem item) async {
+    await _runAction('receive-${item.id}', () async {
+      await ApiClient.instance.post(
+        '/daraz-sync/order-items/${item.id}/mark-received',
+        body: <String, dynamic>{'actor': 'admin'},
+      );
+      await _load(silent: true);
+      if (mounted) showAppSnackBar(context, 'Item marked as received back.');
+    });
+  }
+
   StoreModel? get _selectedStore {
     if (_stores.isEmpty) return null;
     if (_storeFilter == 'all') return _stores.first;
@@ -664,7 +675,21 @@ class _SyncScreenState extends State<SyncScreen> {
               ),
             ),
             const SizedBox(width: 8),
-            StatusChip(label: item.stockRestored ? 'Received' : 'Not received', color: item.stockRestored ? AppTheme.success : AppTheme.warning, softColor: item.stockRestored ? AppTheme.successSoft : AppTheme.warningSoft),
+            Column(
+              mainAxisSize: MainAxisSize.min,
+              children: <Widget>[
+                StatusChip(label: item.stockRestored ? 'Received' : 'Not received', color: item.stockRestored ? AppTheme.success : AppTheme.warning, softColor: item.stockRestored ? AppTheme.successSoft : AppTheme.warningSoft),
+                if (!item.stockRestored) ...<Widget>[
+                  const SizedBox(height: 6),
+                  IconButton.filledTonal(
+                    visualDensity: VisualDensity.compact,
+                    tooltip: 'Mark received back',
+                    onPressed: _busy ? null : () => _markItemReceived(item),
+                    icon: const Icon(Icons.inventory_rounded, size: 16),
+                  ),
+                ],
+              ],
+            ),
           ],
         ),
       ),
@@ -697,7 +722,21 @@ class _SyncScreenState extends State<SyncScreen> {
               ),
             ),
             const SizedBox(width: 8),
-            StatusChip(label: daysLeft == null ? 'Collect' : '${daysLeft.clamp(0, 99)}d left', color: color, softColor: softColor),
+            Column(
+              mainAxisSize: MainAxisSize.min,
+              children: <Widget>[
+                StatusChip(label: item.stockRestored ? 'Received' : (daysLeft == null ? 'Collect' : '${daysLeft.clamp(0, 99)}d left'), color: item.stockRestored ? AppTheme.success : color, softColor: item.stockRestored ? AppTheme.successSoft : softColor),
+                if (!item.stockRestored) ...<Widget>[
+                  const SizedBox(height: 6),
+                  IconButton.filledTonal(
+                    visualDensity: VisualDensity.compact,
+                    tooltip: 'Mark received back',
+                    onPressed: _busy ? null : () => _markItemReceived(item),
+                    icon: const Icon(Icons.inventory_rounded, size: 16),
+                  ),
+                ],
+              ],
+            ),
           ],
         ),
       ),

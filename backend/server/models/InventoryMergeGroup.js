@@ -12,6 +12,25 @@ const inventoryMergeGroupSchema = new mongoose.Schema(
       default: '',
       trim: true
     },
+    master_sku: {
+      type: String,
+      default: '',
+      trim: true,
+      index: true
+    },
+    stock: {
+      type: Number,
+      required: true,
+      default: 0
+    },
+    reserved_stock: {
+      type: Number,
+      default: 0
+    },
+    low_stock_limit: {
+      type: Number,
+      default: 5
+    },
     inventory_ids: [
       {
         type: mongoose.Schema.Types.ObjectId,

@@ -173,7 +173,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
       decoration: BoxDecoration(
         gradient: AppTheme.primaryGradient,
         borderRadius: BorderRadius.circular(18),
-        boxShadow: <BoxShadow>[BoxShadow(color: AppTheme.primary.withOpacity(0.14), blurRadius: 16, offset: const Offset(0, 8))],
+        boxShadow: <BoxShadow>[BoxShadow(color: AppTheme.primary.withValues(alpha: 0.14), blurRadius: 16, offset: const Offset(0, 8))],
       ),
       child: Row(
         children: <Widget>[

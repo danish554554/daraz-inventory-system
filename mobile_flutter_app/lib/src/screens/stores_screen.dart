@@ -266,7 +266,7 @@ class _StoresScreenState extends State<StoresScreen> {
         gradient: AppTheme.primaryGradient,
         borderRadius: BorderRadius.circular(18),
         boxShadow: <BoxShadow>[
-          BoxShadow(color: AppTheme.primary.withOpacity(0.12), blurRadius: 14, offset: const Offset(0, 8)),
+          BoxShadow(color: AppTheme.primary.withValues(alpha: 0.12), blurRadius: 14, offset: const Offset(0, 8)),
         ],
       ),
       child: Row(
@@ -274,7 +274,7 @@ class _StoresScreenState extends State<StoresScreen> {
           Container(
             width: 45,
             height: 45,
-            decoration: BoxDecoration(color: Colors.white.withOpacity(0.16), borderRadius: BorderRadius.circular(14)),
+            decoration: BoxDecoration(color: Colors.white.withValues(alpha: 0.16), borderRadius: BorderRadius.circular(14)),
             child: const Icon(Icons.store_mall_directory_outlined, color: Colors.white),
           ),
           const SizedBox(width: 12),

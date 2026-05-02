@@ -4,7 +4,8 @@ const CentralOrderItem = require("../models/CentralOrderItem");
 const {
   syncAllStores,
   syncStoreById,
-  getSyncLockState
+  getSyncLockState,
+  markOrderItemReceivedBack
 } = require("../services/centralInventorySyncService");
 const { importProductsForStore } = require("../services/darazProductImportService");
 
@@ -96,7 +97,7 @@ function itemPayload(item) {
   const title = item.display_title || item.product_name || item.seller_sku || "Daraz Product";
   const unitPrice = toNumber(item.unit_price, 0);
   const quantity = toNumber(item.quantity, 1);
-  const logisticDate = item.logistic_facility_at || item.updatedAt || item.createdAt;
+  const logisticDate = item.logistic_facility_at || null;
   const deadline = logisticDate ? new Date(new Date(logisticDate).getTime() + 6 * 24 * 60 * 60 * 1000) : null;
   const daysLeft = deadline ? Math.ceil((deadline.getTime() - Date.now()) / (24 * 60 * 60 * 1000)) : null;
 
@@ -234,8 +235,7 @@ router.post("/scan-failed-delivery", async (req, res) => {
     const count = await CentralOrderItem.countDocuments({
       $or: [
         { status: { $regex: "failed|undelivered|return_to_seller|returned_to_shipper", $options: "i" } },
-        { collection_status: "needs_collection" },
-        { logistic_facility_at: { $ne: null } }
+        { collection_status: "needs_collection" }
       ]
     });
 
@@ -404,8 +404,7 @@ router.get("/failed-delivery", async (req, res) => {
     const query = {
       $or: [
         { status: { $regex: "failed|undelivered|return_to_seller|returned_to_shipper", $options: "i" } },
-        { collection_status: "needs_collection" },
-        { logistic_facility_at: { $ne: null } }
+        { collection_status: "needs_collection" }
       ]
     };
     if (store_id) query.store_id = store_id;
@@ -423,7 +422,7 @@ router.get("/failed-delivery", async (req, res) => {
       count: items.length,
       start_date: startDate,
       end_date: endDate,
-      failed_deliveries: items.map(itemPayload).filter((item) => isFailedDeliveryStatus(item.status) || item.collection_status === 'needs_collection' || item.logistic_facility_at)
+      failed_deliveries: items.map(itemPayload).filter((item) => isFailedDeliveryStatus(item.status) || item.collection_status === 'needs_collection')
     });
   } catch (error) {
     res.status(500).json({
@@ -431,6 +430,15 @@ router.get("/failed-delivery", async (req, res) => {
       message: "Error fetching failed delivery orders",
       error: error.message
     });
+  }
+});
+
+router.post("/order-items/:id/mark-received", async (req, res) => {
+  try {
+    const result = await markOrderItemReceivedBack(req.params.id, { actor: req.body?.actor || 'admin' });
+    res.json({ success: true, message: "Item marked as received back.", result });
+  } catch (error) {
+    res.status(400).json({ success: false, message: error.message || "Unable to mark item as received back", error: error.message });
   }
 });
 

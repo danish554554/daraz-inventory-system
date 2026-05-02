@@ -1,5 +1,22 @@
 import 'package:flutter/material.dart';
 
+extension ColorWithValuesCompatibility on Color {
+  Color withValues({double? alpha, double? red, double? green, double? blue}) {
+    int normalize(double? value, int current) {
+      if (value == null) return current;
+      final scaled = value <= 1 ? value * 255 : value;
+      return scaled.round().clamp(0, 255).toInt();
+    }
+
+    return Color.fromARGB(
+      normalize(alpha, this.alpha),
+      normalize(red, this.red),
+      normalize(green, this.green),
+      normalize(blue, this.blue),
+    );
+  }
+}
+
 class AppTheme {
   static const Color background = Color(0xFFF7F7F4);
   static const Color card = Colors.white;

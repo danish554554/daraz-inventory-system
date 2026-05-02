@@ -1,5 +1,6 @@
 const Store = require('../models/Store');
 const CentralInventory = require('../models/CentralInventory');
+const { resolveStockTarget, updateTargetStock } = require('./inventoryStockTargetService');
 const CentralOrder = require('../models/CentralOrder');
 const StoreToken = require('../models/StoreToken');
 const CentralOrderItem = require('../models/CentralOrderItem');
@@ -53,7 +54,20 @@ function statusReached(currentStatus, targetStatus) {
 }
 
 function isCanceledStatus(status) {
-  return ['canceled', 'cancelled', 'failed', 'returned', 'closed'].includes(normalizeStatus(status));
+  return ['canceled', 'cancelled', 'closed'].includes(normalizeStatus(status));
+}
+
+function isReturnOrFailedStatus(status) {
+  const normalized = normalizeStatus(status);
+  return normalized.includes('return') ||
+    normalized.includes('refund') ||
+    normalized.includes('claim') ||
+    normalized.includes('failed_delivery') ||
+    normalized.includes('delivery_failed') ||
+    normalized.includes('undelivered') ||
+    normalized.includes('returned_to_shipper') ||
+    normalized.includes('return_to_seller') ||
+    normalized === 'failed';
 }
 
 function getOrderId(order) {
@@ -156,11 +170,11 @@ function getReturnReason(item = {}) {
 }
 
 function getClaimDate(item = {}) {
-  return toDate(item?.claim_date) || toDate(item?.return_claim_date) || toDate(item?.return_initiated_at) || toDate(item?.updated_at) || null;
+  return toDate(item?.claim_date) || toDate(item?.return_claim_date) || toDate(item?.return_initiated_at) || null;
 }
 
 function getLogisticFacilityDate(item = {}) {
-  return toDate(item?.logistic_facility_at) || toDate(item?.failed_delivery_received_at) || toDate(item?.updated_at) || null;
+  return toDate(item?.logistic_facility_at) || toDate(item?.failed_delivery_received_at) || null;
 }
 
 function makeSyncWindow(lastSyncAt) {
@@ -168,38 +182,17 @@ function makeSyncWindow(lastSyncAt) {
   return new Date(new Date(lastSyncAt).getTime() - 10 * 60 * 1000).toISOString();
 }
 
-async function resolveCentralInventory({ store, sellerSku, productName = '', displayTitle = '', imageUrl = '' }) {
-  const normalizedSku = safeString(sellerSku);
-  if (!normalizedSku) return null;
-
-  const cleanProductName = safeString(productName) || normalizedSku;
-  const cleanDisplayTitle = safeString(displayTitle) || buildDisplayTitle(cleanProductName, normalizedSku);
-  const setUpdate = {};
-  if (cleanProductName) setUpdate.product_name = cleanProductName;
-  if (cleanProductName) setUpdate.original_product_name = cleanProductName;
-  if (cleanDisplayTitle) setUpdate.display_title = cleanDisplayTitle;
-  if (safeString(imageUrl)) setUpdate.image_url = safeString(imageUrl);
-
-  const inventory = await CentralInventory.findOneAndUpdate(
-    { store_id: store._id, seller_sku: normalizedSku },
+async function resolveCentralInventory({ store, sellerSku, productName = '', displayTitle = '', imageUrl = '', allowCreate = true }) {
+  return resolveStockTarget(
     {
-      $setOnInsert: {
-        store_id: store._id,
-        seller_sku: normalizedSku,
-        product_name: cleanProductName,
-        original_product_name: cleanProductName,
-        display_title: cleanDisplayTitle,
-        image_url: safeString(imageUrl),
-        stock: 0,
-        reserved_stock: 0,
-        low_stock_limit: 5
-      },
-      $set: setUpdate
+      store_id: store._id,
+      seller_sku: sellerSku,
+      product_name: productName,
+      display_title: displayTitle,
+      image_url: imageUrl
     },
-    { upsert: true, new: true }
+    { allowCreate }
   );
-
-  return inventory;
 }
 
 async function createInventoryTransaction({
@@ -219,9 +212,9 @@ async function createInventoryTransaction({
 }) {
   await InventoryTransaction.create({
     store_id,
-    inventory_id: inventory?._id || null,
+    inventory_id: inventory?.stock_doc_id || inventory?._id || null,
     seller_sku,
-    master_sku: seller_sku,
+    master_sku: inventory?.master_sku || seller_sku,
     product_name: product_name || inventory?.product_name || seller_sku,
     order_id,
     order_item_id,
@@ -245,6 +238,14 @@ async function deductStockForOrderItem({ store, orderDoc, itemDoc, stats }) {
   }
 
   const effectiveStatus = itemDoc.status || orderDoc.status || '';
+  if (isCanceledStatus(effectiveStatus) || isReturnOrFailedStatus(effectiveStatus)) {
+    itemDoc.processing_status = 'skipped';
+    itemDoc.collection_status = isReturnOrFailedStatus(effectiveStatus) ? 'needs_collection' : itemDoc.collection_status;
+    await itemDoc.save();
+    stats.skipped += 1;
+    return { action: 'non_deductible_status' };
+  }
+
   if (!statusReached(effectiveStatus, store.deduct_stage)) {
     itemDoc.processing_status = 'pending';
     await itemDoc.save();
@@ -252,17 +253,30 @@ async function deductStockForOrderItem({ store, orderDoc, itemDoc, stats }) {
     return { action: 'waiting_stage' };
   }
 
-  if (isCanceledStatus(effectiveStatus)) {
-    itemDoc.processing_status = 'skipped';
-    await itemDoc.save();
-    stats.skipped += 1;
-    return { action: 'canceled_skip' };
-  }
-
-  const inventory = await resolveCentralInventory({ store, sellerSku: itemDoc.seller_sku, productName: itemDoc.product_name, displayTitle: itemDoc.display_title, imageUrl: itemDoc.image_url });
+  const target = await resolveCentralInventory({ store, sellerSku: itemDoc.seller_sku, productName: itemDoc.product_name, displayTitle: itemDoc.display_title, imageUrl: itemDoc.image_url, allowCreate: false });
   const qty = safeNumber(itemDoc.quantity, 1);
 
-  if ((inventory.stock || 0) < qty) {
+  if (!target) {
+    itemDoc.mapping_status = 'unmapped';
+    itemDoc.processing_status = 'failed';
+    itemDoc.error_message = 'SKU is not linked to any internal inventory product';
+    await itemDoc.save();
+
+    await upsertOrderItemIssue({
+      issueType: 'unmapped_sku',
+      store,
+      orderDoc,
+      itemDoc,
+      message: itemDoc.error_message,
+      quantityNeeded: qty,
+      availableStock: 0
+    });
+    stats.failed += 1;
+    return { action: 'inventory_missing' };
+  }
+
+  const update = await updateTargetStock(target, { type: 'decrease', quantity: qty });
+  if (!update.ok) {
     itemDoc.mapping_status = 'mapped';
     itemDoc.processing_status = 'failed';
     itemDoc.error_message = 'Insufficient internal central inventory';
@@ -275,16 +289,13 @@ async function deductStockForOrderItem({ store, orderDoc, itemDoc, stats }) {
       itemDoc,
       message: itemDoc.error_message,
       quantityNeeded: qty,
-      availableStock: inventory.stock || 0
+      availableStock: target.stock || 0
     });
     stats.failed += 1;
     return { action: 'insufficient_stock' };
   }
 
-  const stockBefore = inventory.stock || 0;
-  inventory.stock = stockBefore - qty;
-  await inventory.save();
-
+  const refreshed = update.target || target;
   itemDoc.mapping_status = 'mapped';
   itemDoc.stock_deducted = true;
   itemDoc.processing_status = 'deducted';
@@ -294,17 +305,17 @@ async function deductStockForOrderItem({ store, orderDoc, itemDoc, stats }) {
 
   await createInventoryTransaction({
     store_id: store._id,
-    inventory,
+    inventory: refreshed,
     seller_sku: itemDoc.seller_sku,
-    product_name: itemDoc.product_name,
+    product_name: refreshed.product_name || itemDoc.product_name,
     order_id: orderDoc._id,
     order_item_id: itemDoc._id,
     external_order_id: orderDoc.external_order_id,
     external_order_item_id: itemDoc.external_order_item_id,
     transaction_type: 'order_deduct',
     quantity: qty,
-    stock_before: stockBefore,
-    stock_after: inventory.stock,
+    stock_before: update.stock_before,
+    stock_after: update.stock_after,
     note: `Daraz order deduction for order ${orderDoc.external_order_id}`
   });
 
@@ -326,19 +337,25 @@ async function restoreStockForCanceledItem({ store, orderDoc, itemDoc, stats }) 
     return { action: 'not_canceled' };
   }
 
-  const inventory = await resolveCentralInventory({ store, sellerSku: itemDoc.seller_sku, productName: itemDoc.product_name, displayTitle: itemDoc.display_title, imageUrl: itemDoc.image_url });
-  if (!inventory) {
+  const target = await resolveCentralInventory({ store, sellerSku: itemDoc.seller_sku, productName: itemDoc.product_name, displayTitle: itemDoc.display_title, imageUrl: itemDoc.image_url, allowCreate: false });
+  if (!target) {
     itemDoc.processing_status = 'failed';
-    itemDoc.error_message = 'Central inventory not found for restore';
+    itemDoc.error_message = 'Central inventory target not found for restore';
     await itemDoc.save();
     stats.failed += 1;
     return { action: 'inventory_missing' };
   }
 
   const qty = safeNumber(itemDoc.quantity, 1);
-  const stockBefore = inventory.stock || 0;
-  inventory.stock = stockBefore + qty;
-  await inventory.save();
+  const update = await updateTargetStock(target, { type: 'increase', quantity: qty });
+  if (!update.ok) {
+    itemDoc.processing_status = 'failed';
+    itemDoc.error_message = 'Central inventory restore failed';
+    await itemDoc.save();
+    stats.failed += 1;
+    return { action: 'restore_failed' };
+  }
+  const refreshed = update.target || target;
 
   itemDoc.mapping_status = 'mapped';
   itemDoc.stock_restored = true;
@@ -349,21 +366,21 @@ async function restoreStockForCanceledItem({ store, orderDoc, itemDoc, stats }) 
 
   await createInventoryTransaction({
     store_id: store._id,
-    inventory,
+    inventory: refreshed,
     seller_sku: itemDoc.seller_sku,
-    product_name: itemDoc.product_name,
+    product_name: refreshed.product_name || itemDoc.product_name,
     order_id: orderDoc._id,
     order_item_id: itemDoc._id,
     external_order_id: orderDoc.external_order_id,
     external_order_item_id: itemDoc.external_order_item_id,
     transaction_type: 'cancel_restore',
     quantity: qty,
-    stock_before: stockBefore,
-    stock_after: inventory.stock,
+    stock_before: update.stock_before,
+    stock_after: update.stock_after,
     note: `Daraz order restore for order ${orderDoc.external_order_id}`
   });
 
-  await resolveIssueByOrderItem(itemDoc._id, 'Restore completed successfully');
+  await resolveIssueByOrderItem(itemDoc._id, 'Stock restored after cancellation');
   stats.restored += 1;
   return { action: 'restored' };
 }
@@ -407,7 +424,8 @@ async function upsertOrderItems(store, orderDoc, itemsPayload, stats) {
     const displayTitle = getItemEnglishTitle(item) || buildDisplayTitle(productName, sellerSku);
     const imageUrl = getItemImage(item);
     const itemStatus = getItemStatus(item, orderDoc.status) || orderDoc.status || 'pending';
-    const inventory = sellerSku ? await resolveCentralInventory({ store, sellerSku, productName, displayTitle, imageUrl }) : null;
+    const inventory = sellerSku ? await resolveCentralInventory({ store, sellerSku, productName, displayTitle, imageUrl, allowCreate: false }) : null;
+    const collectionStatus = isReturnOrFailedStatus(itemStatus) ? 'needs_collection' : 'pending';
 
     await CentralOrderItem.findOneAndUpdate(
       { store_id: store._id, external_order_item_id: externalOrderItemId },
@@ -425,7 +443,7 @@ async function upsertOrderItems(store, orderDoc, itemsPayload, stats) {
           return_reason: getReturnReason(item),
           claim_date: getClaimDate(item),
           logistic_facility_at: getLogisticFacilityDate(item),
-          collection_status: normalizeStatus(itemStatus).includes('failed') ? 'needs_collection' : 'pending',
+          collection_status: collectionStatus,
           raw_payload: item,
           product_id: null,
           mapping_status: inventory ? 'mapped' : 'unmapped'
@@ -533,27 +551,39 @@ async function syncStoreOrders(store, options = {}) {
     }
 
     const since = makeSyncWindow(store.last_sync_at);
-    const ordersResponse = await getOrders({ storeToken, updatedAfter: since });
-    const orders = Array.isArray(ordersResponse)
-      ? ordersResponse
-      : ordersResponse?.orders || ordersResponse?.data || [];
-    stats.orders_seen = orders.length;
+    const limit = Math.min(Math.max(Number(options.limit) || 50, 1), 100);
+    const maxPages = Math.min(Math.max(Number(options.maxPages) || 20, 1), 100);
+    let offset = 0;
+    let page = 0;
+    let hasMore = true;
 
-    for (const orderPayload of orders) {
-      const orderDoc = await upsertOrder(store, orderPayload);
-      if (!orderDoc) continue;
-      stats.orders_upserted += 1;
+    while (hasMore && page < maxPages) {
+      const ordersResponse = await getOrders({ storeToken, updatedAfter: since, offset, limit });
+      const orders = Array.isArray(ordersResponse)
+        ? ordersResponse
+        : ordersResponse?.orders || ordersResponse?.data || [];
+      stats.orders_seen += orders.length;
 
-      const orderItemsResponse = await getOrderItems({
-        storeToken,
-        orderId: orderDoc.external_order_id
-      });
-      const itemsPayload = Array.isArray(orderItemsResponse)
-        ? orderItemsResponse
-        : orderItemsResponse?.items || orderItemsResponse?.data || [];
-      stats.items_seen += itemsPayload.length;
-      await upsertOrderItems(store, orderDoc, itemsPayload, stats);
-      await processOrderInventory(store, orderDoc, stats);
+      for (const orderPayload of orders) {
+        const orderDoc = await upsertOrder(store, orderPayload);
+        if (!orderDoc) continue;
+        stats.orders_upserted += 1;
+
+        const orderItemsResponse = await getOrderItems({
+          storeToken,
+          orderId: orderDoc.external_order_id
+        });
+        const itemsPayload = Array.isArray(orderItemsResponse)
+          ? orderItemsResponse
+          : orderItemsResponse?.items || orderItemsResponse?.data || [];
+        stats.items_seen += itemsPayload.length;
+        await upsertOrderItems(store, orderDoc, itemsPayload, stats);
+        await processOrderInventory(store, orderDoc, stats);
+      }
+
+      page += 1;
+      offset += limit;
+      hasMore = ordersResponse?.hasMore === true && orders.length > 0;
     }
 
     const finishedAt = new Date();
@@ -593,6 +623,71 @@ async function syncStoreOrders(store, options = {}) {
 
     throw error;
   }
+}
+
+async function markOrderItemReceivedBack(orderItemId, { actor = 'admin' } = {}) {
+  const itemDoc = await CentralOrderItem.findById(orderItemId);
+  if (!itemDoc) throw new Error('Order item not found');
+
+  const [store, orderDoc] = await Promise.all([
+    Store.findById(itemDoc.store_id),
+    CentralOrder.findById(itemDoc.order_id)
+  ]);
+
+  if (!store || !orderDoc) throw new Error('Related store or order not found');
+
+  const effectiveStatus = itemDoc.status || orderDoc.status || '';
+  if (!isReturnOrFailedStatus(effectiveStatus)) {
+    throw new Error('Only return or failed delivery items can be marked as received back');
+  }
+
+  if (itemDoc.stock_restored) {
+    itemDoc.collection_status = 'received';
+    await itemDoc.save();
+    return { action: 'already_received', item_id: itemDoc._id };
+  }
+
+  if (!itemDoc.stock_deducted) {
+    itemDoc.collection_status = 'received';
+    itemDoc.processing_status = 'skipped';
+    itemDoc.error_message = '';
+    await itemDoc.save();
+    return { action: 'received_no_restore_needed', item_id: itemDoc._id };
+  }
+
+  const target = await resolveCentralInventory({ store, sellerSku: itemDoc.seller_sku, productName: itemDoc.product_name, displayTitle: itemDoc.display_title, imageUrl: itemDoc.image_url, allowCreate: false });
+  if (!target) throw new Error('Central inventory target not found for received return');
+
+  const qty = safeNumber(itemDoc.quantity, 1);
+  const update = await updateTargetStock(target, { type: 'increase', quantity: qty });
+  if (!update.ok) throw new Error('Unable to restore received return stock');
+  const refreshed = update.target || target;
+
+  itemDoc.mapping_status = 'mapped';
+  itemDoc.stock_restored = true;
+  itemDoc.processing_status = 'restored';
+  itemDoc.collection_status = 'received';
+  itemDoc.restoration_applied_at = new Date();
+  itemDoc.error_message = '';
+  await itemDoc.save();
+
+  await createInventoryTransaction({
+    store_id: store._id,
+    inventory: refreshed,
+    seller_sku: itemDoc.seller_sku,
+    product_name: refreshed.product_name || itemDoc.product_name,
+    order_id: orderDoc._id,
+    order_item_id: itemDoc._id,
+    external_order_id: orderDoc.external_order_id,
+    external_order_item_id: itemDoc.external_order_item_id,
+    transaction_type: 'cancel_restore',
+    quantity: qty,
+    stock_before: update.stock_before,
+    stock_after: update.stock_after,
+    note: `Received back by ${actor}`
+  });
+
+  return { action: 'received_and_restored', item_id: itemDoc._id, stock_after: update.stock_after };
 }
 
 async function retryFailedOrderItemById(orderItemId) {
@@ -670,6 +765,7 @@ module.exports = {
   syncAllStores,
   syncStoreById,
   retryFailedOrderItemById,
+  markOrderItemReceivedBack,
   resolveCentralInventory,
   getSyncLockState
 };

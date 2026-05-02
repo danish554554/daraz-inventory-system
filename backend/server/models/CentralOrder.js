@@ -36,7 +36,7 @@ const centralOrderSchema = new mongoose.Schema(
     },
     processing_status: {
       type: String,
-      enum: ["pending", "processed", "restored", "skipped", "error"],
+      enum: ["pending", "processed", "deducted", "restored", "skipped", "failed", "error"],
       default: "pending"
     },
     inventory_processed_at: {

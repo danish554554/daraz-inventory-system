@@ -300,7 +300,6 @@ async function importProductsForStore(storeId, options = {}) {
           original_product_name: safeString(row.original_product_name || row.product_name),
           display_title: safeString(row.display_title) || buildDisplayTitle(row.product_name, sellerSku),
           image_url: safeString(row.image_url),
-          stock: getSkuStock(row),
           daraz_product_id: safeString(row.daraz_product_id),
           daraz_item_id: safeString(row.daraz_item_id),
           daraz_sku_id: safeString(row.daraz_sku_id),
@@ -312,6 +311,7 @@ async function importProductsForStore(storeId, options = {}) {
           {
             $set: update,
             $setOnInsert: {
+              stock: 0,
               reserved_stock: 0,
               low_stock_limit: 5
             }

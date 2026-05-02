@@ -119,7 +119,7 @@ class _LoginScreenState extends State<LoginScreen> {
                             width: 142,
                             height: 142,
                             decoration: BoxDecoration(
-                              color: Colors.white.withOpacity(0.12),
+                              color: Colors.white.withValues(alpha: 0.12),
                               shape: BoxShape.circle,
                             ),
                           ),
@@ -133,7 +133,7 @@ class _LoginScreenState extends State<LoginScreen> {
                                   width: 32,
                                   height: 32,
                                   decoration: BoxDecoration(
-                                    color: Colors.white.withOpacity(0.16),
+                                    color: Colors.white.withValues(alpha: 0.16),
                                     borderRadius: BorderRadius.circular(11),
                                   ),
                                   child: const Icon(Icons.inventory_2_outlined, color: Colors.white, size: 17),
@@ -159,7 +159,7 @@ class _LoginScreenState extends State<LoginScreen> {
                             Text(
                               'Sign in to manage your stores, inventory and Daraz syncs.',
                               style: TextStyle(
-                                color: Colors.white.withOpacity(0.88),
+                                color: Colors.white.withValues(alpha: 0.88),
                                 fontSize: 13,
                                 fontWeight: FontWeight.w600,
                                 height: 1.35,
