@@ -1,4 +1,4 @@
-const Store = require('../models/Store');
+﻿const Store = require('../models/Store');
 const CentralInventory = require('../models/CentralInventory');
 const { resolveStockTarget, updateTargetStock } = require('./inventoryStockTargetService');
 const CentralOrder = require('../models/CentralOrder');
@@ -1010,13 +1010,10 @@ async function retryFailedOrderItemById(orderItemId) {
 }
 
 async function syncStoreById(storeId, options = {}) {
-<<<<<<< HEAD
   if (!isLiveApiEnabled()) {
     throw new Error('Live Daraz API sync is disabled. Set DARAZ_ENABLE_LIVE_API=true in the server environment.');
   }
 
-=======
->>>>>>> eb87ddec782a53736a39d0e420043f9f5e9f6b37
   if (syncInProgress && !options.allowWhileRunning) {
     throw new Error('Sync is already running');
   }
