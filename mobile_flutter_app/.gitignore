@@ -1,0 +1,22 @@
+# Flutter/Dart/Pub
+.dart_tool/
+.packages
+.pub/
+build/
+coverage/
+
+# Flutter generated
+.flutter-plugins
+.flutter-plugins-dependencies
+.metadata
+android/local.properties
+ios/Flutter/Generated.xcconfig
+ios/Flutter/flutter_export_environment.sh
+
+# IDE
+.idea/
+.vscode/
+*.iml
+
+# Misc
+.env

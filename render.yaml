@@ -1,0 +1,22 @@
+services:
+  - type: web
+    name: daraz-inventory-system
+    runtime: node
+    rootDir: backend
+    buildCommand: npm ci
+    startCommand: npm start
+    healthCheckPath: /health
+    autoDeployTrigger: commit
+    envVars:
+      - key: NODE_VERSION
+        value: 20
+      - key: TRUST_PROXY
+        value: true
+      - key: DARAZ_ENABLE_LIVE_API
+        value: true
+      - key: ORDER_SYNC_ENABLED
+        value: true
+      - key: ORDER_SYNC_HEARTBEAT_MINUTES
+        value: 1
+      - key: ORDER_SYNC_INITIAL_DELAY_SECONDS
+        value: 10
