@@ -591,6 +591,7 @@ async function validateStoreToken(storeId) {
   }
 
   if (!isLiveApiEnabled()) {
+<<<<<<< HEAD
     token.last_validated_at = new Date();
     token.last_error = "Live Daraz API is disabled in environment";
     await token.save();
@@ -598,6 +599,16 @@ async function validateStoreToken(storeId) {
     return {
       ok: false,
       message: "Live Daraz API is disabled. Set DARAZ_ENABLE_LIVE_API=true before validating or syncing.",
+=======
+    token.token_status = expiryState.is_expiring_soon ? "expiring_soon" : "active";
+    token.last_validated_at = new Date();
+    token.last_error = "";
+    await token.save();
+
+    return {
+      ok: true,
+      message: "Token format/status checked locally. Live API validation is disabled.",
+>>>>>>> eb87ddec782a53736a39d0e420043f9f5e9f6b37
       store,
       token,
       token_summary: buildTokenSummary(token)
@@ -904,7 +915,25 @@ async function refreshStoreAccessToken(storeId) {
   }
 
   if (!isLiveApiEnabled()) {
+<<<<<<< HEAD
     throw new Error("Live Daraz API is disabled. Set DARAZ_ENABLE_LIVE_API=true before refreshing tokens.");
+=======
+    const simulatedExpiry = new Date(Date.now() + 2 * 60 * 60 * 1000);
+    token.expires_at = simulatedExpiry;
+    token.token_status = "active";
+    token.token_source = token.token_source || "manual";
+    token.last_refreshed_at = new Date();
+    token.last_error = "";
+    await token.save();
+
+    return {
+      ok: true,
+      message: "Live API disabled. Token refresh was simulated locally.",
+      store,
+      token,
+      token_summary: buildTokenSummary(token)
+    };
+>>>>>>> eb87ddec782a53736a39d0e420043f9f5e9f6b37
   }
 
   const tokenPayload = await callDarazAuthApi(
@@ -1011,4 +1040,8 @@ module.exports = {
   refreshStoreAccessToken,
   ensureStoreTokenReadyForSync,
   isLiveApiEnabled
+<<<<<<< HEAD
 };
+=======
+};
+>>>>>>> eb87ddec782a53736a39d0e420043f9f5e9f6b37

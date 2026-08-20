@@ -15,7 +15,10 @@ const StockAdjustmentRequest = require("../models/StockAdjustmentRequest");
 const StockReceipt = require("../models/StockReceipt");
 const SyncIssue = require("../models/SyncIssue");
 const { getStoresHealthData, getSingleStoreHealth } = require("../services/storeHealthService");
+<<<<<<< HEAD
 const { validateStoreToken } = require("../services/darazService");
+=======
+>>>>>>> eb87ddec782a53736a39d0e420043f9f5e9f6b37
 
 const router = express.Router();
 
@@ -99,6 +102,7 @@ RUN SINGLE STORE HEALTH CHECK
 */
 router.post("/:id/validate-connection", async (req, res) => {
   try {
+<<<<<<< HEAD
     // This must contact Daraz.  A local token-presence check can incorrectly
     // report a healthy connection after a token has been revoked remotely.
     const validation = await validateStoreToken(req.params.id);
@@ -116,6 +120,70 @@ router.post("/:id/validate-connection", async (req, res) => {
       success: validation.ok,
       message: validation.message,
       token: validation.token_summary,
+=======
+    const store = await Store.findById(req.params.id);
+
+    if (!store) {
+      return res.status(404).json({
+        success: false,
+        message: "Store not found"
+      });
+    }
+
+    const token = await StoreToken.findOne({ store_id: store._id });
+    const config = await StoreConnectionConfig.findOne({ store_id: store._id });
+
+    if (!config) {
+      return res.status(400).json({
+        success: false,
+        message: "Daraz configuration not saved for this store"
+      });
+    }
+
+    if (!token) {
+      config.auth_status = "not_connected";
+      config.last_error_message = "Token not connected";
+      config.last_validated_at = new Date();
+      await config.save();
+
+      return res.status(400).json({
+        success: false,
+        message: "Store token is not connected"
+      });
+    }
+
+    const now = new Date();
+    token.last_validated_at = now;
+
+    if (token.expires_at && new Date(token.expires_at).getTime() <= Date.now()) {
+      token.token_status = "expired";
+      token.last_error = "Token expired. Reconnect the store.";
+      config.auth_status = "token_expired";
+      config.last_error_message = token.last_error;
+    } else if (!token.access_token) {
+      token.token_status = "invalid";
+      token.last_error = "Access token is missing";
+      config.auth_status = "token_invalid";
+      config.last_error_message = token.last_error;
+    } else {
+      token.token_status = token.token_status === "invalid" ? "active" : token.token_status || "active";
+      token.last_error = "";
+      config.auth_status = "token_active";
+      config.last_error_message = "";
+      config.last_validated_at = now;
+      if (!config.last_connected_at) {
+        config.last_connected_at = now;
+      }
+    }
+
+    await Promise.all([token.save(), config.save()]);
+
+    const result = await getSingleStoreHealth(store._id, 10);
+
+    res.json({
+      success: true,
+      message: "Connection status refreshed",
+>>>>>>> eb87ddec782a53736a39d0e420043f9f5e9f6b37
       ...result
     });
   } catch (error) {
