@@ -2,6 +2,8 @@ const express = require('express');
 const router = express.Router();
 
 const CentralInventory = require('../models/CentralInventory');
+const Product = require('../models/Product');
+const CentralOrderItem = require('../models/CentralOrderItem');
 const InventoryTransaction = require('../models/InventoryTransaction');
 const StockReceipt = require('../models/StockReceipt');
 const StockAdjustmentRequest = require('../models/StockAdjustmentRequest');
@@ -83,6 +85,13 @@ async function findInventoryByPayload({ inventory_id, product_id, store_id, sell
 function makeInventoryRow(item, extra = {}) {
   const stock = toNumber(item.stock, 0);
   const reserved = toNumber(item.reserved_stock, 0);
+  const purchasePrice = toNumber(item.purchase_price || item.cost_price, 0);
+  const costPrice = toNumber(item.cost_price || item.purchase_price, 0);
+  const sellingPrice = toNumber(item.selling_price, 0);
+  const margin = sellingPrice > 0 && costPrice > 0
+    ? Number((((sellingPrice - costPrice) / sellingPrice) * 100).toFixed(2))
+    : toNumber(item.profit_margin, 0);
+
   return {
     _id: item._id,
     inventory_id: item.inventory_id || item._id,
@@ -100,6 +109,10 @@ function makeInventoryRow(item, extra = {}) {
     reserved_stock: reserved,
     available_stock: Math.max(stock - reserved, 0),
     low_stock_limit: toNumber(item.low_stock_limit, 5),
+    purchase_price: purchasePrice,
+    cost_price: costPrice,
+    selling_price: sellingPrice,
+    profit_margin: margin,
     mapped_sku_count: 1,
     mapped_skus_text: (item.store_id?.code || item.store_code || '-') + ':' + item.seller_sku,
     stores_involved: 1,
@@ -824,6 +837,50 @@ router.post('/alert-settings/global', async (req, res, next) => {
       InventoryMergeGroup.updateMany({}, { $set: { low_stock_limit: threshold } })
     ]);
     res.json({ success: true, message: 'Global low stock threshold updated', modified: (inventoryResult.modifiedCount || 0) + (groupResult.modifiedCount || 0), low_stock_limit: threshold });
+  } catch (error) { next(error); }
+});
+
+router.put('/:id/prices', async (req, res, next) => {
+  try {
+    const { purchase_price, selling_price, cost_price } = req.body;
+    const item = await CentralInventory.findById(req.params.id);
+    if (!item) return res.status(404).json({ message: 'Inventory item not found' });
+
+    const cost = Math.max(0, toNumber(purchase_price ?? cost_price, item.cost_price || item.purchase_price || 0));
+    const selling = Math.max(0, toNumber(selling_price, item.selling_price || 0));
+    const margin = selling > 0 ? Number((((selling - cost) / selling) * 100).toFixed(2)) : 0;
+
+    item.purchase_price = cost;
+    item.cost_price = cost;
+    item.selling_price = selling;
+    item.profit_margin = margin;
+    await item.save();
+
+    await Product.findOneAndUpdate(
+      { sku: item.seller_sku },
+      { $set: { purchase_price: cost, selling_price: selling } }
+    );
+
+    if (cost > 0) {
+      const orderItems = await CentralOrderItem.find({ seller_sku: item.seller_sku });
+      for (const orderItem of orderItems) {
+        const itemUnitPrice = toNumber(orderItem.unit_price, 0);
+        const itemQty = toNumber(orderItem.quantity, 1);
+        const itemRev = itemUnitPrice * itemQty;
+        const itemCost = cost * itemQty;
+        orderItem.cost_price = cost;
+        orderItem.profit = itemRev - itemCost;
+        orderItem.profit_margin = itemRev > 0 ? Number((((itemRev - itemCost) / itemRev) * 100).toFixed(2)) : 0;
+        orderItem.profit_ready = true;
+        await orderItem.save();
+      }
+    }
+
+    res.json({
+      success: true,
+      message: 'Product price and profit margin updated successfully',
+      item: makeInventoryRow(item)
+    });
   } catch (error) { next(error); }
 });
 

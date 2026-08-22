@@ -1,4 +1,4 @@
-﻿const crypto = require("crypto");
+const crypto = require("crypto");
 const Store = require("../models/Store");
 const StoreToken = require("../models/StoreToken");
 const StoreConnectionConfig = require("../models/StoreConnectionConfig");
@@ -63,7 +63,7 @@ function getForceAuthValue() {
 }
 
 function isLiveApiEnabled() {
-  return String(process.env.DARAZ_ENABLE_LIVE_API || "false").toLowerCase() === "true";
+  return String(process.env.DARAZ_ENABLE_LIVE_API || "true").toLowerCase() !== "false";
 }
 
 function getPreemptiveRefreshMinutes() {

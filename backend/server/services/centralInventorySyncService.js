@@ -1,5 +1,8 @@
-﻿const Store = require('../models/Store');
+const Store = require('../models/Store');
 const CentralInventory = require('../models/CentralInventory');
+const Product = require('../models/Product');
+const StockReceipt = require('../models/StockReceipt');
+const ProductSkuMap = require('../models/ProductSkuMap');
 const { resolveStockTarget, updateTargetStock } = require('./inventoryStockTargetService');
 const CentralOrder = require('../models/CentralOrder');
 const StoreToken = require('../models/StoreToken');
@@ -573,6 +576,50 @@ async function upsertOrder(store, orderPayload) {
   );
 }
 
+async function resolveItemCostPrice({ sellerSku = '', productName = '', inventory = null }) {
+  if (inventory?.cost_price && inventory.cost_price > 0) {
+    return { cost_price: Number(inventory.cost_price), profit_ready: true };
+  }
+  if (inventory?.purchase_price && inventory.purchase_price > 0) {
+    return { cost_price: Number(inventory.purchase_price), profit_ready: true };
+  }
+
+  const cleanSku = safeString(sellerSku);
+  if (cleanSku) {
+    const receipt = await StockReceipt.findOne({ seller_sku: cleanSku, unit_cost: { $gt: 0 } })
+      .sort({ createdAt: -1 })
+      .lean();
+    if (receipt?.unit_cost > 0) {
+      return { cost_price: Number(receipt.unit_cost), profit_ready: true };
+    }
+
+    const product = await Product.findOne({ sku: cleanSku }).lean();
+    if (product && product.purchase_price > 0) {
+      return { cost_price: Number(product.purchase_price), profit_ready: true };
+    }
+
+    const skuMap = await ProductSkuMap.findOne({ sku: cleanSku }).lean();
+    if (skuMap?.product_id) {
+      const mappedProduct = await Product.findById(skuMap.product_id).lean();
+      if (mappedProduct?.purchase_price > 0) {
+        return { cost_price: Number(mappedProduct.purchase_price), profit_ready: true };
+      }
+    }
+  }
+
+  const cleanName = safeString(productName);
+  if (cleanName) {
+    const product = await Product.findOne({
+      name: { $regex: `^${cleanName.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}$`, $options: 'i' }
+    }).lean();
+    if (product?.purchase_price > 0) {
+      return { cost_price: Number(product.purchase_price), profit_ready: true };
+    }
+  }
+
+  return { cost_price: 0, profit_ready: false };
+}
+
 async function upsertOrderItems(store, orderDoc, itemsPayload, stats) {
   for (const item of itemsPayload) {
     const externalOrderItemId = getOrderItemId(item);
@@ -593,6 +640,18 @@ async function upsertOrderItems(store, orderDoc, itemsPayload, stats) {
     const hubArrivedAt = getLogisticFacilityDate(item);
     const hubName = getHubName(item);
     const inventory = sellerSku ? await resolveCentralInventory({ store, sellerSku, productName, displayTitle, imageUrl, allowCreate: false }) : null;
+
+    const quantity = getItemQuantity(item);
+    const unitPrice = getItemPrice(item);
+    const costResolution = await resolveItemCostPrice({ sellerSku, productName, inventory });
+    const costPrice = costResolution.cost_price;
+    const profitReady = costResolution.profit_ready;
+    const totalItemRevenue = unitPrice * quantity;
+    const totalItemCost = costPrice * quantity;
+    const itemProfit = profitReady ? totalItemRevenue - totalItemCost : null;
+    const itemProfitMargin = (profitReady && totalItemRevenue > 0)
+      ? Number((((totalItemRevenue - totalItemCost) / totalItemRevenue) * 100).toFixed(2))
+      : null;
 
     const classification = orderRules.classifyOrderItem({
       status: itemStatus,
@@ -634,8 +693,12 @@ async function upsertOrderItems(store, orderDoc, itemsPayload, stats) {
           original_product_name: productName,
           display_title: displayTitle,
           image_url: imageUrl,
-          quantity: getItemQuantity(item),
-          unit_price: getItemPrice(item),
+          quantity,
+          unit_price: unitPrice,
+          cost_price: costPrice,
+          profit: itemProfit,
+          profit_margin: itemProfitMargin,
+          profit_ready: profitReady,
           status: itemStatus,
           status_category: finalStatusCategory,
           parcel_type: classification.parcelType,

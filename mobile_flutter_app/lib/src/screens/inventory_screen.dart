@@ -585,10 +585,20 @@ class _InventoryScreenState extends State<InventoryScreen> {
                   Row(
                     children: <Widget>[
                       StatusChip(label: statusText, color: color, softColor: softColor),
+                      if (item.sellingPrice > 0 && item.effectiveCost > 0) ...<Widget>[
+                        const SizedBox(width: 6),
+                        StatusChip(
+                          label: '${item.calculatedMargin.toStringAsFixed(0)}% Margin',
+                          color: item.calculatedMargin >= 20 ? AppTheme.success : AppTheme.info,
+                          softColor: item.calculatedMargin >= 20 ? AppTheme.successSoft : AppTheme.infoSoft,
+                        ),
+                      ],
                       const SizedBox(width: 8),
                       Expanded(
                         child: Text(
-                          'Available ${item.availableStock} · Alert at ${item.lowStockLimit}',
+                          item.sellingPrice > 0
+                              ? 'Rs. ${Formatters.money(item.sellingPrice)} · ${item.availableStock} avail'
+                              : 'Avail ${item.availableStock} · Alert ${item.lowStockLimit}',
                           maxLines: 1,
                           overflow: TextOverflow.ellipsis,
                           textAlign: TextAlign.right,

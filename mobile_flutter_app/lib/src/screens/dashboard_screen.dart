@@ -31,11 +31,14 @@ class _DashboardScreenState extends State<DashboardScreen> {
   List<CentralOrderItem> _orderItems = <CentralOrderItem>[];
   SyncStatus? _syncStatus;
   Timer? _refreshTimer;
+  bool _isLiveSyncing = false;
 
   @override
   void initState() {
     super.initState();
-    _load();
+    _load().then((_) {
+      _triggerBackgroundLiveSync();
+    });
     _refreshTimer = Timer.periodic(const Duration(seconds: 30), (_) {
       if (mounted && !_loading) _load(silent: true);
     });
@@ -45,6 +48,21 @@ class _DashboardScreenState extends State<DashboardScreen> {
   void dispose() {
     _refreshTimer?.cancel();
     super.dispose();
+  }
+
+  Future<void> _triggerBackgroundLiveSync() async {
+    if (_isLiveSyncing) return;
+    if (mounted) setState(() => _isLiveSyncing = true);
+    try {
+      await ApiClient.instance.post('/daraz-sync/run-all');
+      if (mounted) {
+        await _load(silent: true);
+      }
+    } catch (_) {
+      // Background sync errors shouldn't break UI
+    } finally {
+      if (mounted) setState(() => _isLiveSyncing = false);
+    }
   }
 
   Future<void> _load({bool silent = false}) async {
@@ -175,7 +193,10 @@ class _DashboardScreenState extends State<DashboardScreen> {
                   ),
                 )
               : AppShell(
-                  onRefresh: _load,
+                  onRefresh: () async {
+                    await _load();
+                    await _triggerBackgroundLiveSync();
+                  },
                   child: Column(
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: <Widget>[
@@ -314,8 +335,8 @@ class _DashboardScreenState extends State<DashboardScreen> {
                     '$_connectedStores/${_stores.length} stores connected',
                   ),
                   _heroPill(
-                    Icons.schedule_rounded,
-                    'Last sync · ${_lastSyncLabel()}',
+                    _isLiveSyncing ? Icons.sync : Icons.schedule_rounded,
+                    _isLiveSyncing ? 'Syncing live from Daraz...' : 'Last sync · ${_lastSyncLabel()}',
                   ),
                 ],
               ),
@@ -329,6 +350,10 @@ class _DashboardScreenState extends State<DashboardScreen> {
   Widget _metricsGrid(BuildContext context) {
     final width = MediaQuery.of(context).size.width;
     final itemWidth = width < 360 ? width - 32 : (width - 44) / 2;
+
+    final profit = JsonReaders.number(_historySummary, 'profit');
+    final profitMargin = JsonReaders.number(_historySummary, 'profit_margin');
+    final profitAvailable = JsonReaders.boolean(_historySummary, 'profit_available', profit > 0);
 
     return Wrap(
       spacing: 12,
@@ -349,7 +374,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
             label: 'Active Stores',
             value: Formatters.quantity(_connectedStores),
             icon: Icons.storefront_outlined,
-            caption: 'All synced',
+            caption: _isLiveSyncing ? 'Syncing live...' : 'All synced',
             tint: AppTheme.infoSoft,
             iconColor: AppTheme.info,
           ),
@@ -368,7 +393,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
         SizedBox(
           width: itemWidth,
           child: MetricCard(
-            label: "Today's Orders",
+            label: "Today's Sales",
             value: Formatters.quantity(
               JsonReaders.integer(
                 _historySummary,
@@ -377,7 +402,9 @@ class _DashboardScreenState extends State<DashboardScreen> {
               ),
             ),
             icon: Icons.shopping_bag_outlined,
-            caption: '${Formatters.quantity(_orders.length)} valid orders',
+            caption: profitAvailable
+                ? 'Rs. ${Formatters.money(profit)} profit (${profitMargin.toStringAsFixed(0)}% margin)'
+                : '${Formatters.quantity(_orders.length)} valid orders',
             tint: AppTheme.successSoft,
             iconColor: AppTheme.success,
           ),
@@ -490,6 +517,24 @@ class _DashboardScreenState extends State<DashboardScreen> {
       revenue > 0,
     );
 
+    final totalCost = JsonReaders.number(
+      _historySummary,
+      'total_cost',
+      _orderItems.fold<double>(0, (sum, item) => sum + item.totalCost),
+    );
+
+    final profit = JsonReaders.number(
+      _historySummary,
+      'profit',
+      revenue - totalCost,
+    );
+
+    final profitMargin = JsonReaders.number(
+      _historySummary,
+      'profit_margin',
+      revenue > 0 ? (((revenue - totalCost) / revenue) * 100) : 0,
+    );
+
     final returns = JsonReaders.integer(
       _historySummary,
       'returns',
@@ -501,22 +546,6 @@ class _DashboardScreenState extends State<DashboardScreen> {
       'failed_deliveries',
       _orderItems.where((item) => item.isFailedDelivery).length,
     );
-
-    final metrics = <Widget>[
-      Expanded(
-        child: _historyMetric(
-          'Orders',
-          Formatters.quantity(summaryOrders),
-        ),
-      ),
-      if (revenueAvailable)
-        Expanded(
-          child: _historyMetric(
-            'Revenue',
-            'Rs. ${Formatters.money(revenue)}',
-          ),
-        ),
-    ];
 
     return AppCard(
       padding: const EdgeInsets.all(13),
@@ -537,12 +566,38 @@ class _DashboardScreenState extends State<DashboardScreen> {
           ),
           const SizedBox(height: 12),
           Row(
-            children: metrics.length == 1
-                ? <Widget>[
-                    metrics.first,
-                    const Expanded(child: SizedBox.shrink()),
-                  ]
-                : metrics,
+            children: <Widget>[
+              Expanded(
+                child: _historyMetric(
+                  'Orders',
+                  Formatters.quantity(summaryOrders),
+                ),
+              ),
+              if (revenueAvailable)
+                Expanded(
+                  child: _historyMetric(
+                    'Revenue',
+                    'Rs. ${Formatters.money(revenue)}',
+                  ),
+                ),
+            ],
+          ),
+          const SizedBox(height: 10),
+          Row(
+            children: <Widget>[
+              Expanded(
+                child: _historyMetric(
+                  'Net Profit',
+                  profit > 0 ? 'Rs. ${Formatters.money(profit)}' : 'Rs. 0',
+                ),
+              ),
+              Expanded(
+                child: _historyMetric(
+                  'Profit Margin',
+                  profitMargin > 0 ? '${profitMargin.toStringAsFixed(1)}%' : '--',
+                ),
+              ),
+            ],
           ),
           const SizedBox(height: 10),
           Row(
@@ -624,6 +679,9 @@ class _DashboardScreenState extends State<DashboardScreen> {
   Widget _dashboardOrderCard(CentralOrder order) {
     final amountText =
         order.amount > 0 ? ' · Rs. ${Formatters.money(order.amount)}' : '';
+    final profitText = (order.profit != null && order.profit! > 0)
+        ? ' · Profit Rs. ${Formatters.money(order.profit!)}'
+        : '';
 
     final isCancelled = order.status.toLowerCase().contains('cancel');
 
@@ -657,7 +715,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
                   ),
                   const SizedBox(height: 3),
                   Text(
-                    'Order ${order.orderNumber.isEmpty ? order.externalOrderId : order.orderNumber} · ${order.storeName}$amountText',
+                    'Order ${order.orderNumber.isEmpty ? order.externalOrderId : order.orderNumber} · ${order.storeName}$amountText$profitText',
                     maxLines: 1,
                     overflow: TextOverflow.ellipsis,
                     style: const TextStyle(

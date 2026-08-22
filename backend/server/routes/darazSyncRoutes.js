@@ -180,6 +180,17 @@ function itemPayload(item) {
   const title = item.display_title || item.product_name || item.seller_sku || "Daraz Product";
   const unitPrice = toNumber(item.unit_price, 0);
   const quantity = toNumber(item.quantity, 1);
+  const costPrice = toNumber(item.cost_price, 0);
+  const totalAmount = unitPrice * quantity;
+  const totalCost = costPrice * quantity;
+  const profitReady = item.profit_ready || (costPrice > 0);
+  const itemProfit = (item.profit !== null && item.profit !== undefined)
+    ? Number(item.profit)
+    : (costPrice > 0 ? totalAmount - totalCost : null);
+  const itemProfitMargin = (item.profit_margin !== null && item.profit_margin !== undefined)
+    ? Number(item.profit_margin)
+    : (totalAmount > 0 && costPrice > 0 ? Number((((totalAmount - totalCost) / totalAmount) * 100).toFixed(2)) : null);
+
   const hubArrivedAt = item.hub_arrived_at || item.logistic_facility_at || null;
   const storedDeadline = item.collection_deadline_at || null;
   const deadline = storedDeadline || (hubArrivedAt ? new Date(new Date(hubArrivedAt).getTime() + orderRules.DEFAULT_COLLECTION_DEADLINE_DAYS * 24 * 60 * 60 * 1000) : null);
@@ -208,7 +219,12 @@ function itemPayload(item) {
     image_url: item.image_url || "",
     quantity,
     unit_price: unitPrice,
-    amount: unitPrice * quantity,
+    cost_price: costPrice,
+    amount: totalAmount,
+    total_cost: totalCost,
+    profit: itemProfit,
+    profit_margin: itemProfitMargin,
+    profit_ready: profitReady,
     status: item.status || "pending",
     status_category: item.status_category || "pending",
     parcel_type: item.parcel_type || "none",
@@ -245,10 +261,17 @@ async function enrichOrder(order) {
     .lean();
   const count = await CentralOrderItem.countDocuments({ order_id: order._id });
   const title = item?.display_title || item?.product_name || item?.seller_sku || "Order items";
-  const amountRows = await CentralOrderItem.find({ order_id: order._id }).select("unit_price quantity status status_category parcel_type revenue_countable").lean();
-  const amount = amountRows
-    .filter((row) => orderRules.itemMatchesSale(row, order))
-    .reduce((sum, row) => sum + toNumber(row.unit_price, 0) * toNumber(row.quantity, 1), 0);
+  const amountRows = await CentralOrderItem.find({ order_id: order._id })
+    .select("unit_price cost_price profit profit_margin profit_ready quantity status status_category parcel_type revenue_countable")
+    .lean();
+  const saleRows = amountRows.filter((row) => orderRules.itemMatchesSale(row, order));
+  const amount = saleRows.reduce((sum, row) => sum + toNumber(row.unit_price, 0) * toNumber(row.quantity, 1), 0);
+  const totalCost = saleRows.reduce((sum, row) => sum + toNumber(row.cost_price, 0) * toNumber(row.quantity, 1), 0);
+  const profitReady = saleRows.some((row) => row.profit_ready || toNumber(row.cost_price, 0) > 0);
+  const profit = profitReady ? amount - totalCost : null;
+  const profitMargin = (profitReady && amount > 0)
+    ? Number((((amount - totalCost) / amount) * 100).toFixed(2))
+    : null;
 
   return {
     ...order,
@@ -260,7 +283,11 @@ async function enrichOrder(order) {
     status_category: order.status_category || orderRules.classifyOrderStatus(order.status),
     revenue_countable: !!order.revenue_countable,
     item_count: count,
-    amount
+    amount,
+    total_cost: totalCost,
+    profit,
+    profit_margin: profitMargin,
+    profit_ready: profitReady
   };
 }
 
@@ -710,6 +737,12 @@ router.get("/orders-history", async (req, res) => {
 
     const revenue = saleItems.reduce((sum, item) => sum + toNumber(item.unit_price, 0) * toNumber(item.quantity, 1), 0);
     const revenueAvailable = saleItems.some((item) => toNumber(item.unit_price, 0) > 0);
+    const totalCost = saleItems.reduce((sum, item) => sum + toNumber(item.cost_price, 0) * toNumber(item.quantity, 1), 0);
+    const profitAvailable = saleItems.some((item) => toNumber(item.cost_price, 0) > 0);
+    const profit = profitAvailable ? revenue - totalCost : (revenue > 0 ? revenue : 0);
+    const profitMargin = (profitAvailable && revenue > 0)
+      ? Number((((revenue - totalCost) / revenue) * 100).toFixed(2))
+      : (revenue > 0 && totalCost === 0 ? 100 : 0);
 
     const eventDateQuery = {
       $or: [
@@ -749,14 +782,20 @@ router.get("/orders-history", async (req, res) => {
     const seriesMap = new Map();
     for (const order of saleOrders) {
       const key = new Date(order.order_created_at || order.createdAt).toISOString().slice(0, 10);
-      if (!seriesMap.has(key)) seriesMap.set(key, { date: key, orders: 0, revenue: 0 });
+      if (!seriesMap.has(key)) seriesMap.set(key, { date: key, orders: 0, revenue: 0, cost: 0, profit: 0, profit_margin: 0 });
       seriesMap.get(key).orders += 1;
     }
     for (const item of saleItems) {
       const order = orderMap.get(String(item.order_id));
       const key = new Date(order?.order_created_at || item.createdAt).toISOString().slice(0, 10);
-      if (!seriesMap.has(key)) seriesMap.set(key, { date: key, orders: 0, revenue: 0 });
-      seriesMap.get(key).revenue += toNumber(item.unit_price, 0) * toNumber(item.quantity, 1);
+      if (!seriesMap.has(key)) seriesMap.set(key, { date: key, orders: 0, revenue: 0, cost: 0, profit: 0, profit_margin: 0 });
+      const itemRev = toNumber(item.unit_price, 0) * toNumber(item.quantity, 1);
+      const itemCost = toNumber(item.cost_price, 0) * toNumber(item.quantity, 1);
+      const row = seriesMap.get(key);
+      row.revenue += itemRev;
+      row.cost += itemCost;
+      row.profit += (itemRev - itemCost);
+      row.profit_margin = row.revenue > 0 ? Number(((row.profit / row.revenue) * 100).toFixed(2)) : 0;
     }
 
     const enriched = await Promise.all(saleOrders.map(enrichOrder));
@@ -770,6 +809,10 @@ router.get("/orders-history", async (req, res) => {
         total_orders: saleOrders.length,
         revenue,
         revenue_available: revenueAvailable,
+        total_cost: totalCost,
+        profit,
+        profit_margin: profitMargin,
+        profit_available: profitAvailable,
         returns,
         failed_deliveries: failedDeliveries,
         cancelled_orders: cancelledOrders,

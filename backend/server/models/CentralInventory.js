@@ -68,6 +68,25 @@ const centralInventorySchema = new mongoose.Schema(
     low_stock_limit: {
       type: Number,
       default: 5
+    },
+    purchase_price: {
+      type: Number,
+      default: 0,
+      min: 0
+    },
+    cost_price: {
+      type: Number,
+      default: 0,
+      min: 0
+    },
+    selling_price: {
+      type: Number,
+      default: 0,
+      min: 0
+    },
+    profit_margin: {
+      type: Number,
+      default: 0
     }
   },
   { timestamps: true }

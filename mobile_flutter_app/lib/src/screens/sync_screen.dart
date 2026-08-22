@@ -1,4 +1,7 @@
 import 'package:flutter/material.dart';
+import 'dart:async';
+
+
 
 import '../models/app_models.dart';
 import '../services/api_client.dart';
@@ -524,6 +527,9 @@ class _SyncScreenState extends State<SyncScreen> with WidgetsBindingObserver {
   Widget _ordersHistorySection(BuildContext context) {
     final totalOrders = JsonReaders.integer(_historySummary, 'total_orders');
     final revenue = JsonReaders.number(_historySummary, 'revenue');
+    final profit = JsonReaders.number(_historySummary, 'profit');
+    final profitMargin = JsonReaders.number(_historySummary, 'profit_margin');
+    final profitAvailable = JsonReaders.boolean(_historySummary, 'profit_available', profit > 0);
     final returns = JsonReaders.integer(_historySummary, 'returns');
     final failed = JsonReaders.integer(_historySummary, 'failed_deliveries');
     final cancelled = JsonReaders.integer(_historySummary, 'cancelled_orders');
@@ -555,6 +561,8 @@ class _SyncScreenState extends State<SyncScreen> with WidgetsBindingObserver {
             SizedBox(width: itemWidth, child: MetricCard(label: 'Total Orders', value: Formatters.quantity(totalOrders), icon: Icons.shopping_bag_outlined, tint: AppTheme.successSoft, iconColor: AppTheme.success)),
             if (_historyRevenueAvailable)
               SizedBox(width: itemWidth, child: MetricCard(label: 'Revenue', value: 'Rs. ${Formatters.money(revenue)}', icon: Icons.payments_outlined, tint: AppTheme.infoSoft, iconColor: AppTheme.info)),
+            if (profitAvailable || profit > 0)
+              SizedBox(width: itemWidth, child: MetricCard(label: 'Est. Profit', value: 'Rs. ${Formatters.money(profit)}', icon: Icons.trending_up_rounded, tint: AppTheme.successSoft, iconColor: AppTheme.success, caption: '${profitMargin.toStringAsFixed(1)}% margin')),
             SizedBox(width: itemWidth, child: MetricCard(label: 'Returns', value: Formatters.quantity(returns), icon: Icons.assignment_return_outlined, tint: AppTheme.warningSoft, iconColor: AppTheme.warning)),
             SizedBox(width: itemWidth, child: MetricCard(label: 'Failed Delivery', value: Formatters.quantity(failed), icon: Icons.local_shipping_outlined, tint: AppTheme.dangerSoft, iconColor: AppTheme.danger)),
             SizedBox(width: itemWidth, child: MetricCard(label: 'Cancelled', value: Formatters.quantity(cancelled), icon: Icons.cancel_outlined, tint: AppTheme.dangerSoft, iconColor: AppTheme.danger)),
@@ -646,6 +654,9 @@ class _SyncScreenState extends State<SyncScreen> with WidgetsBindingObserver {
 
   Widget _buildOrderCard(CentralOrder order) {
     final amountText = order.amount > 0 ? ' · Rs. ${Formatters.money(order.amount)}' : '';
+    final profitText = (order.profit != null && order.profit! > 0)
+        ? ' (Profit: Rs. ${Formatters.money(order.profit!)})'
+        : '';
     final statusText = order.status.isNotEmpty ? order.status : (order.processingStatus.isEmpty ? 'Order' : order.processingStatus);
     final isCancelled = order.statusCategory == 'cancelled' || order.status.toLowerCase().contains('cancel');
     final color = isCancelled ? AppTheme.danger : AppTheme.success;
@@ -666,7 +677,7 @@ class _SyncScreenState extends State<SyncScreen> with WidgetsBindingObserver {
                   const SizedBox(height: 3),
                   Text('Order ${order.orderNumber.isEmpty ? order.externalOrderId : order.orderNumber}', maxLines: 1, overflow: TextOverflow.ellipsis, style: const TextStyle(color: AppTheme.textPrimary, fontSize: 11, fontWeight: FontWeight.w800)),
                   const SizedBox(height: 3),
-                  Text('${order.storeName} · ${Formatters.dateTime(order.orderCreatedAt)}$amountText', maxLines: 1, overflow: TextOverflow.ellipsis, style: const TextStyle(color: AppTheme.textMuted, fontSize: 11, fontWeight: FontWeight.w700)),
+                  Text('${order.storeName} · ${Formatters.dateTime(order.orderCreatedAt)}$amountText$profitText', maxLines: 1, overflow: TextOverflow.ellipsis, style: const TextStyle(color: AppTheme.textMuted, fontSize: 11, fontWeight: FontWeight.w700)),
                 ],
               ),
             ),

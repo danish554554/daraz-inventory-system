@@ -56,6 +56,22 @@ const centralOrderItemSchema = new mongoose.Schema(
       type: Number,
       default: 0
     },
+    cost_price: {
+      type: Number,
+      default: 0
+    },
+    profit: {
+      type: Number,
+      default: null
+    },
+    profit_margin: {
+      type: Number,
+      default: null
+    },
+    profit_ready: {
+      type: Boolean,
+      default: false
+    },
     status: {
       type: String,
       default: "pending",

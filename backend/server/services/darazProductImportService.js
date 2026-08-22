@@ -183,6 +183,17 @@ function getSkuStock(source = {}) {
   );
 }
 
+function getSkuPrice(source = {}) {
+  return toNumber(
+    source.special_price ??
+      source.price ??
+      source.package_price ??
+      source.sale_price ??
+      source.unit_price,
+    0
+  );
+}
+
 function normalizeProductPayloads(products = []) {
   const rows = [];
 
@@ -216,6 +227,7 @@ function normalizeProductPayloads(products = []) {
           display_title: englishTitle || buildDisplayTitle(originalTitle, sellerSku),
           image_url: getProductImage(product, sku),
           stock: getSkuStock(sku),
+          selling_price: getSkuPrice(sku) || getSkuPrice(product),
           daraz_product_id: productId,
           daraz_item_id:
             pickFirstString(sku, ["item_id", "ItemId", "itemId"]) || productId,
@@ -236,6 +248,7 @@ function normalizeProductPayloads(products = []) {
       display_title: englishTitle || buildDisplayTitle(productName, sellerSku),
       image_url: getProductImage(product, {}),
       stock: getSkuStock(product),
+      selling_price: getSkuPrice(product),
       daraz_product_id: productId,
       daraz_item_id: productId,
       daraz_sku_id: getSkuId(product),
@@ -323,6 +336,7 @@ async function importProductsForStore(storeId, options = {}) {
           daraz_item_id: safeString(row.daraz_item_id),
           daraz_sku_id: safeString(row.daraz_sku_id),
           variation_name: safeString(row.variation_name),
+          selling_price: toNumber(row.selling_price, 0),
           last_product_import_at: new Date()
         };
 

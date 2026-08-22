@@ -334,6 +334,10 @@ class InventoryItem {
     required this.reservedStock,
     required this.availableStock,
     required this.lowStockLimit,
+    required this.purchasePrice,
+    required this.costPrice,
+    required this.sellingPrice,
+    required this.profitMargin,
     required this.updatedAt,
     required this.isMerged,
     required this.mergeGroupId,
@@ -359,6 +363,10 @@ class InventoryItem {
   final int reservedStock;
   final int availableStock;
   final int lowStockLimit;
+  final double purchasePrice;
+  final double costPrice;
+  final double sellingPrice;
+  final double profitMargin;
   final DateTime? updatedAt;
   final bool isMerged;
   final String mergeGroupId;
@@ -371,12 +379,21 @@ class InventoryItem {
   bool get isCritical => stock <= 0 || stock <= 2;
   bool get isInStock => stock > lowStockLimit;
   String get title => displayTitle.isNotEmpty ? displayTitle : productName;
+  double get effectiveCost => costPrice > 0 ? costPrice : purchasePrice;
+  double get unitProfit => sellingPrice > 0 && effectiveCost > 0 ? (sellingPrice - effectiveCost) : 0;
+  double get calculatedMargin => sellingPrice > 0 && effectiveCost > 0
+      ? double.parse((((sellingPrice - effectiveCost) / sellingPrice) * 100).toStringAsFixed(1))
+      : profitMargin;
 
   InventoryItem copyWith({
     int? stock,
     int? reservedStock,
     int? availableStock,
     int? lowStockLimit,
+    double? purchasePrice,
+    double? costPrice,
+    double? sellingPrice,
+    double? profitMargin,
     DateTime? updatedAt,
   }) {
     return InventoryItem(
@@ -396,6 +413,10 @@ class InventoryItem {
       reservedStock: reservedStock ?? this.reservedStock,
       availableStock: availableStock ?? this.availableStock,
       lowStockLimit: lowStockLimit ?? this.lowStockLimit,
+      purchasePrice: purchasePrice ?? this.purchasePrice,
+      costPrice: costPrice ?? this.costPrice,
+      sellingPrice: sellingPrice ?? this.sellingPrice,
+      profitMargin: profitMargin ?? this.profitMargin,
       updatedAt: updatedAt ?? this.updatedAt,
       isMerged: isMerged,
       mergeGroupId: mergeGroupId,
@@ -409,6 +430,10 @@ class InventoryItem {
   factory InventoryItem.fromJson(Map<String, dynamic> json) {
     final productName = JsonReaders.string(json, 'product_name');
     final displayTitle = JsonReaders.string(json, 'display_title', productName);
+    final purchasePrice = JsonReaders.number(json, 'purchase_price');
+    final costPrice = JsonReaders.number(json, 'cost_price', purchasePrice);
+    final sellingPrice = JsonReaders.number(json, 'selling_price');
+    final margin = JsonReaders.number(json, 'profit_margin');
     return InventoryItem(
       id: JsonReaders.string(json, '_id'),
       inventoryId: JsonReaders.string(json, 'inventory_id'),
@@ -426,6 +451,10 @@ class InventoryItem {
       reservedStock: JsonReaders.integer(json, 'reserved_stock'),
       availableStock: JsonReaders.integer(json, 'available_stock'),
       lowStockLimit: JsonReaders.integer(json, 'low_stock_limit', 5),
+      purchasePrice: purchasePrice,
+      costPrice: costPrice,
+      sellingPrice: sellingPrice,
+      profitMargin: margin,
       updatedAt: JsonReaders.date(json, 'updatedAt'),
       isMerged: JsonReaders.boolean(json, 'is_merged'),
       mergeGroupId: JsonReaders.string(json, 'merge_group_id'),
@@ -853,6 +882,10 @@ class CentralOrder {
     required this.productImageUrl,
     required this.itemCount,
     required this.amount,
+    required this.totalCost,
+    required this.profit,
+    required this.profitMargin,
+    required this.profitReady,
     required this.orderCreatedAt,
     required this.orderUpdatedAt,
   });
@@ -871,6 +904,10 @@ class CentralOrder {
   final String productImageUrl;
   final int itemCount;
   final double amount;
+  final double totalCost;
+  final double? profit;
+  final double? profitMargin;
+  final bool profitReady;
   final DateTime? orderCreatedAt;
   final DateTime? orderUpdatedAt;
 
@@ -891,6 +928,10 @@ class CentralOrder {
       productImageUrl: JsonReaders.string(json, 'product_image_url'),
       itemCount: JsonReaders.integer(json, 'item_count', 1),
       amount: JsonReaders.number(json, 'amount'),
+      totalCost: JsonReaders.number(json, 'total_cost'),
+      profit: json['profit'] == null ? null : JsonReaders.number(json, 'profit'),
+      profitMargin: json['profit_margin'] == null ? null : JsonReaders.number(json, 'profit_margin'),
+      profitReady: JsonReaders.boolean(json, 'profit_ready'),
       orderCreatedAt: JsonReaders.date(json, 'order_created_at'),
       orderUpdatedAt: JsonReaders.date(json, 'order_updated_at'),
     );
@@ -913,7 +954,12 @@ class CentralOrderItem {
     required this.imageUrl,
     required this.quantity,
     required this.unitPrice,
+    required this.costPrice,
     required this.amount,
+    required this.totalCost,
+    required this.profit,
+    required this.profitMargin,
+    required this.profitReady,
     required this.status,
     required this.statusCategory,
     required this.parcelType,
@@ -951,7 +997,12 @@ class CentralOrderItem {
   final String imageUrl;
   final int quantity;
   final double unitPrice;
+  final double costPrice;
   final double amount;
+  final double totalCost;
+  final double? profit;
+  final double? profitMargin;
+  final bool profitReady;
   final String status;
   final String statusCategory;
   final String parcelType;
@@ -986,6 +1037,9 @@ class CentralOrderItem {
     final productName = JsonReaders.string(json, 'product_name');
     final quantity = JsonReaders.integer(json, 'quantity', 1);
     final unitPrice = JsonReaders.number(json, 'unit_price');
+    final costPrice = JsonReaders.number(json, 'cost_price');
+    final amount = JsonReaders.number(json, 'amount', unitPrice * quantity);
+    final totalCost = JsonReaders.number(json, 'total_cost', costPrice * quantity);
     return CentralOrderItem(
       id: JsonReaders.string(json, '_id'),
       storeId: JsonReaders.nestedId(storeRaw).isNotEmpty ? JsonReaders.nestedId(storeRaw) : JsonReaders.string(json, 'store_id'),
@@ -1001,7 +1055,12 @@ class CentralOrderItem {
       imageUrl: JsonReaders.string(json, 'image_url'),
       quantity: quantity,
       unitPrice: unitPrice,
-      amount: JsonReaders.number(json, 'amount', unitPrice * quantity),
+      costPrice: costPrice,
+      amount: amount,
+      totalCost: totalCost,
+      profit: json['profit'] == null ? (costPrice > 0 ? amount - totalCost : null) : JsonReaders.number(json, 'profit'),
+      profitMargin: json['profit_margin'] == null ? (amount > 0 && costPrice > 0 ? double.parse((((amount - totalCost) / amount) * 100).toStringAsFixed(1)) : null) : JsonReaders.number(json, 'profit_margin'),
+      profitReady: JsonReaders.boolean(json, 'profit_ready', costPrice > 0),
       status: JsonReaders.string(json, 'status'),
       statusCategory: JsonReaders.string(json, 'status_category'),
       parcelType: JsonReaders.string(json, 'parcel_type', 'none'),
