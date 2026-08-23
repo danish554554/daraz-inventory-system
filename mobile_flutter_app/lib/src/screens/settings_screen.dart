@@ -80,10 +80,14 @@ class _SettingsScreenState extends State<SettingsScreen> {
           children: <Widget>[
             const SectionHeader(
               title: 'Settings',
-              subtitle: 'Account and backend configuration',
+              subtitle: 'Account, appearance and backend configuration',
             ),
             const SizedBox(height: 16),
             _profileCard(),
+            const SizedBox(height: 16),
+            _sectionLabel('Appearance'),
+            const SizedBox(height: 8),
+            _appearanceCard(context),
             const SizedBox(height: 16),
             _sectionLabel('Account'),
             const SizedBox(height: 8),
@@ -133,7 +137,10 @@ class _SettingsScreenState extends State<SettingsScreen> {
                 Icons.info_outline,
                 'App version',
                 _loadingVersion ? 'Loading...' : _version,
-                trailing: const Text('Up to date', style: TextStyle(color: AppTheme.textMuted, fontSize: 11, fontWeight: FontWeight.w800)),
+                trailing: Text(
+                  'Up to date',
+                  style: TextStyle(color: AppTheme.textMutedColor(context), fontSize: 11, fontWeight: FontWeight.w800),
+                ),
               ),
             ),
             const SizedBox(height: 16),
@@ -143,8 +150,8 @@ class _SettingsScreenState extends State<SettingsScreen> {
                 onPressed: _logout,
                 style: OutlinedButton.styleFrom(
                   foregroundColor: AppTheme.danger,
-                  side: const BorderSide(color: AppTheme.border),
-                  backgroundColor: Colors.white,
+                  side: BorderSide(color: AppTheme.borderColor(context)),
+                  backgroundColor: AppTheme.cardColor(context),
                   minimumSize: const Size.fromHeight(48),
                   shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
                 ),
@@ -153,11 +160,146 @@ class _SettingsScreenState extends State<SettingsScreen> {
               ),
             ),
             const SizedBox(height: 12),
-            const Center(
+            Center(
               child: Text(
                 '© Daraz Control · Inventory and product import are managed from the Inventory screen.',
                 textAlign: TextAlign.center,
-                style: TextStyle(color: AppTheme.textMuted, fontSize: 10, fontWeight: FontWeight.w700, height: 1.35),
+                style: TextStyle(color: AppTheme.textMutedColor(context), fontSize: 10, fontWeight: FontWeight.w700, height: 1.35),
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _appearanceCard(BuildContext context) {
+    return AppCard(
+      padding: const EdgeInsets.all(14),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: <Widget>[
+          Row(
+            children: <Widget>[
+              MiniIcon(
+                icon: widget.sessionManager.themeMode == ThemeMode.dark
+                    ? Icons.dark_mode_rounded
+                    : widget.sessionManager.themeMode == ThemeMode.light
+                        ? Icons.light_mode_rounded
+                        : Icons.brightness_auto_rounded,
+                size: 34,
+              ),
+              const SizedBox(width: 12),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: <Widget>[
+                    Text(
+                      'App Theme',
+                      style: TextStyle(
+                        color: AppTheme.textPrimaryColor(context),
+                        fontSize: 13,
+                        fontWeight: FontWeight.w900,
+                      ),
+                    ),
+                    const SizedBox(height: 2),
+                    Text(
+                      widget.sessionManager.themeMode == ThemeMode.dark
+                          ? 'Dark theme active'
+                          : widget.sessionManager.themeMode == ThemeMode.light
+                              ? 'Light theme active'
+                              : 'System default',
+                      style: TextStyle(
+                        color: AppTheme.textMutedColor(context),
+                        fontSize: 11,
+                        fontWeight: FontWeight.w700,
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 14),
+          Row(
+            children: <Widget>[
+              Expanded(
+                child: _themeOptionButton(
+                  context,
+                  label: 'Light',
+                  icon: Icons.light_mode_rounded,
+                  mode: ThemeMode.light,
+                ),
+              ),
+              const SizedBox(width: 8),
+              Expanded(
+                child: _themeOptionButton(
+                  context,
+                  label: 'Dark',
+                  icon: Icons.dark_mode_rounded,
+                  mode: ThemeMode.dark,
+                ),
+              ),
+              const SizedBox(width: 8),
+              Expanded(
+                child: _themeOptionButton(
+                  context,
+                  label: 'System',
+                  icon: Icons.brightness_auto_rounded,
+                  mode: ThemeMode.system,
+                ),
+              ),
+            ],
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _themeOptionButton(
+    BuildContext context, {
+    required String label,
+    required IconData icon,
+    required ThemeMode mode,
+  }) {
+    final isSelected = widget.sessionManager.themeMode == mode;
+
+    return InkWell(
+      onTap: () async {
+        await widget.sessionManager.setThemeMode(mode);
+      },
+      borderRadius: BorderRadius.circular(12),
+      child: AnimatedContainer(
+        duration: const Duration(milliseconds: 180),
+        padding: const EdgeInsets.symmetric(vertical: 10, horizontal: 8),
+        decoration: BoxDecoration(
+          color: isSelected
+              ? AppTheme.primary
+              : (AppTheme.isDark(context) ? const Color(0xFF1E293B) : AppTheme.softGrey),
+          borderRadius: BorderRadius.circular(12),
+          border: Border.all(
+            color: isSelected ? AppTheme.primary : AppTheme.borderColor(context),
+            width: isSelected ? 1.5 : 1.0,
+          ),
+        ),
+        child: Column(
+          children: <Widget>[
+            Icon(
+              icon,
+              size: 20,
+              color: isSelected
+                  ? Colors.white
+                  : (AppTheme.isDark(context) ? Colors.white70 : AppTheme.textPrimary),
+            ),
+            const SizedBox(height: 5),
+            Text(
+              label,
+              style: TextStyle(
+                fontSize: 11,
+                fontWeight: isSelected ? FontWeight.w900 : FontWeight.w700,
+                color: isSelected
+                    ? Colors.white
+                    : (AppTheme.isDark(context) ? Colors.white70 : AppTheme.textPrimary),
               ),
             ),
           ],
@@ -171,9 +313,16 @@ class _SettingsScreenState extends State<SettingsScreen> {
     return Container(
       padding: const EdgeInsets.all(14),
       decoration: BoxDecoration(
-        gradient: AppTheme.primaryGradient,
+        gradient: AppTheme.heroGradient,
         borderRadius: BorderRadius.circular(18),
-        boxShadow: <BoxShadow>[BoxShadow(color: AppTheme.primary.withValues(alpha: 0.14), blurRadius: 16, offset: const Offset(0, 8))],
+        border: Border.all(color: const Color(0xFF334155)),
+        boxShadow: <BoxShadow>[
+          BoxShadow(
+            color: Colors.black.withValues(alpha: 0.18),
+            blurRadius: 16,
+            offset: const Offset(0, 8),
+          ),
+        ],
       ),
       child: Row(
         children: <Widget>[
@@ -194,9 +343,15 @@ class _SettingsScreenState extends State<SettingsScreen> {
             ),
           ),
           FilledButton(
-            style: FilledButton.styleFrom(backgroundColor: Colors.white, foregroundColor: AppTheme.primary, padding: const EdgeInsets.symmetric(horizontal: 12), minimumSize: const Size(0, 34), shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12))),
+            style: FilledButton.styleFrom(
+              backgroundColor: AppTheme.primary,
+              foregroundColor: Colors.white,
+              padding: const EdgeInsets.symmetric(horizontal: 12),
+              minimumSize: const Size(0, 34),
+              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+            ),
             onPressed: _logout,
-            child: const Text('Seller', style: TextStyle(fontSize: 11, fontWeight: FontWeight.w900)),
+            child: const Text('Sign out', style: TextStyle(fontSize: 11, fontWeight: FontWeight.w900)),
           ),
         ],
       ),
@@ -214,9 +369,18 @@ class _SettingsScreenState extends State<SettingsScreen> {
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: <Widget>[
-                Text(label, style: const TextStyle(color: AppTheme.textMuted, fontSize: 11, fontWeight: FontWeight.w800)),
+                Text(label, style: TextStyle(color: AppTheme.textMutedColor(context), fontSize: 11, fontWeight: FontWeight.w800)),
                 const SizedBox(height: 3),
-                Text(value, maxLines: 1, overflow: TextOverflow.ellipsis, style: const TextStyle(fontSize: 12, fontWeight: FontWeight.w900)),
+                Text(
+                  value,
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: TextStyle(
+                    fontSize: 12,
+                    fontWeight: FontWeight.w900,
+                    color: AppTheme.textPrimaryColor(context),
+                  ),
+                ),
               ],
             ),
           ),
@@ -227,10 +391,17 @@ class _SettingsScreenState extends State<SettingsScreen> {
   }
 
   Widget _sectionLabel(String label) {
-    return Text(label, style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w900, color: AppTheme.textPrimary));
+    return Text(
+      label,
+      style: TextStyle(
+        fontSize: 13,
+        fontWeight: FontWeight.w900,
+        color: AppTheme.textPrimaryColor(context),
+      ),
+    );
   }
 
   Widget _thinDivider() {
-    return const Divider(height: 1, thickness: 1, indent: 58, color: AppTheme.border);
+    return Divider(height: 1, thickness: 1, indent: 58, color: AppTheme.borderColor(context));
   }
 }

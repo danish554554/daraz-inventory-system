@@ -1,6 +1,6 @@
 import 'dart:convert';
 
-import 'package:flutter/foundation.dart';
+import 'package:flutter/material.dart';
 import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 
 import 'api_client.dart';
@@ -15,17 +15,27 @@ class SessionManager extends ChangeNotifier {
   static const String _tokenKey = 'admin_token';
   static const String _usernameKey = 'admin_user';
   static const String _expiresAtKey = 'admin_token_expires_at';
+  static const String _themeModeKey = 'app_theme_mode';
 
   bool _isBootstrapping = true;
   String? _token;
   String? _username;
   DateTime? _expiresAt;
+  ThemeMode _themeMode = ThemeMode.system;
 
   bool get isBootstrapping => _isBootstrapping;
   bool get isAuthenticated => _token != null && !isExpired;
   String? get token => _token;
   String get username => _username ?? 'Admin User';
   DateTime? get expiresAt => _expiresAt;
+  ThemeMode get themeMode => _themeMode;
+
+  Future<void> setThemeMode(ThemeMode mode) async {
+    if (_themeMode == mode) return;
+    _themeMode = mode;
+    await _storage.write(key: _themeModeKey, value: mode.name);
+    notifyListeners();
+  }
 
   bool get isExpired {
     if (_token == null) return true;
@@ -47,6 +57,15 @@ class SessionManager extends ChangeNotifier {
     notifyListeners();
 
     try {
+      final savedTheme = await _storage.read(key: _themeModeKey);
+      if (savedTheme == 'light') {
+        _themeMode = ThemeMode.light;
+      } else if (savedTheme == 'dark') {
+        _themeMode = ThemeMode.dark;
+      } else {
+        _themeMode = ThemeMode.system;
+      }
+
       _token = await _storage.read(key: _tokenKey);
       _username = await _storage.read(key: _usernameKey);
       final expiresAtRaw = await _storage.read(key: _expiresAtKey);

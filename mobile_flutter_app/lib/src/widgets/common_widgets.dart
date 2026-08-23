@@ -11,7 +11,7 @@ class AppCard extends StatelessWidget {
     this.onTap,
     this.borderColor,
     this.radius = 18,
-    this.backgroundColor = Colors.white,
+    this.backgroundColor,
     this.shadow = true,
   });
 
@@ -20,21 +20,25 @@ class AppCard extends StatelessWidget {
   final VoidCallback? onTap;
   final Color? borderColor;
   final double radius;
-  final Color backgroundColor;
+  final Color? backgroundColor;
   final bool shadow;
 
   @override
   Widget build(BuildContext context) {
+    final bg = backgroundColor ?? AppTheme.cardColor(context);
+    final borderCol = borderColor ?? AppTheme.borderColor(context);
+    final isDark = AppTheme.isDark(context);
+
     final card = Container(
       padding: padding,
       decoration: BoxDecoration(
-        color: backgroundColor,
+        color: bg,
         borderRadius: BorderRadius.circular(radius),
-        border: Border.all(color: borderColor ?? AppTheme.border),
+        border: Border.all(color: borderCol),
         boxShadow: shadow
             ? <BoxShadow>[
                 BoxShadow(
-                  color: Colors.black.withValues(alpha: 0.035),
+                  color: isDark ? Colors.black.withValues(alpha: 0.3) : Colors.black.withValues(alpha: 0.035),
                   blurRadius: 14,
                   offset: const Offset(0, 7),
                 ),
@@ -344,9 +348,9 @@ class SecondaryButton extends StatelessWidget {
   Widget build(BuildContext context) {
     return OutlinedButton.icon(
       style: OutlinedButton.styleFrom(
-        backgroundColor: Colors.white,
-        foregroundColor: AppTheme.textPrimary,
-        side: const BorderSide(color: AppTheme.border),
+        backgroundColor: AppTheme.cardColor(context),
+        foregroundColor: AppTheme.textPrimaryColor(context),
+        side: BorderSide(color: AppTheme.borderColor(context)),
         minimumSize: const Size.fromHeight(48),
         padding: const EdgeInsets.symmetric(horizontal: 14),
         shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
@@ -368,21 +372,23 @@ class MiniIcon extends StatelessWidget {
     super.key,
     required this.icon,
     this.color = AppTheme.primary,
-    this.background = AppTheme.primarySoft,
+    this.background,
     this.size = 34,
   });
 
   final IconData icon;
   final Color color;
-  final Color background;
+  final Color? background;
   final double size;
 
   @override
   Widget build(BuildContext context) {
+    final isDark = AppTheme.isDark(context);
+    final bg = background ?? (isDark ? AppTheme.primary.withValues(alpha: 0.18) : AppTheme.primarySoft);
     return Container(
       width: size,
       height: size,
-      decoration: BoxDecoration(color: background, borderRadius: BorderRadius.circular(size / 2.7)),
+      decoration: BoxDecoration(color: bg, borderRadius: BorderRadius.circular(size / 2.7)),
       child: Icon(icon, size: size * 0.5, color: color),
     );
   }
@@ -392,22 +398,24 @@ class InfoBanner extends StatelessWidget {
   const InfoBanner({
     super.key,
     required this.text,
-    this.background = AppTheme.primarySoft,
+    this.background,
     this.foreground = AppTheme.primary,
     this.icon = Icons.info_outline,
   });
 
   final String text;
-  final Color background;
+  final Color? background;
   final Color foreground;
   final IconData icon;
 
   @override
   Widget build(BuildContext context) {
+    final isDark = AppTheme.isDark(context);
+    final bg = background ?? (isDark ? AppTheme.primary.withValues(alpha: 0.18) : AppTheme.primarySoft);
     return Container(
       width: double.infinity,
       padding: const EdgeInsets.all(12),
-      decoration: BoxDecoration(color: background, borderRadius: BorderRadius.circular(14)),
+      decoration: BoxDecoration(color: bg, borderRadius: BorderRadius.circular(14)),
       child: Row(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: <Widget>[
@@ -487,15 +495,15 @@ class ProductImageBox extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final url = imageUrl.trim();
+    final isDark = AppTheme.isDark(context);
     final fallback = Container(
       width: size,
       height: size,
       decoration: BoxDecoration(
-        color: AppTheme.softGrey,
+        color: isDark ? const Color(0xFF1E293B) : AppTheme.softGrey,
         borderRadius: BorderRadius.circular(radius),
-        gradient: LinearGradient(colors: <Color>[AppTheme.softGrey, Colors.grey.shade300]),
       ),
-      child: Icon(icon, color: AppTheme.textMuted, size: size * 0.38),
+      child: Icon(icon, color: AppTheme.textMutedColor(context), size: size * 0.38),
     );
 
     if (url.isEmpty) return fallback;
@@ -548,13 +556,22 @@ class EmptyState extends StatelessWidget {
           Text(
             title,
             textAlign: TextAlign.center,
-            style: const TextStyle(fontSize: 16, fontWeight: FontWeight.w900),
+            style: TextStyle(
+              fontSize: 16,
+              fontWeight: FontWeight.w900,
+              color: AppTheme.textPrimaryColor(context),
+            ),
           ),
           const SizedBox(height: 6),
           Text(
             message,
             textAlign: TextAlign.center,
-            style: const TextStyle(color: AppTheme.textMuted, fontSize: 12, height: 1.35, fontWeight: FontWeight.w600),
+            style: TextStyle(
+              color: AppTheme.textMutedColor(context),
+              fontSize: 12,
+              height: 1.35,
+              fontWeight: FontWeight.w600,
+            ),
           ),
         ],
       ),
@@ -575,7 +592,13 @@ class AppLoader extends StatelessWidget {
         children: <Widget>[
           const CircularProgressIndicator(color: AppTheme.primary),
           const SizedBox(height: 14),
-          Text(label, style: const TextStyle(color: AppTheme.textMuted, fontWeight: FontWeight.w700)),
+          Text(
+            label,
+            style: TextStyle(
+              color: AppTheme.textMutedColor(context),
+              fontWeight: FontWeight.w700,
+            ),
+          ),
         ],
       ),
     );
@@ -605,8 +628,8 @@ class ActionTile extends StatelessWidget {
     return AppCard(
       onTap: loading ? null : onTap,
       padding: const EdgeInsets.all(13),
-      backgroundColor: highlight ? AppTheme.primary : Colors.white,
-      borderColor: highlight ? AppTheme.primary : AppTheme.border,
+      backgroundColor: highlight ? AppTheme.primary : AppTheme.cardColor(context),
+      borderColor: highlight ? AppTheme.primary : AppTheme.borderColor(context),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: <Widget>[
@@ -615,7 +638,7 @@ class ActionTile extends StatelessWidget {
               : MiniIcon(
                   icon: icon,
                   color: highlight ? AppTheme.primary : AppTheme.primary,
-                  background: highlight ? Colors.white.withValues(alpha: 0.9) : AppTheme.primarySoft,
+                  background: highlight ? Colors.white.withValues(alpha: 0.9) : null,
                 ),
           const SizedBox(height: 12),
           Text(
@@ -623,7 +646,7 @@ class ActionTile extends StatelessWidget {
             maxLines: 1,
             overflow: TextOverflow.ellipsis,
             style: TextStyle(
-              color: highlight ? Colors.white : AppTheme.textPrimary,
+              color: highlight ? Colors.white : AppTheme.textPrimaryColor(context),
               fontWeight: FontWeight.w900,
               fontSize: 13,
             ),
@@ -634,7 +657,7 @@ class ActionTile extends StatelessWidget {
             maxLines: 2,
             overflow: TextOverflow.ellipsis,
             style: TextStyle(
-              color: highlight ? Colors.white.withValues(alpha: 0.82) : AppTheme.textMuted,
+              color: highlight ? Colors.white.withValues(alpha: 0.82) : AppTheme.textMutedColor(context),
               fontSize: 11,
               fontWeight: FontWeight.w700,
               height: 1.25,

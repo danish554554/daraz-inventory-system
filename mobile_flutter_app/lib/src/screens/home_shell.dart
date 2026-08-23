@@ -36,12 +36,14 @@ class _HomeShellState extends State<HomeShell> {
       bottomNavigationBar: Container(
         margin: const EdgeInsets.fromLTRB(14, 0, 14, 14),
         decoration: BoxDecoration(
-          color: Colors.white,
+          color: AppTheme.cardColor(context),
           borderRadius: BorderRadius.circular(26),
-          border: Border.all(color: AppTheme.border),
+          border: Border.all(color: AppTheme.borderColor(context)),
           boxShadow: <BoxShadow>[
             BoxShadow(
-              color: Colors.black.withValues(alpha: 0.06),
+              color: AppTheme.isDark(context)
+                  ? Colors.black.withValues(alpha: 0.4)
+                  : Colors.black.withValues(alpha: 0.06),
               blurRadius: 20,
               offset: const Offset(0, 8),
             ),

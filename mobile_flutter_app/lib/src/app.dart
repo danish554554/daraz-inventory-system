@@ -19,6 +19,8 @@ class DarazInventoryApp extends StatelessWidget {
           title: 'Daraz Inventory Control',
           debugShowCheckedModeBanner: false,
           theme: AppTheme.lightTheme,
+          darkTheme: AppTheme.darkTheme,
+          themeMode: sessionManager.themeMode,
           home: sessionManager.isBootstrapping
               ? const _BootstrapScreen()
               : sessionManager.isAuthenticated

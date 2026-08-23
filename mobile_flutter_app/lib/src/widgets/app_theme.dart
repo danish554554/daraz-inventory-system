@@ -57,6 +57,23 @@ class AppTheme {
         colors: <Color>[Color(0xFF1E293B), Color(0xFF0F172A)],
       );
 
+  // Dark theme palette
+  static const Color darkBackground = Color(0xFF0B0F19);
+  static const Color darkCard = Color(0xFF131C2E);
+  static const Color darkTextPrimary = Color(0xFFF8FAFC);
+  static const Color darkTextMuted = Color(0xFF94A3B8);
+  static const Color darkBorder = Color(0xFF24324D);
+  static const Color darkSoftGrey = Color(0xFF1E293B);
+
+  // Dynamic Theme Helpers
+  static bool isDark(BuildContext context) => Theme.of(context).brightness == Brightness.dark;
+  static Color cardColor(BuildContext context) => isDark(context) ? darkCard : Colors.white;
+  static Color borderColor(BuildContext context) => isDark(context) ? darkBorder : border;
+  static Color textPrimaryColor(BuildContext context) => isDark(context) ? darkTextPrimary : textPrimary;
+  static Color textMutedColor(BuildContext context) => isDark(context) ? darkTextMuted : textMuted;
+  static Color softGreyColor(BuildContext context) => isDark(context) ? darkSoftGrey : softGrey;
+  static Color backgroundColor(BuildContext context) => isDark(context) ? darkBackground : background;
+
   static LinearGradient get profitGradient => const LinearGradient(
         begin: Alignment.topLeft,
         end: Alignment.bottomRight,
@@ -64,11 +81,12 @@ class AppTheme {
       );
 
   static ThemeData get lightTheme {
-    final ThemeData base = ThemeData(useMaterial3: true);
+    final ThemeData base = ThemeData(useMaterial3: true, brightness: Brightness.light);
 
     return base.copyWith(
       scaffoldBackgroundColor: background,
       colorScheme: base.colorScheme.copyWith(
+        brightness: Brightness.light,
         primary: primary,
         secondary: success,
         surface: card,
@@ -162,6 +180,112 @@ class AppTheme {
         backgroundColor: Colors.white,
         selectedItemColor: primary,
         unselectedItemColor: textMuted,
+        elevation: 10,
+        type: BottomNavigationBarType.fixed,
+      ),
+    );
+  }
+
+  static ThemeData get darkTheme {
+    final ThemeData base = ThemeData(useMaterial3: true, brightness: Brightness.dark);
+
+    return base.copyWith(
+      scaffoldBackgroundColor: darkBackground,
+      colorScheme: base.colorScheme.copyWith(
+        brightness: Brightness.dark,
+        primary: primary,
+        secondary: success,
+        surface: darkCard,
+        error: danger,
+      ),
+      textTheme: base.textTheme.apply(
+        bodyColor: darkTextPrimary,
+        displayColor: darkTextPrimary,
+        fontFamily: 'Roboto',
+      ),
+      appBarTheme: const AppBarTheme(
+        backgroundColor: Colors.transparent,
+        elevation: 0,
+        scrolledUnderElevation: 0,
+        centerTitle: false,
+        foregroundColor: darkTextPrimary,
+        titleTextStyle: TextStyle(
+          color: darkTextPrimary,
+          fontSize: 18,
+          fontWeight: FontWeight.w900,
+          letterSpacing: -0.4,
+        ),
+      ),
+      navigationBarTheme: NavigationBarThemeData(
+        height: 66,
+        elevation: 0,
+        backgroundColor: darkCard,
+        indicatorColor: primary.withValues(alpha: 0.2),
+        iconTheme: WidgetStateProperty.resolveWith<IconThemeData>((states) {
+          final selected = states.contains(WidgetState.selected);
+          return IconThemeData(
+            color: selected ? primary : darkTextMuted,
+            size: selected ? 24 : 22,
+          );
+        }),
+        labelTextStyle: WidgetStateProperty.resolveWith<TextStyle>((states) {
+          final selected = states.contains(WidgetState.selected);
+          return TextStyle(
+            color: selected ? primary : darkTextMuted,
+            fontSize: 11,
+            fontWeight: selected ? FontWeight.w800 : FontWeight.w600,
+          );
+        }),
+      ),
+      cardTheme: CardThemeData(
+        color: darkCard,
+        elevation: 0,
+        margin: EdgeInsets.zero,
+        shape: RoundedRectangleBorder(
+          borderRadius: BorderRadius.circular(18),
+          side: const BorderSide(color: darkBorder),
+        ),
+      ),
+      inputDecorationTheme: InputDecorationTheme(
+        filled: true,
+        fillColor: darkCard,
+        contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
+        hintStyle: const TextStyle(color: darkTextMuted, fontSize: 13),
+        labelStyle: const TextStyle(color: darkTextMuted, fontWeight: FontWeight.w700),
+        prefixIconColor: darkTextMuted,
+        suffixIconColor: darkTextMuted,
+        enabledBorder: OutlineInputBorder(
+          borderRadius: BorderRadius.circular(14),
+          borderSide: const BorderSide(color: darkBorder),
+        ),
+        focusedBorder: OutlineInputBorder(
+          borderRadius: BorderRadius.circular(14),
+          borderSide: const BorderSide(color: primary, width: 1.5),
+        ),
+        errorBorder: OutlineInputBorder(
+          borderRadius: BorderRadius.circular(14),
+          borderSide: const BorderSide(color: danger),
+        ),
+        focusedErrorBorder: OutlineInputBorder(
+          borderRadius: BorderRadius.circular(14),
+          borderSide: const BorderSide(color: danger),
+        ),
+      ),
+      chipTheme: base.chipTheme.copyWith(
+        side: const BorderSide(color: darkBorder),
+        labelStyle: const TextStyle(fontSize: 12, fontWeight: FontWeight.w800),
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(24)),
+      ),
+      dividerColor: darkBorder,
+      floatingActionButtonTheme: const FloatingActionButtonThemeData(
+        backgroundColor: primary,
+        foregroundColor: Colors.white,
+        elevation: 4,
+      ),
+      bottomNavigationBarTheme: const BottomNavigationBarThemeData(
+        backgroundColor: darkCard,
+        selectedItemColor: primary,
+        unselectedItemColor: darkTextMuted,
         elevation: 10,
         type: BottomNavigationBarType.fixed,
       ),
