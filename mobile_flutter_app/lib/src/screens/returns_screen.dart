@@ -52,7 +52,7 @@ class _ReturnsAndFailedDeliveryScreenState extends State<ReturnsAndFailedDeliver
       final rawList = JsonReaders.list(res['items']);
       final parsed = rawList
           .map((e) => CentralOrderItem.fromJson(JsonReaders.map(e)))
-          .where((item) => item.isReturn || item.isFailedDelivery || item.hubArrivedAt != null || item.logisticFacilityAt != null)
+          .where((item) => (item.isReturn || item.isFailedDelivery || item.hubArrivedAt != null || item.logisticFacilityAt != null) && !_isEarlyBuyerCancellation(item))
           .toList();
 
       if (mounted) {
@@ -85,6 +85,57 @@ class _ReturnsAndFailedDeliveryScreenState extends State<ReturnsAndFailedDeliver
     }
   }
 
+  bool _isEarlyBuyerCancellation(CentralOrderItem item) {
+    final reason = item.returnReason.toLowerCase().trim();
+    final status = (item.statusCategory.isNotEmpty ? item.statusCategory : item.orderNumber).toLowerCase();
+
+    // If order was cancelled at initial stage without arriving at hub
+    if (status.contains('cancel') && !item.isFailedDelivery && item.hubArrivedAt == null) {
+      return true;
+    }
+
+    if (reason.isEmpty) return false;
+
+    const ignoreCancellationReasons = <String>[
+      'cheaper elsewhere',
+      'found cheaper',
+      'shipping cost is too high',
+      'shipping cost',
+      'dont want this order',
+      "don't want this order",
+      'dont want this item',
+      "don't want this item",
+      'want to place a new order',
+      'place a new order',
+      'different items',
+      'more/different items',
+      'seller asked me to cancel',
+      'out of stock',
+      'delivery time is too long',
+      'delivery time',
+      'duplicate order',
+      'voucher',
+      'forgot to use voucher',
+      'change of delivery address',
+      'delivery address',
+      'change address',
+      'decided for alternative product',
+      'alternative product',
+      'order placed by mistake',
+      'buyer cancel',
+      'buyer_cancel',
+      'change of mind',
+      'changed my mind'
+    ];
+
+    for (final pattern in ignoreCancellationReasons) {
+      if (reason.contains(pattern)) {
+        return true;
+      }
+    }
+    return false;
+  }
+
   bool _isItemAlreadyReturned(CentralOrderItem item) {
     if (item.isCollected) return true;
     final status = (item.statusCategory.isNotEmpty ? item.statusCategory : item.orderNumber).toLowerCase();
@@ -113,6 +164,9 @@ class _ReturnsAndFailedDeliveryScreenState extends State<ReturnsAndFailedDeliver
     final query = _search.trim().toLowerCase();
 
     return _items.where((item) {
+      // Exclude early customer cancellations
+      if (_isEarlyBuyerCancellation(item)) return false;
+
       final isReturn = item.isReturn;
       final isFailed = item.isFailedDelivery || (!item.isReturn && (item.hubArrivedAt != null || item.logisticFacilityAt != null));
       final isCompleted = _isItemAlreadyReturned(item);

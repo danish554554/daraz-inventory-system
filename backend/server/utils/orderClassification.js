@@ -71,10 +71,57 @@ function isCancelledStatus(status = '') {
     normalized.includes('incomplete');
 }
 
+function isEarlyBuyerCancellationReason(reason = '') {
+  const norm = safeString(reason).toLowerCase();
+  if (!norm) return false;
+  const earlyCancelPatterns = [
+    'cheaper elsewhere',
+    'found cheaper',
+    'shipping cost is too high',
+    'shipping cost',
+    'dont want this order',
+    "don't want this order",
+    'dont want this item',
+    "don't want this item",
+    'want to place a new order',
+    'place a new order',
+    'different items',
+    'more/different items',
+    'seller asked me to cancel',
+    'out of stock',
+    'delivery time is too long',
+    'delivery time',
+    'duplicate order',
+    'voucher',
+    'forgot to use voucher',
+    'change of delivery address',
+    'delivery address',
+    'change address',
+    'decided for alternative product',
+    'alternative product',
+    'order placed by mistake',
+    'buyer cancel',
+    'buyer_cancel',
+    'change of mind',
+    'changed my mind'
+  ];
+  return earlyCancelPatterns.some((pattern) => norm.includes(pattern));
+}
+
 function isReturnStatus(status = '', payload = {}) {
   const statusNorm = normalizeStatus(status);
-  const normalized = `${statusNorm} ${payloadText(payload)}`.trim();
+  const pText = payloadText(payload);
+  const normalized = `${statusNorm} ${pText}`.trim();
   if (!normalized) return false;
+
+  // Ignore early pre-fulfillment buyer cancellations
+  if (isEarlyBuyerCancellationReason(pText) || isEarlyBuyerCancellationReason(statusNorm) || isEarlyBuyerCancellationReason(payload?.return_reason || payload?.reason || payload?.cancel_reason)) {
+    return false;
+  }
+
+  if (isCancelledStatus(statusNorm) && !normalized.includes('returned') && !normalized.includes('customer_return')) {
+    return false;
+  }
 
   if (statusNorm === 'returned' || statusNorm === 'customer_return' || statusNorm === 'buyer_return') {
     return true;
@@ -103,8 +150,13 @@ function isReturnStatus(status = '', payload = {}) {
 
 function isFailedDeliveryStatus(status = '', payload = {}) {
   const statusNorm = normalizeStatus(status);
-  const normalized = `${statusNorm} ${payloadText(payload)}`.trim();
+  const pText = payloadText(payload);
+  const normalized = `${statusNorm} ${pText}`.trim();
   if (!normalized) return false;
+
+  if (isEarlyBuyerCancellationReason(pText) || isEarlyBuyerCancellationReason(statusNorm)) {
+    return false;
+  }
 
   if (normalized.includes('payment_failed') || normalized.includes('failed_payment')) {
     return false;
@@ -176,7 +228,7 @@ function getParcelType(statusCategory) {
 function classifyOrderItem({ status = '', orderStatus = '', returnReason = '', claimDate = null, hubArrivedAt = null, rawPayload = {} } = {}) {
   const combined = [status, orderStatus, payloadText(rawPayload)].join(' ');
 
-  if (isCancelledStatus(status) || isCancelledStatus(orderStatus)) {
+  if (isCancelledStatus(status) || isCancelledStatus(orderStatus) || isEarlyBuyerCancellationReason(returnReason)) {
     return { statusCategory: 'cancelled', parcelType: 'none', revenueCountable: false };
   }
 
