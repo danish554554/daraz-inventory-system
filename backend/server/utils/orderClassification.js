@@ -55,6 +55,51 @@ function payloadText(payload = {}) {
   return parts.join(' ').toLowerCase().replace(/[\s-]+/g, '_');
 }
 
+function isCancellationReason(reasonText = '') {
+  const normalized = safeString(reasonText).toLowerCase().replace(/[\s-]+/g, '_');
+  if (!normalized) return false;
+  return normalized.includes('seller_asked_me_to_cancel') ||
+    normalized.includes('out_of_stock') ||
+    normalized.includes('item_is_out_of_stock') ||
+    normalized.includes('buyer_asked_to_cancel') ||
+    normalized.includes('cancelled_by_buyer') ||
+    normalized.includes('cancelled_by_seller') ||
+    normalized.includes('canceled_by_buyer') ||
+    normalized.includes('canceled_by_seller') ||
+    normalized.includes('duplicate_order') ||
+    normalized.includes('sourcing_issue') ||
+    normalized.includes('change_of_mind_before_shipping') ||
+    normalized.includes('payment_cancelled') ||
+    normalized.includes('unpaid') ||
+    normalized.includes('cancel');
+}
+
+function isFailedDeliveryReason(reasonText = '') {
+  const normalized = safeString(reasonText).toLowerCase().replace(/[\s-]+/g, '_');
+  if (!normalized) return false;
+  return normalized.includes('rejected_at_doorstep') ||
+    normalized.includes('customer_rescheduled_outside_of_delivery_sla') ||
+    normalized.includes('others_missing_mapping') ||
+    normalized.includes('rescheduled_outside') ||
+    normalized.includes('outside_of_delivery_sla') ||
+    normalized.includes('delivery_sla') ||
+    normalized.includes('doorstep') ||
+    normalized.includes('refused_to_accept') ||
+    normalized.includes('refused_delivery') ||
+    normalized.includes('refused') ||
+    normalized.includes('consignee_not_available') ||
+    normalized.includes('customer_not_available') ||
+    normalized.includes('customer_unreachable') ||
+    normalized.includes('unreachable') ||
+    normalized.includes('wrong_address') ||
+    normalized.includes('address_not_found') ||
+    normalized.includes('failed_delivery') ||
+    normalized.includes('delivery_failed') ||
+    normalized.includes('delivery_attempt_failed') ||
+    normalized.includes('unable_to_deliver') ||
+    normalized.includes('undelivered');
+}
+
 function isCancelledStatus(status = '') {
   const normalized = normalizeStatus(status);
   if (!normalized) return false;
@@ -68,118 +113,17 @@ function isCancelledStatus(status = '') {
     normalized.includes('order_rejected') ||
     normalized.includes('customer_not_completed') ||
     normalized.includes('not_completed') ||
-    normalized.includes('incomplete');
-}
-
-function isEarlyBuyerCancellationReason(reason = '') {
-  const norm = safeString(reason).toLowerCase();
-  if (!norm) return false;
-  const earlyCancelPatterns = [
-    'cheaper elsewhere',
-    'found cheaper',
-    'shipping cost is too high',
-    'shipping cost',
-    'dont want this order',
-    "don't want this order",
-    'dont want this item',
-    "don't want this item",
-    'want to place a new order',
-    'place a new order',
-    'different items',
-    'more/different items',
-    'seller asked me to cancel',
-    'out of stock',
-    'delivery time is too long',
-    'delivery time',
-    'duplicate order',
-    'voucher',
-    'forgot to use voucher',
-    'change of delivery address',
-    'delivery address',
-    'change address',
-    'decided for alternative product',
-    'alternative product',
-    'order placed by mistake',
-    'buyer cancel',
-    'buyer_cancel',
-    'change of mind',
-    'changed my mind'
-  ];
-  return earlyCancelPatterns.some((pattern) => norm.includes(pattern));
-}
-
-function isFailedDeliverySemanticReason(text = '') {
-  const norm = safeString(text).toLowerCase();
-  if (!norm) return false;
-
-  const failedPatterns = [
-    // Doorstep rejection & refusal
-    'reject', 'refus', 'doorstep', 'refused to accept', 'refused cod', 'refused payment', 'refused parcel',
-    'customer rejected', 'customer refused', 'refused delivery', 'cancellation at doorstep',
-    // Customer unreachable & absent
-    'not available', 'unreachable', 'unresponsive', 'not respond', 'no response', 'not present',
-    'phone switched off', 'switched off', 'could not be contact', 'unable to contact', 'cannot be reached',
-    'another time', 'reschedule', 'attempts exhausted', 'exhausted attempts', 'did not collect',
-    // Address & Courier delivery failure
-    'incorrect address', 'incomplete address', 'wrong address', 'address issue', 'address error',
-    'location could not be found', 'not found', 'inaccessible', 'unserviceable', 'not serviceable',
-    'courier unable', 'unable to complete delivery', 'unable to deliver', 'delivery failed', 'failed delivery',
-    // Seller-related fulfillment/dispatch failure
-    'out of stock', 'seller cancel', 'failed to dispatch', 'dispatch wrong', 'incomplete order',
-    'defective item', 'damaged item', 'incorrect product info', 'incorrect shipment', 'dispatch time',
-    'failed to fulfill', 'seller fault',
-    // Fraud & Risk
-    'fraud', 'suspicious', 'voucher abuse', 'return abuse', 'refund abuse', 'excessive cancel',
-    'excessive reject', 'fake account', 'payment verification failed', 'order manipulation',
-    'review manipulation', 'off-platform', 'complaints'
-  ];
-
-  return failedPatterns.some((pattern) => norm.includes(pattern));
-}
-
-function isReturnSemanticReason(text = '') {
-  const norm = safeString(text).toLowerCase();
-  if (!norm) return false;
-
-  const returnPatterns = [
-    // Functionality, Defect & Damage
-    'not turning on', 'not turn on', 'not power on', 'wont turn on', "won't turn on", 'not working',
-    'does not work', "doesn't work", 'stopped working', 'defective', 'damaged', 'broken', 'dead on arrival',
-    'manufacturing defect', 'functionality issue', 'malfunction', 'faulty', 'quality issue',
-    'poor quality', 'bad quality', 'expired', 'used/opened', 'used item', 'opened item', 'second hand',
-    // Mismatch & Wrong item
-    'wrong item', 'wrong product', 'wrong size', 'wrong color', 'wrong variant', 'wrong quantity',
-    'does not match description', 'does not match picture', 'not as described', 'different variant',
-    'different from what', 'different product', 'not as expected', 'fake', 'counterfeit', 'replica',
-    'does not fit', "doesn't fit", 'size issue',
-    // Missing parts
-    'missing part', 'missing accessory', 'accessories missing', 'package incomplete', 'missing component',
-    'incomplete package', 'components missing', 'missing items',
-    // Buyer returns
-    'no longer want', "don't want the item", 'dont want the item', 'change of mind', 'customer return', 'buyer return'
-  ];
-
-  return returnPatterns.some((pattern) => norm.includes(pattern));
+    normalized.includes('incomplete') ||
+    isCancellationReason(status);
 }
 
 function isReturnStatus(status = '', payload = {}) {
   const statusNorm = normalizeStatus(status);
-  const pText = payloadText(payload);
-  const normalized = `${statusNorm} ${pText}`.trim();
+  const normalized = `${statusNorm} ${payloadText(payload)}`.trim();
   if (!normalized) return false;
 
-  // Semantic check for explicit return reason
-  const reasonText = `${safeString(payload?.return_reason)} ${safeString(payload?.reason)} ${safeString(payload?.cancel_reason)} ${pText}`;
-  if (isReturnSemanticReason(reasonText)) {
-    return true;
-  }
-
-  // Ignore early pre-fulfillment buyer cancellations
-  if (isEarlyBuyerCancellationReason(pText) || isEarlyBuyerCancellationReason(statusNorm) || isEarlyBuyerCancellationReason(reasonText)) {
-    return false;
-  }
-
-  if (isCancelledStatus(statusNorm) && !normalized.includes('returned') && !normalized.includes('customer_return')) {
+  // If reason or status indicates failed delivery reasons or cancellation, it is NOT a customer return
+  if (isFailedDeliveryReason(normalized) || isCancellationReason(normalized)) {
     return false;
   }
 
@@ -210,17 +154,15 @@ function isReturnStatus(status = '', payload = {}) {
 
 function isFailedDeliveryStatus(status = '', payload = {}) {
   const statusNorm = normalizeStatus(status);
-  const pText = payloadText(payload);
-  const normalized = `${statusNorm} ${pText}`.trim();
+  const normalized = `${statusNorm} ${payloadText(payload)}`.trim();
   if (!normalized) return false;
 
-  const reasonText = `${safeString(payload?.return_reason)} ${safeString(payload?.reason)} ${safeString(payload?.cancel_reason)} ${pText}`;
-  if (isFailedDeliverySemanticReason(reasonText)) {
-    return true;
+  if (isCancellationReason(normalized)) {
+    return false;
   }
 
-  if (isEarlyBuyerCancellationReason(pText) || isEarlyBuyerCancellationReason(statusNorm)) {
-    return false;
+  if (isFailedDeliveryReason(normalized)) {
+    return true;
   }
 
   if (normalized.includes('payment_failed') || normalized.includes('failed_payment')) {
@@ -244,7 +186,10 @@ function isFailedDeliveryStatus(status = '', payload = {}) {
     normalized.includes('package_scrapped') ||
     normalized.includes('logistic_facility') ||
     normalized.includes('arrived_at_facility') ||
-    normalized.includes('arrived_at_hub');
+    normalized.includes('arrived_at_hub') ||
+    normalized.includes('rejected_at_doorstep') ||
+    normalized.includes('outside_of_delivery_sla') ||
+    normalized.includes('others_missing_mapping');
 
   const genericFailedWithDeliveryContext = normalized.includes('failed') &&
     (normalized.includes('deliver') || normalized.includes('logistic') || normalized.includes('shipment') || normalized.includes('courier') || normalized.includes('package'));
@@ -293,24 +238,19 @@ function getParcelType(statusCategory) {
 function classifyOrderItem({ status = '', orderStatus = '', returnReason = '', claimDate = null, hubArrivedAt = null, rawPayload = {} } = {}) {
   const combined = [status, orderStatus, returnReason, payloadText(rawPayload)].join(' ');
 
-  if (isReturnSemanticReason(returnReason) || isReturnSemanticReason(combined)) {
-    return { statusCategory: 'return', parcelType: 'return', revenueCountable: false };
-  }
-
-  if (isFailedDeliverySemanticReason(returnReason) || isFailedDeliverySemanticReason(combined)) {
-    return { statusCategory: 'failed_delivery', parcelType: 'failed_delivery', revenueCountable: false };
-  }
-
-  if (isCancelledStatus(status) || isCancelledStatus(orderStatus) || isEarlyBuyerCancellationReason(returnReason)) {
+  // 1. Check if cancelled or has a cancellation reason (e.g. out of stock / seller asked to cancel)
+  if (isCancelledStatus(status) || isCancelledStatus(orderStatus) || isCancellationReason(returnReason)) {
     return { statusCategory: 'cancelled', parcelType: 'none', revenueCountable: false };
   }
 
-  if (returnReason || claimDate || isReturnStatus(combined, rawPayload)) {
-    return { statusCategory: 'return', parcelType: 'return', revenueCountable: false };
+  // 2. Check if Failed Delivery (by failed delivery status OR failed delivery reasons like rejected at doorstep, SLA expired, missing mapping)
+  if (isFailedDeliveryReason(returnReason) || isFailedDeliveryStatus(combined, rawPayload) || (!isReturnStatus(combined, rawPayload) && hubArrivedAt)) {
+    return { statusCategory: 'failed_delivery', parcelType: 'failed_delivery', revenueCountable: false };
   }
 
-  if (hubArrivedAt || isFailedDeliveryStatus(combined, rawPayload)) {
-    return { statusCategory: 'failed_delivery', parcelType: 'failed_delivery', revenueCountable: false };
+  // 3. Genuine Customer Returns (customer claims, defective, wrong item, etc.)
+  if (claimDate || isReturnStatus(combined, rawPayload) || (returnReason && !isCancellationReason(returnReason) && !isFailedDeliveryReason(returnReason))) {
+    return { statusCategory: 'return', parcelType: 'return', revenueCountable: false };
   }
 
   if (isSaleEligibleStatus(status) || isSaleEligibleStatus(orderStatus)) {
@@ -379,6 +319,8 @@ module.exports = {
   toDate,
   addDays,
   daysLeftUntil,
+  isCancellationReason,
+  isFailedDeliveryReason,
   isCancelledStatus,
   isReturnStatus,
   isFailedDeliveryStatus,
