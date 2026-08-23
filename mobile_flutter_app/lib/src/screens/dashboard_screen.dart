@@ -10,6 +10,7 @@ import '../services/report_generator_service.dart';
 import '../services/session_manager.dart';
 import '../widgets/app_theme.dart';
 import '../widgets/common_widgets.dart';
+import 'returns_screen.dart';
 import 'scanner_screen.dart';
 
 class DashboardScreen extends StatefulWidget {
@@ -523,7 +524,20 @@ class _DashboardScreenState extends State<DashboardScreen> {
                 Container(height: 24, width: 1, color: Colors.white.withValues(alpha: 0.15)),
                 _heroSubMetric('Orders', Formatters.quantity(totalOrders)),
                 Container(height: 24, width: 1, color: Colors.white.withValues(alpha: 0.15)),
-                _heroSubMetric('Returns', Formatters.quantity(returns)),
+                InkWell(
+                  onTap: () async {
+                    await Navigator.push(
+                      context,
+                      MaterialPageRoute<void>(builder: (context) => const ReturnsAndFailedDeliveryScreen()),
+                    );
+                    await _load(silent: true);
+                  },
+                  borderRadius: BorderRadius.circular(8),
+                  child: Padding(
+                    padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                    child: _heroSubMetric('Returns', '${Formatters.quantity(returns)} ➔'),
+                  ),
+                ),
               ],
             ),
           ),
@@ -620,49 +634,17 @@ class _DashboardScreenState extends State<DashboardScreen> {
             const SizedBox(width: 10),
             Expanded(
               child: _quickActionTile(
-                title: 'Returns',
-                subtitle: 'Scan Claims',
+                title: 'Returns & Failed Delivery',
+                subtitle: 'Hub Collection & Deadlines',
                 icon: Icons.assignment_return_rounded,
                 color: AppTheme.warning,
                 background: AppTheme.warningSoft,
                 onTap: () async {
-                  await ApiClient.instance.post('/daraz-sync/scan-returns', body: <String, dynamic>{'history_days': 60});
+                  await Navigator.push(
+                    context,
+                    MaterialPageRoute<void>(builder: (context) => const ReturnsAndFailedDeliveryScreen()),
+                  );
                   await _load(silent: true);
-                  if (!context.mounted) return;
-                  showAppSnackBar(context, 'Return orders scanned from all stores.');
-                },
-              ),
-            ),
-          ],
-        ),
-        const SizedBox(height: 10),
-        Row(
-          children: <Widget>[
-            Expanded(
-              child: _quickActionTile(
-                title: 'Failed Delivery',
-                subtitle: '6-Day Hub Watch',
-                icon: Icons.local_shipping_rounded,
-                color: AppTheme.danger,
-                background: AppTheme.dangerSoft,
-                onTap: () async {
-                  await ApiClient.instance.post('/daraz-sync/scan-failed-delivery', body: <String, dynamic>{'history_days': 60});
-                  await _load(silent: true);
-                  if (!context.mounted) return;
-                  showAppSnackBar(context, 'Failed delivery records scanned.');
-                },
-              ),
-            ),
-            const SizedBox(width: 10),
-            Expanded(
-              child: _quickActionTile(
-                title: 'Add Stock',
-                subtitle: 'Quick Audit',
-                icon: Icons.add_business_rounded,
-                color: AppTheme.info,
-                background: AppTheme.infoSoft,
-                onTap: () {
-                  showAppSnackBar(context, 'Switch to Stock tab to audit or add inventory.');
                 },
               ),
             ),
