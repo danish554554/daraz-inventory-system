@@ -52,7 +52,16 @@ class _ReturnsAndFailedDeliveryScreenState extends State<ReturnsAndFailedDeliver
       final rawList = JsonReaders.list(res['items']);
       final parsed = rawList
           .map((e) => CentralOrderItem.fromJson(JsonReaders.map(e)))
-          .where((item) => (item.isReturn || item.isFailedDelivery || item.hubArrivedAt != null || item.logisticFacilityAt != null) && !_isEarlyBuyerCancellation(item))
+          .where((item) {
+            if (_isEarlyBuyerCancellation(item)) return false;
+            final reason = item.returnReason.toLowerCase();
+            return item.isReturn ||
+                item.isFailedDelivery ||
+                _isReturnSemanticReason(reason) ||
+                _isFailedDeliverySemanticReason(reason) ||
+                item.hubArrivedAt != null ||
+                item.logisticFacilityAt != null;
+          })
           .toList();
 
       if (mounted) {
@@ -85,9 +94,64 @@ class _ReturnsAndFailedDeliveryScreenState extends State<ReturnsAndFailedDeliver
     }
   }
 
+  bool _isFailedDeliverySemanticReason(String text) {
+    final norm = text.toLowerCase().trim();
+    if (norm.isEmpty) return false;
+
+    const failedPatterns = <String>[
+      'reject', 'refus', 'doorstep', 'refused to accept', 'refused cod', 'refused payment', 'refused parcel',
+      'customer rejected', 'customer refused', 'refused delivery', 'cancellation at doorstep',
+      'not available', 'unreachable', 'unresponsive', 'not respond', 'no response', 'not present',
+      'phone switched off', 'switched off', 'could not be contact', 'unable to contact', 'cannot be reached',
+      'another time', 'reschedule', 'attempts exhausted', 'exhausted attempts', 'did not collect',
+      'incorrect address', 'incomplete address', 'wrong address', 'address issue', 'address error',
+      'location could not be found', 'not found', 'inaccessible', 'unserviceable', 'not serviceable',
+      'courier unable', 'unable to complete delivery', 'unable to deliver', 'delivery failed', 'failed delivery',
+      'out of stock', 'seller cancel', 'failed to dispatch', 'dispatch wrong', 'incomplete order',
+      'defective item', 'damaged item', 'incorrect product info', 'incorrect shipment', 'dispatch time',
+      'failed to fulfill', 'seller fault', 'fraud', 'suspicious', 'voucher abuse', 'return abuse',
+      'refund abuse', 'excessive cancel', 'excessive reject', 'fake account', 'payment verification failed',
+      'order manipulation', 'review manipulation', 'off-platform', 'complaints'
+    ];
+
+    for (final pattern in failedPatterns) {
+      if (norm.contains(pattern)) return true;
+    }
+    return false;
+  }
+
+  bool _isReturnSemanticReason(String text) {
+    final norm = text.toLowerCase().trim();
+    if (norm.isEmpty) return false;
+
+    const returnPatterns = <String>[
+      'not turning on', 'not turn on', 'not power on', 'wont turn on', "won't turn on", 'not working',
+      'does not work', "doesn't work", 'stopped working', 'defective', 'damaged', 'broken', 'dead on arrival',
+      'manufacturing defect', 'functionality issue', 'malfunction', 'faulty', 'quality issue',
+      'poor quality', 'bad quality', 'expired', 'used/opened', 'used item', 'opened item', 'second hand',
+      'wrong item', 'wrong product', 'wrong size', 'wrong color', 'wrong variant', 'wrong quantity',
+      'does not match description', 'does not match picture', 'not as described', 'different variant',
+      'different from what', 'different product', 'not as expected', 'fake', 'counterfeit', 'replica',
+      'does not fit', "doesn't fit", 'size issue', 'missing part', 'missing accessory',
+      'accessories missing', 'package incomplete', 'missing component', 'incomplete package',
+      'components missing', 'missing items', 'no longer want', "don't want the item", 'dont want the item',
+      'change of mind', 'customer return', 'buyer return'
+    ];
+
+    for (final pattern in returnPatterns) {
+      if (norm.contains(pattern)) return true;
+    }
+    return false;
+  }
+
   bool _isEarlyBuyerCancellation(CentralOrderItem item) {
     final reason = item.returnReason.toLowerCase().trim();
     final status = (item.statusCategory.isNotEmpty ? item.statusCategory : item.orderNumber).toLowerCase();
+
+    // If explicit return or failed delivery reason matches semantically, it's not a simple pre-dispatch cancel
+    if (_isReturnSemanticReason(reason) || _isFailedDeliverySemanticReason(reason)) {
+      return false;
+    }
 
     // If order was cancelled at initial stage without arriving at hub
     if (status.contains('cancel') && !item.isFailedDelivery && item.hubArrivedAt == null) {
@@ -167,8 +231,12 @@ class _ReturnsAndFailedDeliveryScreenState extends State<ReturnsAndFailedDeliver
       // Exclude early customer cancellations
       if (_isEarlyBuyerCancellation(item)) return false;
 
-      final isReturn = item.isReturn;
-      final isFailed = item.isFailedDelivery || (!item.isReturn && (item.hubArrivedAt != null || item.logisticFacilityAt != null));
+      final reason = item.returnReason.toLowerCase();
+      final hasReturnReason = _isReturnSemanticReason(reason);
+      final hasFailedReason = _isFailedDeliverySemanticReason(reason);
+
+      final isReturn = item.isReturn || hasReturnReason;
+      final isFailed = (!isReturn && (item.isFailedDelivery || hasFailedReason || item.hubArrivedAt != null || item.logisticFacilityAt != null));
       final isCompleted = _isItemAlreadyReturned(item);
       final daysLeft = item.daysLeftToCollect ?? 99;
       final isScrapRisk = daysLeft <= 2 || item.collectionNotificationLevel == 'overdue' || item.collectionNotificationLevel == 'deadline';
