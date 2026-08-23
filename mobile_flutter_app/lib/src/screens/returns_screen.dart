@@ -20,7 +20,11 @@ class _ReturnsAndFailedDeliveryScreenState extends State<ReturnsAndFailedDeliver
   bool _syncing = false;
   String? _error;
   String _search = '';
-  String _activeTab = 'all'; // all, failed_delivery, returns, scrap_risk, collected
+  
+  // Primary sections: 'failed_delivery' or 'returns'
+  String _primarySection = 'failed_delivery'; 
+  // Sub-filter: 'active', 'scrap_risk', 'collected'
+  String _subFilter = 'active';
 
   List<CentralOrderItem> _items = <CentralOrderItem>[];
 
@@ -41,7 +45,7 @@ class _ReturnsAndFailedDeliveryScreenState extends State<ReturnsAndFailedDeliver
     try {
       final res = await ApiClient.instance.get(
         '/daraz-sync/order-items',
-        queryParameters: <String, dynamic>{'limit': 150},
+        queryParameters: <String, dynamic>{'limit': 200},
         bypassCache: true,
       ) as Map<String, dynamic>;
 
@@ -81,13 +85,23 @@ class _ReturnsAndFailedDeliveryScreenState extends State<ReturnsAndFailedDeliver
     }
   }
 
+  bool _isItemAlreadyReturned(CentralOrderItem item) {
+    if (item.isCollected) return true;
+    final status = (item.statusCategory.isNotEmpty ? item.statusCategory : item.orderNumber).toLowerCase();
+    final itemStatus = item.hubName.toLowerCase();
+    return status.contains('successfully returned') ||
+        status.contains('delivered_to_merchant') ||
+        itemStatus.contains('successfully returned') ||
+        itemStatus.contains('returned to seller');
+  }
+
   Future<void> _markItemCollected(CentralOrderItem item) async {
     try {
       final id = item.id;
       if (id.isEmpty) return;
       await ApiClient.instance.post('/daraz-sync/order-items/$id/mark-received', body: <String, dynamic>{});
       await _load(silent: true);
-      if (mounted) showAppSnackBar(context, 'Marked parcel as collected from Daraz hub.');
+      if (mounted) showAppSnackBar(context, 'Order #${item.orderNumber} marked as received/collected.');
     } on ApiException catch (e) {
       if (mounted) showAppSnackBar(context, e.message, error: true);
     } catch (_) {
@@ -97,24 +111,36 @@ class _ReturnsAndFailedDeliveryScreenState extends State<ReturnsAndFailedDeliver
 
   List<CentralOrderItem> get _filteredItems {
     final query = _search.trim().toLowerCase();
+
     return _items.where((item) {
       final isReturn = item.isReturn;
-      final isFailed = item.isFailedDelivery;
+      final isFailed = item.isFailedDelivery || (!item.isReturn && (item.hubArrivedAt != null || item.logisticFacilityAt != null));
+      final isCompleted = _isItemAlreadyReturned(item);
       final daysLeft = item.daysLeftToCollect ?? 99;
       final isScrapRisk = daysLeft <= 2 || item.collectionNotificationLevel == 'overdue' || item.collectionNotificationLevel == 'deadline';
-      final isCollected = item.isCollected;
 
-      if (_activeTab == 'failed_delivery' && !isFailed) return false;
-      if (_activeTab == 'returns' && !isReturn) return false;
-      if (_activeTab == 'scrap_risk' && (!isScrapRisk || isCollected)) return false;
-      if (_activeTab == 'collected' && !isCollected) return false;
+      // 1. Separate by Primary Section
+      if (_primarySection == 'failed_delivery' && !isFailed) return false;
+      if (_primarySection == 'returns' && !isReturn) return false;
 
+      // 2. Sub-filter: Active (auto-hide completed), Scrap Risk, or Collected Archive
+      if (_subFilter == 'active') {
+        // Automatically exclude / remove orders that have been successfully returned
+        if (isCompleted) return false;
+      } else if (_subFilter == 'scrap_risk') {
+        if (isCompleted || !isScrapRisk) return false;
+      } else if (_subFilter == 'collected') {
+        if (!isCompleted) return false;
+      }
+
+      // 3. Search query match
       if (query.isNotEmpty) {
         final matches = item.title.toLowerCase().contains(query) ||
             item.orderNumber.toLowerCase().contains(query) ||
             item.sellerSku.toLowerCase().contains(query) ||
             item.hubName.toLowerCase().contains(query) ||
-            item.storeName.toLowerCase().contains(query);
+            item.storeName.toLowerCase().contains(query) ||
+            item.returnReason.toLowerCase().contains(query);
         if (!matches) return false;
       }
 
@@ -124,13 +150,14 @@ class _ReturnsAndFailedDeliveryScreenState extends State<ReturnsAndFailedDeliver
 
   @override
   Widget build(BuildContext context) {
-    final failedCount = _items.where((i) => i.isFailedDelivery && !i.isCollected).length;
-    final returnsCount = _items.where((i) => i.isReturn && !i.isCollected).length;
-    final scrapRiskCount = _items.where((i) => !i.isCollected && ((i.daysLeftToCollect ?? 99) <= 2 || i.collectionNotificationLevel == 'overdue')).length;
+    // Calculate counts for active items
+    final activeFailedCount = _items.where((i) => (i.isFailedDelivery || !i.isReturn) && !_isItemAlreadyReturned(i)).length;
+    final activeReturnsCount = _items.where((i) => i.isReturn && !_isItemAlreadyReturned(i)).length;
+    final urgentScrapRiskCount = _items.where((i) => !_isItemAlreadyReturned(i) && ((i.daysLeftToCollect ?? 99) <= 2 || i.collectionNotificationLevel == 'overdue')).length;
 
     return Scaffold(
       body: _loading
-          ? const AppLoader(label: 'Loading hub parcels and returns...')
+          ? const AppLoader(label: 'Loading returns and hub failed delivery orders...')
           : _error != null
               ? SafeArea(
                   child: Padding(
@@ -149,7 +176,7 @@ class _ReturnsAndFailedDeliveryScreenState extends State<ReturnsAndFailedDeliver
                     children: <Widget>[
                       SectionHeader(
                         title: 'Returns & Failed Delivery',
-                        subtitle: 'Monitor 6-day scrap deadlines, hub pickups & customer claims',
+                        subtitle: 'Separate tracking for Hub Failed Delivery and Customer Return Claims',
                         action: Row(
                           mainAxisSize: MainAxisSize.min,
                           children: <Widget>[
@@ -178,14 +205,16 @@ class _ReturnsAndFailedDeliveryScreenState extends State<ReturnsAndFailedDeliver
                         ),
                       ),
                       const SizedBox(height: 14),
-                      _statsSummaryGrid(failedCount, returnsCount, scrapRiskCount),
-                      const SizedBox(height: 16),
-                      _filterTabs(failedCount, returnsCount, scrapRiskCount),
+                      _primarySegmentSelector(activeFailedCount, activeReturnsCount),
+                      const SizedBox(height: 14),
+                      _subFilterChips(urgentScrapRiskCount),
                       const SizedBox(height: 12),
                       TextField(
-                        decoration: const InputDecoration(
-                          hintText: 'Search order #, product, SKU, or hub...',
-                          prefixIcon: Icon(Icons.search_rounded),
+                        decoration: InputDecoration(
+                          hintText: _primarySection == 'failed_delivery'
+                              ? 'Search failed delivery by title, order #, or hub...'
+                              : 'Search customer return claims by product or reason...',
+                          prefixIcon: const Icon(Icons.search_rounded),
                           isDense: true,
                         ),
                         onChanged: (val) => setState(() => _search = val),
@@ -193,167 +222,258 @@ class _ReturnsAndFailedDeliveryScreenState extends State<ReturnsAndFailedDeliver
                       const SizedBox(height: 14),
                       if (_filteredItems.isEmpty)
                         EmptyState(
-                          title: _items.isEmpty ? 'No Returns or Failed Deliveries' : 'No matching records',
-                          message: _items.isEmpty
-                              ? 'Your connected Daraz stores currently have 0 pending return claims or hub failed delivery parcels.'
-                              : 'Try adjusting your search terms or filter tab.',
+                          title: _primarySection == 'failed_delivery'
+                              ? (_subFilter == 'active' ? 'No Pending Failed Deliveries 🎉' : 'No records found')
+                              : (_subFilter == 'active' ? 'No Customer Returns Pending 🎉' : 'No return claims found'),
+                          message: _subFilter == 'active'
+                              ? 'All packages have either been successfully returned to your warehouse or there are no new orders at the Daraz hub.'
+                              : 'Try adjusting your search query or switching tabs.',
                           icon: Icons.check_circle_outline_rounded,
                         )
                       else
-                        ..._filteredItems.map(_buildParcelCard),
+                        ..._filteredItems.map(_buildSeparateParcelCard),
                     ],
                   ),
                 ),
     );
   }
 
-  Widget _statsSummaryGrid(int failedCount, int returnsCount, int scrapRiskCount) {
-    final width = MediaQuery.of(context).size.width;
-    final itemWidth = (width - 44) / 2;
+  Widget _primarySegmentSelector(int failedCount, int returnsCount) {
+    final isDark = AppTheme.isDark(context);
+    final isFailed = _primarySection == 'failed_delivery';
 
-    return Wrap(
-      spacing: 12,
-      runSpacing: 12,
-      children: <Widget>[
-        SizedBox(
-          width: itemWidth,
-          child: MetricCard(
-            label: 'Failed Delivery',
-            value: '$failedCount',
-            icon: Icons.local_shipping_outlined,
-            tint: AppTheme.dangerSoft,
-            iconColor: AppTheme.danger,
-            caption: '6-day scrap tracking',
-          ),
-        ),
-        SizedBox(
-          width: itemWidth,
-          child: MetricCard(
-            label: 'Return Claims',
-            value: '$returnsCount',
-            icon: Icons.assignment_return_outlined,
-            tint: AppTheme.warningSoft,
-            iconColor: AppTheme.warning,
-            caption: 'Customer claims',
-          ),
-        ),
-        SizedBox(
-          width: itemWidth,
-          child: MetricCard(
-            label: 'Urgent Scrap Risk',
-            value: '$scrapRiskCount',
-            icon: Icons.warning_amber_rounded,
-            tint: scrapRiskCount > 0 ? AppTheme.dangerSoft : AppTheme.successSoft,
-            iconColor: scrapRiskCount > 0 ? AppTheme.danger : AppTheme.success,
-            caption: scrapRiskCount > 0 ? 'Collect within 48h!' : 'All safe',
-          ),
-        ),
-        SizedBox(
-          width: itemWidth,
-          child: MetricCard(
-            label: 'Total Monitored',
-            value: '${_items.length}',
-            icon: Icons.inventory_2_outlined,
-            tint: AppTheme.infoSoft,
-            iconColor: AppTheme.info,
-            caption: 'Live records',
-          ),
-        ),
-      ],
-    );
-  }
-
-  Widget _filterTabs(int failedCount, int returnsCount, int scrapRiskCount) {
-    return SingleChildScrollView(
-      scrollDirection: Axis.horizontal,
+    return Container(
+      padding: const EdgeInsets.all(4),
+      decoration: BoxDecoration(
+        color: isDark ? const Color(0xFF1E293B) : const Color(0xFFF1F5F9),
+        borderRadius: BorderRadius.circular(16),
+        border: Border.all(color: AppTheme.borderColor(context)),
+      ),
       child: Row(
         children: <Widget>[
-          _tabChip('all', 'All (${_items.length})'),
-          const SizedBox(width: 8),
-          _tabChip('failed_delivery', 'Failed Delivery ($failedCount)'),
-          const SizedBox(width: 8),
-          _tabChip('returns', 'Returns ($returnsCount)'),
-          if (scrapRiskCount > 0) ...<Widget>[
-            const SizedBox(width: 8),
-            _tabChip('scrap_risk', '🚨 Scrap Risk ($scrapRiskCount)'),
-          ],
-          const SizedBox(width: 8),
-          _tabChip('collected', 'Collected'),
+          Expanded(
+            child: InkWell(
+              onTap: () => setState(() => _primarySection = 'failed_delivery'),
+              borderRadius: BorderRadius.circular(12),
+              child: Container(
+                padding: const EdgeInsets.symmetric(vertical: 10),
+                decoration: BoxDecoration(
+                  color: isFailed ? (isDark ? const Color(0xFF0F172A) : Colors.white) : Colors.transparent,
+                  borderRadius: BorderRadius.circular(12),
+                  boxShadow: isFailed
+                      ? <BoxShadow>[
+                          BoxShadow(color: Colors.black.withValues(alpha: 0.1), blurRadius: 4, offset: const Offset(0, 2)),
+                        ]
+                      : null,
+                ),
+                child: Row(
+                  mainAxisAlignment: MainAxisAlignment.center,
+                  children: <Widget>[
+                    Icon(
+                      Icons.local_shipping_rounded,
+                      size: 16,
+                      color: isFailed ? AppTheme.primary : AppTheme.textMutedColor(context),
+                    ),
+                    const SizedBox(width: 6),
+                    Text(
+                      'Failed Delivery',
+                      style: TextStyle(
+                        fontSize: 12,
+                        fontWeight: FontWeight.w900,
+                        color: isFailed ? AppTheme.textPrimaryColor(context) : AppTheme.textMutedColor(context),
+                      ),
+                    ),
+                    const SizedBox(width: 6),
+                    Container(
+                      padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                      decoration: BoxDecoration(
+                        color: isFailed ? AppTheme.dangerSoft : (isDark ? Colors.black38 : Colors.grey.shade300),
+                        borderRadius: BorderRadius.circular(10),
+                      ),
+                      child: Text(
+                        '$failedCount',
+                        style: TextStyle(
+                          fontSize: 10,
+                          fontWeight: FontWeight.w900,
+                          color: isFailed ? AppTheme.danger : AppTheme.textMutedColor(context),
+                        ),
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ),
+          ),
+          Expanded(
+            child: InkWell(
+              onTap: () => setState(() => _primarySection = 'returns'),
+              borderRadius: BorderRadius.circular(12),
+              child: Container(
+                padding: const EdgeInsets.symmetric(vertical: 10),
+                decoration: BoxDecoration(
+                  color: !isFailed ? (isDark ? const Color(0xFF0F172A) : Colors.white) : Colors.transparent,
+                  borderRadius: BorderRadius.circular(12),
+                  boxShadow: !isFailed
+                      ? <BoxShadow>[
+                          BoxShadow(color: Colors.black.withValues(alpha: 0.1), blurRadius: 4, offset: const Offset(0, 2)),
+                        ]
+                      : null,
+                ),
+                child: Row(
+                  mainAxisAlignment: MainAxisAlignment.center,
+                  children: <Widget>[
+                    Icon(
+                      Icons.assignment_return_rounded,
+                      size: 16,
+                      color: !isFailed ? AppTheme.warning : AppTheme.textMutedColor(context),
+                    ),
+                    const SizedBox(width: 6),
+                    Text(
+                      'Customer Returns',
+                      style: TextStyle(
+                        fontSize: 12,
+                        fontWeight: FontWeight.w900,
+                        color: !isFailed ? AppTheme.textPrimaryColor(context) : AppTheme.textMutedColor(context),
+                      ),
+                    ),
+                    const SizedBox(width: 6),
+                    Container(
+                      padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                      decoration: BoxDecoration(
+                        color: !isFailed ? AppTheme.warningSoft : (isDark ? Colors.black38 : Colors.grey.shade300),
+                        borderRadius: BorderRadius.circular(10),
+                      ),
+                      child: Text(
+                        '$returnsCount',
+                        style: TextStyle(
+                          fontSize: 10,
+                          fontWeight: FontWeight.w900,
+                          color: !isFailed ? AppTheme.warning : AppTheme.textMutedColor(context),
+                        ),
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ),
+          ),
         ],
       ),
     );
   }
 
-  Widget _tabChip(String key, String label) {
-    final selected = _activeTab == key;
+  Widget _subFilterChips(int urgentScrapRiskCount) {
+    return SingleChildScrollView(
+      scrollDirection: Axis.horizontal,
+      child: Row(
+        children: <Widget>[
+          _filterPill('active', 'To Collect / In Center'),
+          if (urgentScrapRiskCount > 0 && _primarySection == 'failed_delivery') ...<Widget>[
+            const SizedBox(width: 8),
+            _filterPill('scrap_risk', '🚨 Scrap Risk ($urgentScrapRiskCount)'),
+          ],
+          const SizedBox(width: 8),
+          _filterPill('collected', '📁 Returned Archive'),
+        ],
+      ),
+    );
+  }
+
+  Widget _filterPill(String key, String label) {
+    final selected = _subFilter == key;
     final isDark = AppTheme.isDark(context);
     return ChoiceChip(
       selected: selected,
       label: Text(label),
-      onSelected: (_) => setState(() => _activeTab = key),
+      onSelected: (_) => setState(() => _subFilter = key),
       selectedColor: AppTheme.primary,
       backgroundColor: isDark ? const Color(0xFF1E293B) : Colors.white,
       labelStyle: TextStyle(
         color: selected ? Colors.white : (isDark ? Colors.white70 : AppTheme.textPrimary),
-        fontSize: 12,
+        fontSize: 11,
         fontWeight: FontWeight.w900,
       ),
       side: BorderSide(color: selected ? AppTheme.primary : AppTheme.borderColor(context)),
-      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(24)),
+      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
     );
   }
 
-  Widget _buildParcelCard(CentralOrderItem item) {
-    final collected = item.isCollected;
+  Widget _buildSeparateParcelCard(CentralOrderItem item) {
+    final isReturn = item.isReturn;
+    final isCompleted = _isItemAlreadyReturned(item);
     final daysLeft = item.daysLeftToCollect;
-    final hubName = item.hubName.isNotEmpty ? item.hubName : 'Daraz Logistics Facility';
+    final hubName = item.hubName.isNotEmpty ? item.hubName : 'Daraz Logistics Center';
     final arrivalDate = item.hubArrivedAt ?? item.logisticFacilityAt;
     final deadlineDate = item.collectionDeadlineAt;
 
-    // Determine status badge color and label
-    Color chipColor = AppTheme.info;
-    Color chipSoftColor = AppTheme.infoSoft;
-    String limitText = 'Tracking';
+    // Calculate deadline & scrap urgency
+    Color countdownColor = AppTheme.info;
+    Color countdownSoftColor = AppTheme.infoSoft;
+    String limitText = 'In Transit';
 
-    if (collected) {
-      chipColor = AppTheme.success;
-      chipSoftColor = AppTheme.successSoft;
-      limitText = 'Collected';
+    if (isCompleted) {
+      countdownColor = AppTheme.success;
+      countdownSoftColor = AppTheme.successSoft;
+      limitText = 'Successfully Returned to Seller';
     } else if (item.collectionNotificationLevel == 'overdue' || (daysLeft != null && daysLeft < 0)) {
-      chipColor = AppTheme.danger;
-      chipSoftColor = AppTheme.dangerSoft;
+      countdownColor = AppTheme.danger;
+      countdownSoftColor = AppTheme.dangerSoft;
       limitText = '🚨 Overdue (Scrap Risk)';
     } else if (item.collectionNotificationLevel == 'deadline' || daysLeft == 0) {
-      chipColor = AppTheme.danger;
-      chipSoftColor = AppTheme.dangerSoft;
-      limitText = '🚨 Due Today (Scrap Risk)';
+      countdownColor = AppTheme.danger;
+      countdownSoftColor = AppTheme.dangerSoft;
+      limitText = '🚨 Due Today (Destruction Risk)';
     } else if (daysLeft != null && daysLeft == 1) {
-      chipColor = AppTheme.danger;
-      chipSoftColor = AppTheme.dangerSoft;
-      limitText = '⚠️ 1 Day Left to Collect';
+      countdownColor = AppTheme.danger;
+      countdownSoftColor = AppTheme.dangerSoft;
+      limitText = '⚠️ 1 Day Left Before Destroy';
     } else if (daysLeft != null && daysLeft <= 3) {
-      chipColor = AppTheme.warning;
-      chipSoftColor = AppTheme.warningSoft;
+      countdownColor = AppTheme.warning;
+      countdownSoftColor = AppTheme.warningSoft;
       limitText = '⚠️ $daysLeft Days Left (6-Day Limit)';
     } else if (daysLeft != null) {
-      chipColor = AppTheme.info;
-      chipSoftColor = AppTheme.infoSoft;
-      limitText = '📦 $daysLeft Days Left';
+      countdownColor = AppTheme.info;
+      countdownSoftColor = AppTheme.infoSoft;
+      limitText = '📦 $daysLeft Days Left at Hub';
     }
 
     return Padding(
-      padding: const EdgeInsets.only(bottom: 10),
+      padding: const EdgeInsets.only(bottom: 12),
       child: AppCard(
-        padding: const EdgeInsets.all(13),
+        padding: const EdgeInsets.all(14),
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: <Widget>[
+            // Product Header Row: High-Res Image & Clear Title for Easy Comparison
             Row(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: <Widget>[
-                ProductImageBox(
-                  imageUrl: item.imageUrl,
-                  icon: item.isReturn ? Icons.assignment_return_outlined : Icons.local_shipping_outlined,
+                Container(
+                  width: 64,
+                  height: 64,
+                  decoration: BoxDecoration(
+                    color: AppTheme.softGreyColor(context),
+                    borderRadius: BorderRadius.circular(12),
+                    border: Border.all(color: AppTheme.borderColor(context)),
+                  ),
+                  child: ClipRRect(
+                    borderRadius: BorderRadius.circular(12),
+                    child: item.imageUrl.isNotEmpty
+                        ? Image.network(
+                            item.imageUrl,
+                            fit: BoxFit.cover,
+                            errorBuilder: (_, __, ___) => Icon(
+                              isReturn ? Icons.assignment_return_outlined : Icons.local_shipping_outlined,
+                              color: AppTheme.textMutedColor(context),
+                              size: 28,
+                            ),
+                          )
+                        : Icon(
+                            isReturn ? Icons.assignment_return_outlined : Icons.local_shipping_outlined,
+                            color: AppTheme.textMutedColor(context),
+                            size: 28,
+                          ),
+                  ),
                 ),
                 const SizedBox(width: 12),
                 Expanded(
@@ -361,23 +481,24 @@ class _ReturnsAndFailedDeliveryScreenState extends State<ReturnsAndFailedDeliver
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: <Widget>[
                       Text(
-                        item.title,
+                        item.title.isNotEmpty ? item.title : 'Order Item #${item.orderNumber}',
                         maxLines: 2,
                         overflow: TextOverflow.ellipsis,
                         style: TextStyle(
                           fontWeight: FontWeight.w900,
-                          fontSize: 13,
+                          fontSize: 14,
+                          height: 1.25,
                           color: AppTheme.textPrimaryColor(context),
                         ),
                       ),
-                      const SizedBox(height: 3),
+                      const SizedBox(height: 4),
                       Text(
                         'Order #${item.orderNumber.isNotEmpty ? item.orderNumber : item.externalOrderItemId} · ${item.storeName}',
                         maxLines: 1,
                         overflow: TextOverflow.ellipsis,
                         style: TextStyle(
                           color: AppTheme.textPrimaryColor(context),
-                          fontSize: 11,
+                          fontSize: 12,
                           fontWeight: FontWeight.w800,
                         ),
                       ),
@@ -393,12 +514,13 @@ class _ReturnsAndFailedDeliveryScreenState extends State<ReturnsAndFailedDeliver
                     ],
                   ),
                 ),
-                const SizedBox(width: 8),
-                StatusChip(label: item.isReturn ? 'Return' : 'Failed Delivery', color: chipColor, softColor: chipSoftColor),
               ],
             ),
-            const SizedBox(height: 10),
+            const SizedBox(height: 12),
+
+            // Hub Location & Center Arrival Status
             Container(
+              width: double.infinity,
               padding: const EdgeInsets.all(10),
               decoration: BoxDecoration(
                 color: AppTheme.softGreyColor(context),
@@ -430,57 +552,66 @@ class _ReturnsAndFailedDeliveryScreenState extends State<ReturnsAndFailedDeliver
                     mainAxisAlignment: MainAxisAlignment.spaceBetween,
                     children: <Widget>[
                       Text(
-                        'Arrived: ${arrivalDate != null ? Formatters.date(arrivalDate) : "In Transit"}',
+                        arrivalDate != null ? 'Arrived at Center: ${Formatters.date(arrivalDate)}' : 'Status: In Transit to Hub',
                         style: TextStyle(color: AppTheme.textMutedColor(context), fontSize: 11, fontWeight: FontWeight.w700),
                       ),
-                      if (deadlineDate != null)
+                      if (deadlineDate != null && !isCompleted)
                         Text(
                           'Deadline: ${Formatters.date(deadlineDate)}',
-                          style: TextStyle(color: AppTheme.textMutedColor(context), fontSize: 11, fontWeight: FontWeight.w700),
+                          style: const TextStyle(color: AppTheme.danger, fontSize: 11, fontWeight: FontWeight.w800),
                         ),
                     ],
                   ),
-                  if (item.returnReason.isNotEmpty) ...<Widget>[
-                    const SizedBox(height: 4),
-                    Text(
-                      'Reason: ${item.returnReason}',
-                      maxLines: 1,
-                      overflow: TextOverflow.ellipsis,
-                      style: TextStyle(color: AppTheme.textMutedColor(context), fontSize: 11, fontStyle: FontStyle.italic),
+                  if (isReturn && item.returnReason.isNotEmpty) ...<Widget>[
+                    const SizedBox(height: 6),
+                    Container(
+                      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                      decoration: BoxDecoration(
+                        color: AppTheme.warningSoft,
+                        borderRadius: BorderRadius.circular(6),
+                      ),
+                      child: Text(
+                        'Customer Claim Reason: ${item.returnReason}',
+                        style: const TextStyle(color: AppTheme.warning, fontSize: 10, fontWeight: FontWeight.w800),
+                      ),
                     ),
                   ],
                 ],
               ),
             ),
-            const SizedBox(height: 10),
+            const SizedBox(height: 12),
+
+            // Bottom Action & Countdown Limit Row
             Row(
               mainAxisAlignment: MainAxisAlignment.spaceBetween,
               children: <Widget>[
                 Container(
-                  padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
+                  padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
                   decoration: BoxDecoration(
-                    color: chipSoftColor,
+                    color: countdownSoftColor,
                     borderRadius: BorderRadius.circular(8),
-                    border: Border.all(color: chipColor.withValues(alpha: 0.3)),
+                    border: Border.all(color: countdownColor.withValues(alpha: 0.3)),
                   ),
                   child: Text(
                     limitText,
                     style: TextStyle(
-                      color: chipColor,
+                      color: countdownColor,
                       fontSize: 11,
                       fontWeight: FontWeight.w900,
                     ),
                   ),
                 ),
-                if (!collected)
-                  FilledButton.tonalIcon(
+                if (!isCompleted)
+                  FilledButton.icon(
                     style: FilledButton.styleFrom(
+                      backgroundColor: isReturn ? AppTheme.warning : AppTheme.primary,
+                      foregroundColor: Colors.white,
                       visualDensity: VisualDensity.compact,
-                      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+                      padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
                       shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
                     ),
                     onPressed: () => _markItemCollected(item),
-                    icon: const Icon(Icons.inventory_rounded, size: 14),
+                    icon: const Icon(Icons.check_circle_outline_rounded, size: 15),
                     label: const Text('Mark Collected', style: TextStyle(fontSize: 11, fontWeight: FontWeight.w900)),
                   )
                 else
@@ -488,7 +619,7 @@ class _ReturnsAndFailedDeliveryScreenState extends State<ReturnsAndFailedDeliver
                     children: <Widget>[
                       Icon(Icons.check_circle_rounded, size: 16, color: AppTheme.success),
                       SizedBox(width: 4),
-                      Text('Received', style: TextStyle(color: AppTheme.success, fontSize: 12, fontWeight: FontWeight.w900)),
+                      Text('Collected', style: TextStyle(color: AppTheme.success, fontSize: 12, fontWeight: FontWeight.w900)),
                     ],
                   ),
               ],

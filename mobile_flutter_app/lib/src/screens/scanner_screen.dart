@@ -1,4 +1,4 @@
-﻿import 'package:flutter/material.dart';
+import 'package:flutter/material.dart';
 import 'package:mobile_scanner/mobile_scanner.dart';
 
 import '../models/app_models.dart';
@@ -180,28 +180,49 @@ class _ScannerScreenState extends State<ScannerScreen> {
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: <Widget>[
-                    Text(
-                      order.productTitle,
-                      style: const TextStyle(fontWeight: FontWeight.w900, fontSize: 13),
+                    Row(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: <Widget>[
+                        ProductImageBox(
+                          imageUrl: order.productImageUrl,
+                          icon: isReturn ? Icons.assignment_return_outlined : Icons.local_shipping_outlined,
+                          size: 52,
+                        ),
+                        const SizedBox(width: 12),
+                        Expanded(
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: <Widget>[
+                              Text(
+                                order.productTitle,
+                                maxLines: 2,
+                                overflow: TextOverflow.ellipsis,
+                                style: TextStyle(fontWeight: FontWeight.w900, fontSize: 13, color: AppTheme.textPrimaryColor(context)),
+                              ),
+                              const SizedBox(height: 4),
+                              Text(
+                                'Order #${order.orderNumber.isEmpty ? order.externalOrderId : order.orderNumber} · ${order.storeName}',
+                                style: TextStyle(fontSize: 11, color: AppTheme.textMutedColor(context), fontWeight: FontWeight.w800),
+                              ),
+                            ],
+                          ),
+                        ),
+                      ],
                     ),
-                    const SizedBox(height: 6),
+                    const SizedBox(height: 10),
                     Row(
                       mainAxisAlignment: MainAxisAlignment.spaceBetween,
                       children: <Widget>[
                         Text(
-                          'Store: ${order.storeName}',
-                          style: TextStyle(fontSize: 11, color: AppTheme.textMutedColor(context), fontWeight: FontWeight.w700),
+                          'Amount: PKR ${Formatters.money(order.amount)}',
+                          style: const TextStyle(fontWeight: FontWeight.w900, fontSize: 12, color: AppTheme.primary),
                         ),
-                        Text(
-                          'Order #${order.orderNumber.isEmpty ? order.externalOrderId : order.orderNumber}',
-                          style: TextStyle(fontSize: 11, color: AppTheme.textMutedColor(context), fontWeight: FontWeight.w800),
+                        StatusChip(
+                          label: isReturn ? 'Customer Return' : (isFailed ? 'Failed Delivery' : 'Order'),
+                          color: isReturn ? AppTheme.warning : (isFailed ? AppTheme.danger : AppTheme.success),
+                          softColor: isReturn ? AppTheme.warningSoft : (isFailed ? AppTheme.dangerSoft : AppTheme.successSoft),
                         ),
                       ],
-                    ),
-                    const SizedBox(height: 6),
-                    Text(
-                      'Amount: PKR ${Formatters.money(order.amount)}',
-                      style: const TextStyle(fontWeight: FontWeight.w900, fontSize: 12, color: AppTheme.primary),
                     ),
                   ],
                 ),
