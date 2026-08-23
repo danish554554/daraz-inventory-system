@@ -80,6 +80,15 @@ function isFailedDeliveryReason(reasonText = '') {
   return normalized.includes('rejected_at_doorstep') ||
     normalized.includes('customer_rescheduled_outside_of_delivery_sla') ||
     normalized.includes('others_missing_mapping') ||
+    normalized.includes('delivery_address_is_wrong') ||
+    normalized.includes('delivery_address_wrong') ||
+    normalized.includes('address_is_wrong') ||
+    normalized.includes('wrong_address') ||
+    normalized.includes('address_not_found') ||
+    normalized.includes('incorrect_address') ||
+    normalized.includes('invalid_address') ||
+    normalized.includes('incomplete_address') ||
+    normalized.includes('fake_address') ||
     normalized.includes('rescheduled_outside') ||
     normalized.includes('outside_of_delivery_sla') ||
     normalized.includes('delivery_sla') ||
@@ -91,8 +100,10 @@ function isFailedDeliveryReason(reasonText = '') {
     normalized.includes('customer_not_available') ||
     normalized.includes('customer_unreachable') ||
     normalized.includes('unreachable') ||
-    normalized.includes('wrong_address') ||
-    normalized.includes('address_not_found') ||
+    normalized.includes('phone_switched_off') ||
+    normalized.includes('no_answer') ||
+    normalized.includes('premises_closed') ||
+    normalized.includes('out_of_delivery_area') ||
     normalized.includes('failed_delivery') ||
     normalized.includes('delivery_failed') ||
     normalized.includes('delivery_attempt_failed') ||

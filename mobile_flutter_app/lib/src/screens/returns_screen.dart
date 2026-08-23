@@ -110,6 +110,15 @@ class _ReturnsAndFailedDeliveryScreenState extends State<ReturnsAndFailedDeliver
         norm.contains('rejected_at_doorstep') ||
         norm.contains('customer rescheduled outside of delivery sla') ||
         norm.contains('others_missing_mapping') ||
+        norm.contains('delivery address is wrong') ||
+        norm.contains('delivery address wrong') ||
+        norm.contains('address is wrong') ||
+        norm.contains('wrong address') ||
+        norm.contains('address not found') ||
+        norm.contains('incorrect address') ||
+        norm.contains('invalid address') ||
+        norm.contains('incomplete address') ||
+        norm.contains('fake address') ||
         norm.contains('rescheduled outside') ||
         norm.contains('outside of delivery sla') ||
         norm.contains('delivery sla') ||
@@ -119,11 +128,15 @@ class _ReturnsAndFailedDeliveryScreenState extends State<ReturnsAndFailedDeliver
         norm.contains('refused') ||
         norm.contains('consignee not available') ||
         norm.contains('customer not available') ||
+        norm.contains('customer unreachable') ||
         norm.contains('unreachable') ||
-        norm.contains('wrong address') ||
-        norm.contains('address not found') ||
+        norm.contains('phone switched off') ||
+        norm.contains('no answer') ||
+        norm.contains('premises closed') ||
+        norm.contains('out of delivery area') ||
         norm.contains('failed delivery') ||
         norm.contains('delivery failed') ||
+        norm.contains('delivery attempt failed') ||
         norm.contains('unable to deliver') ||
         norm.contains('undelivered');
   }
