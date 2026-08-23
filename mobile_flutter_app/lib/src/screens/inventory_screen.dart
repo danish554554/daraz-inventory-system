@@ -23,11 +23,14 @@ class _InventoryScreenState extends State<InventoryScreen> {
   bool _importingProducts = false;
   bool _mergeMode = false;
   bool _merging = false;
+  bool _deleteMode = false;
+  bool _deleting = false;
   String? _error;
   String _search = '';
   String _filter = 'all';
   final Set<String> _notifiedLowStockIds = <String>{};
   final Set<String> _selectedMergeInventoryIds = <String>{};
+  final Set<String> _selectedDeleteInventoryIds = <String>{};
 
   List<StoreModel> _stores = <StoreModel>[];
   List<InventoryItem> _inventory = <InventoryItem>[];
@@ -158,6 +161,7 @@ class _InventoryScreenState extends State<InventoryScreen> {
         context: context,
         isScrollControlled: true,
         useSafeArea: true,
+        backgroundColor: AppTheme.cardColor(context),
         builder: (context) => ProductImportStoreSheet(stores: connectedStores),
       );
     }
@@ -180,6 +184,7 @@ class _InventoryScreenState extends State<InventoryScreen> {
       context: context,
       isScrollControlled: true,
       useSafeArea: true,
+      backgroundColor: AppTheme.cardColor(context),
       builder: (context) => RestockSheet(inventory: _inventory, selected: item),
     );
     if (delta != null) {
@@ -194,6 +199,7 @@ class _InventoryScreenState extends State<InventoryScreen> {
       context: context,
       isScrollControlled: true,
       useSafeArea: true,
+      backgroundColor: AppTheme.cardColor(context),
       builder: (context) => QuickAdjustmentSheet(inventory: _inventory, selected: item),
     );
     if (delta != null) {
@@ -208,6 +214,7 @@ class _InventoryScreenState extends State<InventoryScreen> {
       context: context,
       isScrollControlled: true,
       useSafeArea: true,
+      backgroundColor: AppTheme.cardColor(context),
       builder: (context) => const BulkRestockSheet(),
     );
     if (done == true) {
@@ -221,6 +228,7 @@ class _InventoryScreenState extends State<InventoryScreen> {
       context: context,
       isScrollControlled: true,
       useSafeArea: true,
+      backgroundColor: AppTheme.cardColor(context),
       builder: (context) => AdjustmentQueueSheet(adjustments: _adjustments),
     );
     if (changed == true) await _load();
@@ -231,6 +239,7 @@ class _InventoryScreenState extends State<InventoryScreen> {
       context: context,
       isScrollControlled: true,
       useSafeArea: true,
+      backgroundColor: AppTheme.cardColor(context),
       builder: (context) => InventoryReportsSheet(search: _search.trim()),
     );
   }
@@ -240,6 +249,7 @@ class _InventoryScreenState extends State<InventoryScreen> {
       context: context,
       isScrollControlled: true,
       useSafeArea: true,
+      backgroundColor: AppTheme.cardColor(context),
       builder: (context) => AdjustmentRequestSheet(inventory: item),
     );
     if (done == true) {
@@ -309,6 +319,115 @@ class _InventoryScreenState extends State<InventoryScreen> {
       if (mounted) showAppSnackBar(context, error.message, error: true);
     } finally {
       if (mounted) setState(() => _merging = false);
+    }
+  }
+
+  void _startDeleteMode() {
+    setState(() {
+      _deleteMode = true;
+      _mergeMode = false;
+      _selectedDeleteInventoryIds.clear();
+      _selectedMergeInventoryIds.clear();
+    });
+  }
+
+  void _cancelDeleteMode() {
+    setState(() {
+      _deleteMode = false;
+      _selectedDeleteInventoryIds.clear();
+    });
+  }
+
+  void _toggleDeleteSelection(InventoryItem item) {
+    final id = item.inventoryId.isNotEmpty ? item.inventoryId : item.id;
+    if (id.isEmpty) return;
+    setState(() {
+      if (_selectedDeleteInventoryIds.contains(id)) {
+        _selectedDeleteInventoryIds.remove(id);
+      } else {
+        _selectedDeleteInventoryIds.add(id);
+      }
+    });
+  }
+
+  Future<void> _deleteSingleProduct(InventoryItem item) async {
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (context) => AlertDialog(
+        backgroundColor: AppTheme.cardColor(context),
+        title: Text('Remove Product?', style: TextStyle(color: AppTheme.textPrimaryColor(context), fontWeight: FontWeight.w900)),
+        content: Text(
+          'Are you sure you want to remove "${item.title}" (${item.sellerSku}) from inventory? It will no longer appear in stock or tracking.',
+          style: TextStyle(color: AppTheme.textMutedColor(context)),
+        ),
+        actions: <Widget>[
+          TextButton(
+            onPressed: () => Navigator.pop(context, false),
+            child: const Text('Cancel'),
+          ),
+          FilledButton(
+            style: FilledButton.styleFrom(backgroundColor: AppTheme.danger),
+            onPressed: () => Navigator.pop(context, true),
+            child: const Text('Remove'),
+          ),
+        ],
+      ),
+    );
+
+    if (confirmed == true) {
+      try {
+        final id = item.inventoryId.isNotEmpty ? item.inventoryId : item.id;
+        await ApiClient.instance.delete('/central-inventory/$id');
+        await _load(silent: true);
+        if (mounted) showAppSnackBar(context, 'Product removed from inventory.');
+      } catch (e) {
+        if (mounted) showAppSnackBar(context, 'Failed to remove product: $e', error: true);
+      }
+    }
+  }
+
+  Future<void> _deleteSelectedProducts() async {
+    if (_selectedDeleteInventoryIds.isEmpty) return;
+
+    final count = _selectedDeleteInventoryIds.length;
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (context) => AlertDialog(
+        backgroundColor: AppTheme.cardColor(context),
+        title: Text('Remove $count Products?', style: TextStyle(color: AppTheme.textPrimaryColor(context), fontWeight: FontWeight.w900)),
+        content: Text(
+          'These $count products will be removed from your inventory and marked archived.',
+          style: TextStyle(color: AppTheme.textMutedColor(context)),
+        ),
+        actions: <Widget>[
+          TextButton(
+            onPressed: () => Navigator.pop(context, false),
+            child: const Text('Cancel'),
+          ),
+          FilledButton(
+            style: FilledButton.styleFrom(backgroundColor: AppTheme.danger),
+            onPressed: () => Navigator.pop(context, true),
+            child: Text('Remove ($count)'),
+          ),
+        ],
+      ),
+    );
+
+    if (confirmed == true) {
+      setState(() => _deleting = true);
+      try {
+        await ApiClient.instance.post(
+          '/central-inventory/batch-delete',
+          body: <String, dynamic>{'inventory_ids': _selectedDeleteInventoryIds.toList()},
+        );
+        _cancelDeleteMode();
+        await _load(silent: true);
+        if (mounted) showAppSnackBar(context, '$count products removed successfully.');
+      } catch (e) {
+        if (mounted) showAppSnackBar(context, 'Failed to remove products: $e', error: true);
+      } finally {
+        if (mounted) setState(() => _deleting = false);
+      }
     }
   }
 
@@ -428,8 +547,10 @@ class _InventoryScreenState extends State<InventoryScreen> {
                             child: Text(
                               _mergeMode
                                   ? '${_selectedMergeInventoryIds.length} SKU selected for merge'
-                                  : 'Showing ${_visibleItems.length} of ${_inventory.length}',
-                              style: const TextStyle(color: AppTheme.textMuted, fontSize: 11, fontWeight: FontWeight.w800),
+                                  : _deleteMode
+                                      ? '${_selectedDeleteInventoryIds.length} products selected for removal'
+                                      : 'Showing ${_visibleItems.length} of ${_inventory.length}',
+                              style: TextStyle(color: AppTheme.textMutedColor(context), fontSize: 11, fontWeight: FontWeight.w800),
                             ),
                           ),
                           if (_mergeMode) ...<Widget>[
@@ -442,13 +563,37 @@ class _InventoryScreenState extends State<InventoryScreen> {
                               icon: _merging
                                   ? const SizedBox(height: 14, width: 14, child: CircularProgressIndicator(strokeWidth: 2))
                                   : const Icon(Icons.merge_type_rounded, size: 16),
-                              label: const Text('Merge Selected', style: TextStyle(fontSize: 12, fontWeight: FontWeight.w900)),
+                              label: Text(_merging ? 'Merging...' : 'Merge (${_selectedMergeInventoryIds.length})', style: const TextStyle(fontSize: 12, fontWeight: FontWeight.w900)),
+                            ),
+                          ] else if (_deleteMode) ...<Widget>[
+                            TextButton(
+                              onPressed: _deleting ? null : _cancelDeleteMode,
+                              child: const Text('Cancel', style: TextStyle(fontSize: 12, fontWeight: FontWeight.w900)),
+                            ),
+                            FilledButton.icon(
+                              style: FilledButton.styleFrom(
+                                backgroundColor: AppTheme.danger,
+                                minimumSize: const Size(0, 32),
+                                padding: const EdgeInsets.symmetric(horizontal: 10),
+                                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+                              ),
+                              onPressed: _selectedDeleteInventoryIds.isEmpty || _deleting ? null : _deleteSelectedProducts,
+                              icon: _deleting
+                                  ? const SizedBox(height: 12, width: 12, child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white))
+                                  : const Icon(Icons.delete_forever_rounded, size: 15),
+                              label: Text(_deleting ? 'Removing...' : 'Remove (${_selectedDeleteInventoryIds.length})', style: const TextStyle(fontSize: 11, fontWeight: FontWeight.w900)),
                             ),
                           ] else ...<Widget>[
                             TextButton.icon(
                               onPressed: _visibleItems.length < 2 ? null : _startMergeMode,
                               icon: const Icon(Icons.merge_type_rounded, size: 16),
                               label: const Text('Merge', style: TextStyle(fontSize: 12, fontWeight: FontWeight.w900)),
+                            ),
+                            TextButton.icon(
+                              onPressed: _visibleItems.isEmpty ? null : _startDeleteMode,
+                              style: TextButton.styleFrom(foregroundColor: AppTheme.danger),
+                              icon: const Icon(Icons.delete_outline_rounded, size: 16),
+                              label: const Text('Remove', style: TextStyle(fontSize: 12, fontWeight: FontWeight.w900)),
                             ),
                             TextButton.icon(
                               onPressed: _openRestockSheet,
@@ -502,14 +647,19 @@ class _InventoryScreenState extends State<InventoryScreen> {
 
   Widget _filterChip(String value, String label) {
     final selected = _filter == value;
+    final isDark = AppTheme.isDark(context);
     return ChoiceChip(
       selected: selected,
       label: Text(label),
       onSelected: (_) => setState(() => _filter = value),
       selectedColor: AppTheme.primary,
-      backgroundColor: Colors.white,
-      labelStyle: TextStyle(color: selected ? Colors.white : AppTheme.textPrimary, fontSize: 12, fontWeight: FontWeight.w900),
-      side: BorderSide(color: selected ? AppTheme.primary : AppTheme.border),
+      backgroundColor: isDark ? const Color(0xFF1E293B) : Colors.white,
+      labelStyle: TextStyle(
+        color: selected ? Colors.white : (isDark ? Colors.white70 : AppTheme.textPrimary),
+        fontSize: 12,
+        fontWeight: FontWeight.w900,
+      ),
+      side: BorderSide(color: selected ? AppTheme.primary : AppTheme.borderColor(context)),
       shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(24)),
     );
   }
@@ -534,17 +684,22 @@ class _InventoryScreenState extends State<InventoryScreen> {
     final statusText = item.isCritical ? 'Out of stock' : item.isLowStock ? 'Low stock' : 'Live stock';
     final color = item.isCritical ? AppTheme.danger : item.isLowStock ? AppTheme.warning : AppTheme.success;
     final softColor = item.isCritical ? AppTheme.dangerSoft : item.isLowStock ? AppTheme.warningSoft : AppTheme.successSoft;
+    final itemId = item.inventoryId.isNotEmpty ? item.inventoryId : item.id;
+
     return Padding(
       padding: const EdgeInsets.only(bottom: 10),
       child: AppCard(
         padding: const EdgeInsets.all(12),
         onTap: _mergeMode
             ? () => _toggleMergeSelection(item)
-            : () async {
+            : _deleteMode
+                ? () => _toggleDeleteSelection(item)
+                : () async {
           await showModalBottomSheet<void>(
             context: context,
             isScrollControlled: true,
             useSafeArea: true,
+            backgroundColor: AppTheme.cardColor(context),
             builder: (sheetContext) => InventoryItemActionsSheet(
               item: item,
               onRestock: () {
@@ -559,6 +714,10 @@ class _InventoryScreenState extends State<InventoryScreen> {
                 Navigator.pop(sheetContext);
                 WidgetsBinding.instance.addPostFrameCallback((_) => _createAdjustmentRequest(item));
               },
+              onRemove: () {
+                Navigator.pop(sheetContext);
+                WidgetsBinding.instance.addPostFrameCallback((_) => _deleteSingleProduct(item));
+              },
             ),
           );
         },
@@ -572,6 +731,14 @@ class _InventoryScreenState extends State<InventoryScreen> {
                 activeColor: AppTheme.primary,
               ),
               const SizedBox(width: 4),
+            ] else if (_deleteMode) ...<Widget>[
+              Checkbox(
+                value: _selectedDeleteInventoryIds.contains(itemId),
+                onChanged: (_) => _toggleDeleteSelection(item),
+                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+                activeColor: AppTheme.danger,
+              ),
+              const SizedBox(width: 4),
             ],
             ProductImageBox(imageUrl: item.imageUrl),
             const SizedBox(width: 12),
@@ -581,9 +748,16 @@ class _InventoryScreenState extends State<InventoryScreen> {
                 children: <Widget>[
                   Row(
                     children: <Widget>[
-                      Expanded(child: Text(item.title, maxLines: 1, overflow: TextOverflow.ellipsis, style: const TextStyle(fontWeight: FontWeight.w900, fontSize: 13))),
+                      Expanded(
+                        child: Text(
+                          item.title,
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                          style: TextStyle(fontWeight: FontWeight.w900, fontSize: 13, color: AppTheme.textPrimaryColor(context)),
+                        ),
+                      ),
                       const SizedBox(width: 8),
-                      Text('${item.stock}', style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w900)),
+                      Text('${item.stock}', style: TextStyle(fontSize: 13, fontWeight: FontWeight.w900, color: AppTheme.textPrimaryColor(context))),
                     ],
                   ),
                   const SizedBox(height: 3),
@@ -593,7 +767,7 @@ class _InventoryScreenState extends State<InventoryScreen> {
                         : '${item.sellerSku} · ${item.storeCode}',
                     maxLines: 1,
                     overflow: TextOverflow.ellipsis,
-                    style: const TextStyle(color: AppTheme.textMuted, fontSize: 11, fontWeight: FontWeight.w700),
+                    style: TextStyle(color: AppTheme.textMutedColor(context), fontSize: 11, fontWeight: FontWeight.w700),
                   ),
                   const SizedBox(height: 8),
                   Row(
@@ -616,7 +790,7 @@ class _InventoryScreenState extends State<InventoryScreen> {
                           maxLines: 1,
                           overflow: TextOverflow.ellipsis,
                           textAlign: TextAlign.right,
-                          style: const TextStyle(color: AppTheme.textMuted, fontSize: 11, fontWeight: FontWeight.w800),
+                          style: TextStyle(color: AppTheme.textMutedColor(context), fontSize: 11, fontWeight: FontWeight.w800),
                         ),
                       ),
                     ],
@@ -904,18 +1078,23 @@ class InventoryItemActionsSheet extends StatelessWidget {
     required this.onRestock,
     required this.onAdjust,
     required this.onRequest,
+    required this.onRemove,
   });
 
   final InventoryItem item;
   final VoidCallback onRestock;
   final VoidCallback onAdjust;
   final VoidCallback onRequest;
-
+  final VoidCallback onRemove;
 
   @override
   Widget build(BuildContext context) {
+    final profitMargin = item.sellingPrice > 0
+        ? (((item.sellingPrice - item.costPrice) / item.sellingPrice) * 100)
+        : 0.0;
+
     return Padding(
-      padding: const EdgeInsets.fromLTRB(20, 20, 20, 24),
+      padding: const EdgeInsets.fromLTRB(20, 20, 20, 28),
       child: SingleChildScrollView(
         child: Column(
           mainAxisSize: MainAxisSize.min,
@@ -929,52 +1108,72 @@ class InventoryItemActionsSheet extends StatelessWidget {
                 icon: const Icon(Icons.close),
               ),
             ),
-          const SizedBox(height: 14),
-          Wrap(
-            spacing: 10,
-            runSpacing: 10,
-            children: <Widget>[
-              _metric('Stock', '${item.stock}'),
-              _metric('Reserved', '${item.reservedStock}'),
-              _metric('Available', '${item.availableStock}'),
-              _metric('Low Limit', '${item.lowStockLimit}'),
-            ],
-          ),
-          const SizedBox(height: 16),
-          PrimaryButton(
-            label: 'Restock',
-            onPressed: onRestock,
-            icon: Icons.add_box_outlined,
-            expanded: true,
-          ),
-          const SizedBox(height: 12),
-          SecondaryButton(
-            label: 'Quick Adjust',
-            onPressed: onAdjust,
-            icon: Icons.tune_rounded,
-          ),
-          const SizedBox(height: 12),
-          SecondaryButton(
-            label: 'Create Adjustment Request',
-            onPressed: onRequest,
-            icon: Icons.rule_folder_outlined,
-          ),
-        ],
+            const SizedBox(height: 14),
+            Wrap(
+              spacing: 10,
+              runSpacing: 10,
+              children: <Widget>[
+                _metric(context, 'Physical Stock', '${item.stock}'),
+                _metric(context, 'Reserved', '${item.reservedStock}'),
+                _metric(context, 'Available', '${item.availableStock}'),
+                _metric(context, 'Low Limit', '${item.lowStockLimit}'),
+                _metric(context, 'Cost (PKR)', Formatters.money(item.costPrice)),
+                _metric(context, 'Price (PKR)', Formatters.money(item.sellingPrice)),
+                _metric(context, 'Margin', '${profitMargin > 0 ? profitMargin.toStringAsFixed(1) : "0.0"}%'),
+              ],
+            ),
+            const SizedBox(height: 18),
+            PrimaryButton(
+              label: 'Restock (+ Stock)',
+              onPressed: onRestock,
+              icon: Icons.add_box_outlined,
+              expanded: true,
+            ),
+            const SizedBox(height: 10),
+            SecondaryButton(
+              label: 'Quick Adjust Stock',
+              onPressed: onAdjust,
+              icon: Icons.tune_rounded,
+            ),
+            const SizedBox(height: 10),
+            SecondaryButton(
+              label: 'Create Adjustment Request',
+              onPressed: onRequest,
+              icon: Icons.rule_folder_outlined,
+            ),
+            const SizedBox(height: 10),
+            OutlinedButton.icon(
+              style: OutlinedButton.styleFrom(
+                foregroundColor: AppTheme.danger,
+                side: const BorderSide(color: AppTheme.danger),
+                minimumSize: const Size.fromHeight(48),
+                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
+              ),
+              onPressed: onRemove,
+              icon: const Icon(Icons.delete_outline_rounded, size: 18),
+              label: const Text('Remove from Inventory', style: TextStyle(fontWeight: FontWeight.w900, fontSize: 13)),
+            ),
+          ],
         ),
       ),
     );
   }
 
-  Widget _metric(String label, String value) {
+  Widget _metric(BuildContext context, String label, String value) {
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
       decoration: BoxDecoration(
-        color: AppTheme.background,
-        borderRadius: BorderRadius.circular(16),
+        color: AppTheme.softGreyColor(context),
+        borderRadius: BorderRadius.circular(14),
+        border: Border.all(color: AppTheme.borderColor(context)),
       ),
       child: Text(
         '$label: $value',
-        style: const TextStyle(fontWeight: FontWeight.w700),
+        style: TextStyle(
+          fontWeight: FontWeight.w800,
+          fontSize: 12,
+          color: AppTheme.textPrimaryColor(context),
+        ),
       ),
     );
   }

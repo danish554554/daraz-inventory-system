@@ -884,6 +884,64 @@ router.put('/:id/prices', async (req, res, next) => {
   } catch (error) { next(error); }
 });
 
+router.delete('/:id', async (req, res, next) => {
+  try {
+    const item = await CentralInventory.findById(req.params.id);
+    if (!item) return res.status(404).json({ message: 'Inventory item not found' });
+
+    await InventoryMergeGroup.updateMany(
+      { inventory_ids: item._id },
+      { $pull: { inventory_ids: item._id } }
+    );
+
+    await CentralInventory.findByIdAndDelete(req.params.id);
+
+    if (item.seller_sku) {
+      await Product.updateMany(
+        { sku: item.seller_sku },
+        { $set: { is_active: false, status: 'archived' } }
+      );
+    }
+
+    res.json({
+      success: true,
+      message: `Product "${item.product_name || item.seller_sku}" removed successfully.`
+    });
+  } catch (error) { next(error); }
+});
+
+router.post('/batch-delete', async (req, res, next) => {
+  try {
+    const { inventory_ids = [] } = req.body;
+    if (!Array.isArray(inventory_ids) || inventory_ids.length === 0) {
+      return res.status(400).json({ message: 'No inventory IDs provided for removal.' });
+    }
+
+    const items = await CentralInventory.find({ _id: { $in: inventory_ids } });
+    const skus = items.map(i => i.seller_sku).filter(Boolean);
+
+    await InventoryMergeGroup.updateMany(
+      { inventory_ids: { $in: inventory_ids } },
+      { $pull: { inventory_ids: { $in: inventory_ids } } }
+    );
+
+    const deleteRes = await CentralInventory.deleteMany({ _id: { $in: inventory_ids } });
+
+    if (skus.length > 0) {
+      await Product.updateMany(
+        { sku: { $in: skus } },
+        { $set: { is_active: false, status: 'archived' } }
+      );
+    }
+
+    res.json({
+      success: true,
+      message: `${deleteRes.deletedCount || 0} product(s) removed successfully.`,
+      deleted_count: deleteRes.deletedCount || 0
+    });
+  } catch (error) { next(error); }
+});
+
 router.use((error, req, res, next) => {
   const status = error.status || 500;
   res.status(status).json({ message: error.message || 'Central inventory request failed', error: error.message || 'Unknown error' });

@@ -56,9 +56,9 @@ class _HomeShellState extends State<HomeShell> {
             onDestinationSelected: (index) => setState(() => _currentIndex = index),
             destinations: const <Widget>[
               NavigationDestination(
-                icon: Icon(Icons.analytics_outlined),
-                selectedIcon: Icon(Icons.analytics_rounded),
-                label: 'Profit',
+                icon: Icon(Icons.home_outlined),
+                selectedIcon: Icon(Icons.home_rounded),
+                label: 'Home',
               ),
               NavigationDestination(
                 icon: Icon(Icons.store_mall_directory_outlined),

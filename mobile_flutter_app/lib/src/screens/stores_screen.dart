@@ -326,6 +326,7 @@ class _StoresScreenState extends State<StoresScreen> {
             context: context,
             isScrollControlled: true,
             useSafeArea: true,
+            backgroundColor: AppTheme.cardColor(context),
             builder: (context) => StoreDetailSheet(
               store: store,
               onEdit: () async {
@@ -348,17 +349,32 @@ class _StoresScreenState extends State<StoresScreen> {
                 Container(
                   width: 46,
                   height: 46,
-                  decoration: BoxDecoration(color: AppTheme.background, borderRadius: BorderRadius.circular(15)),
-                  child: Center(child: Text(store.country, style: const TextStyle(fontWeight: FontWeight.w900))),
+                  decoration: BoxDecoration(color: AppTheme.softGreyColor(context), borderRadius: BorderRadius.circular(15)),
+                  child: Center(
+                    child: Text(
+                      store.country,
+                      style: TextStyle(fontWeight: FontWeight.w900, color: AppTheme.textPrimaryColor(context)),
+                    ),
+                  ),
                 ),
                 const SizedBox(width: 12),
                 Expanded(
                   child: Column(
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: <Widget>[
-                      Text(store.name, maxLines: 1, overflow: TextOverflow.ellipsis, style: const TextStyle(fontWeight: FontWeight.w900, fontSize: 14)),
+                      Text(
+                        store.name,
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style: TextStyle(fontWeight: FontWeight.w900, fontSize: 14, color: AppTheme.textPrimaryColor(context)),
+                      ),
                       const SizedBox(height: 3),
-                      Text('${store.code} · ${store.account.isEmpty ? store.country : store.account}', maxLines: 1, overflow: TextOverflow.ellipsis, style: const TextStyle(color: AppTheme.textMuted, fontSize: 11, fontWeight: FontWeight.w700)),
+                      Text(
+                        '${store.code} · ${store.account.isEmpty ? store.country : store.account}',
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style: TextStyle(color: AppTheme.textMutedColor(context), fontSize: 11, fontWeight: FontWeight.w700),
+                      ),
                       const SizedBox(height: 7),
                       Wrap(
                         spacing: 6,
@@ -372,7 +388,8 @@ class _StoresScreenState extends State<StoresScreen> {
                   ),
                 ),
                 PopupMenuButton<String>(
-                  icon: const Icon(Icons.more_horiz_rounded, color: AppTheme.textMuted),
+                  icon: Icon(Icons.more_horiz_rounded, color: AppTheme.textMutedColor(context)),
+                  color: AppTheme.cardColor(context),
                   onSelected: (value) {
                     switch (value) {
                       case 'edit':
@@ -393,11 +410,11 @@ class _StoresScreenState extends State<StoresScreen> {
                     }
                   },
                   itemBuilder: (context) => <PopupMenuEntry<String>>[
-                    const PopupMenuItem(value: 'edit', child: Text('Edit store')),
-                    PopupMenuItem(value: 'connect', child: Text(store.tokenConnected ? 'Reconnect Daraz' : 'Connect Daraz')),
-                    const PopupMenuItem(value: 'validate', child: Text('Validate connection')),
-                    if (store.tokenConnected) const PopupMenuItem(value: 'disconnect', child: Text('Disconnect')),
-                    const PopupMenuItem(value: 'delete', child: Text('Delete')),
+                    PopupMenuItem(value: 'edit', child: Text('Edit store', style: TextStyle(color: AppTheme.textPrimaryColor(context)))),
+                    PopupMenuItem(value: 'connect', child: Text(store.tokenConnected ? 'Reconnect Daraz' : 'Connect Daraz', style: TextStyle(color: AppTheme.textPrimaryColor(context)))),
+                    PopupMenuItem(value: 'validate', child: Text('Validate connection', style: TextStyle(color: AppTheme.textPrimaryColor(context)))),
+                    if (store.tokenConnected) PopupMenuItem(value: 'disconnect', child: Text('Disconnect', style: TextStyle(color: AppTheme.textPrimaryColor(context)))),
+                    const PopupMenuItem(value: 'delete', child: Text('Delete', style: TextStyle(color: AppTheme.danger))),
                   ],
                 ),
               ],
@@ -406,11 +423,17 @@ class _StoresScreenState extends State<StoresScreen> {
             Row(
               children: <Widget>[
                 Expanded(
-                  child: Text('Last sync · ${Formatters.dateTime(store.lastSyncFinishedAt)}', maxLines: 1, overflow: TextOverflow.ellipsis, style: const TextStyle(color: AppTheme.textMuted, fontSize: 11, fontWeight: FontWeight.w700)),
+                  child: Text('Last sync · ${Formatters.dateTime(store.lastSyncFinishedAt)}', maxLines: 1, overflow: TextOverflow.ellipsis, style: TextStyle(color: AppTheme.textMutedColor(context), fontSize: 11, fontWeight: FontWeight.w700)),
                 ),
                 OutlinedButton.icon(
                   onPressed: () => _importProductsForStore(store),
-                  style: OutlinedButton.styleFrom(minimumSize: const Size(0, 34), padding: const EdgeInsets.symmetric(horizontal: 10), shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)), side: const BorderSide(color: AppTheme.border)),
+                  style: OutlinedButton.styleFrom(
+                    minimumSize: const Size(0, 34),
+                    padding: const EdgeInsets.symmetric(horizontal: 10),
+                    shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+                    side: BorderSide(color: AppTheme.borderColor(context)),
+                    foregroundColor: AppTheme.textPrimaryColor(context),
+                  ),
                   icon: const Icon(Icons.download_rounded, size: 14),
                   label: const Text('Import', style: TextStyle(fontSize: 11, fontWeight: FontWeight.w900)),
                 ),
@@ -672,18 +695,18 @@ class _StoreDetailSheetState extends State<StoreDetailSheet> {
                       spacing: 10,
                       runSpacing: 10,
                       children: <Widget>[
-                        _infoPill('Health', _detail!.store.healthLabel),
-                        _infoPill('Token', _detail!.store.tokenStatus.replaceAll('_', ' ')),
-                        _infoPill('Deduct Stage', _detail!.store.deductStage.replaceAll('_', ' ')),
-                        _infoPill('Interval', '${_detail!.store.syncIntervalMinutes} min'),
+                        _infoPill(context, 'Health', _detail!.store.healthLabel),
+                        _infoPill(context, 'Token', _detail!.store.tokenStatus.replaceAll('_', ' ')),
+                        _infoPill(context, 'Deduct Stage', _detail!.store.deductStage.replaceAll('_', ' ')),
+                        _infoPill(context, 'Interval', '${_detail!.store.syncIntervalMinutes} min'),
                       ],
                     ),
                     const SizedBox(height: 14),
-                    Text(_detail!.store.healthReason, maxLines: 3, overflow: TextOverflow.ellipsis, style: const TextStyle(color: AppTheme.textMuted, height: 1.4)),
+                    Text(_detail!.store.healthReason, maxLines: 3, overflow: TextOverflow.ellipsis, style: TextStyle(color: AppTheme.textMutedColor(context), height: 1.4)),
                     const SizedBox(height: 10),
-                    Text('Last sync: ${Formatters.dateTime(_detail!.store.lastSyncFinishedAt)}', style: const TextStyle(fontWeight: FontWeight.w700)),
+                    Text('Last sync: ${Formatters.dateTime(_detail!.store.lastSyncFinishedAt)}', style: TextStyle(fontWeight: FontWeight.w700, color: AppTheme.textPrimaryColor(context))),
                     const SizedBox(height: 6),
-                    Text('Latest status: ${_detail!.store.lastSyncMessage.isEmpty ? 'No sync message' : _detail!.store.lastSyncMessage}', maxLines: 3, overflow: TextOverflow.ellipsis, style: const TextStyle(color: AppTheme.textMuted)),
+                    Text('Latest status: ${_detail!.store.lastSyncMessage.isEmpty ? 'No sync message' : _detail!.store.lastSyncMessage}', maxLines: 3, overflow: TextOverflow.ellipsis, style: TextStyle(color: AppTheme.textMutedColor(context))),
                   ],
                 ),
               ),
@@ -700,7 +723,7 @@ class _StoreDetailSheetState extends State<StoreDetailSheet> {
                 ],
               ),
               const SizedBox(height: 16),
-              const Text('Recent Sync Logs', style: TextStyle(fontWeight: FontWeight.w800, fontSize: 18)),
+              Text('Recent Sync Logs', style: TextStyle(fontWeight: FontWeight.w800, fontSize: 18, color: AppTheme.textPrimaryColor(context))),
               const SizedBox(height: 10),
               if (_detail!.syncLogs.isEmpty)
                 const EmptyState(title: 'No sync logs yet', message: 'Logs will appear here after scheduler or manual sync runs.', icon: Icons.history_toggle_off)
@@ -714,7 +737,7 @@ class _StoreDetailSheetState extends State<StoreDetailSheet> {
                             Row(
                               children: <Widget>[
                                 Expanded(
-                                  child: Text(log.summaryMessage.isEmpty ? 'Sync run' : log.summaryMessage, style: const TextStyle(fontWeight: FontWeight.w800)),
+                                  child: Text(log.summaryMessage.isEmpty ? 'Sync run' : log.summaryMessage, style: TextStyle(fontWeight: FontWeight.w800, color: AppTheme.textPrimaryColor(context))),
                                 ),
                                 StatusChip(
                                   label: log.success == true ? 'Success' : log.success == false ? 'Failed' : 'Unknown',
@@ -724,9 +747,9 @@ class _StoreDetailSheetState extends State<StoreDetailSheet> {
                               ],
                             ),
                             const SizedBox(height: 8),
-                            Text('Started ${Formatters.dateTime(log.syncStartedAt)} • ${Formatters.durationMs(log.durationMs)}', style: const TextStyle(color: AppTheme.textMuted)),
+                            Text('Started ${Formatters.dateTime(log.syncStartedAt)} • ${Formatters.durationMs(log.durationMs)}', style: TextStyle(color: AppTheme.textMutedColor(context))),
                             const SizedBox(height: 8),
-                            Text('Processed ${log.processed} • Deducted ${log.deducted} • Restored ${log.restored} • Failed ${log.failed}', style: const TextStyle(fontWeight: FontWeight.w600)),
+                            Text('Processed ${log.processed} • Deducted ${log.deducted} • Restored ${log.restored} • Failed ${log.failed}', style: TextStyle(fontWeight: FontWeight.w600, color: AppTheme.textPrimaryColor(context))),
                           ],
                         ),
                       ),
@@ -740,11 +763,11 @@ class _StoreDetailSheetState extends State<StoreDetailSheet> {
     );
   }
 
-  Widget _infoPill(String label, String value) {
+  Widget _infoPill(BuildContext context, String label, String value) {
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
-      decoration: BoxDecoration(color: AppTheme.background, borderRadius: BorderRadius.circular(16)),
-      child: Text('$label: $value', style: const TextStyle(fontWeight: FontWeight.w700)),
+      decoration: BoxDecoration(color: AppTheme.softGreyColor(context), borderRadius: BorderRadius.circular(16)),
+      child: Text('$label: $value', style: TextStyle(fontWeight: FontWeight.w700, color: AppTheme.textPrimaryColor(context))),
     );
   }
 }
