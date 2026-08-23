@@ -692,11 +692,11 @@ class _SyncScreenState extends State<SyncScreen> with WidgetsBindingObserver {
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: <Widget>[
-                  Text(order.productTitle, maxLines: 1, overflow: TextOverflow.ellipsis, style: const TextStyle(fontWeight: FontWeight.w900, fontSize: 13)),
+                  Text(order.productTitle, maxLines: 1, overflow: TextOverflow.ellipsis, style: TextStyle(fontWeight: FontWeight.w900, fontSize: 13, color: AppTheme.textPrimaryColor(context))),
                   const SizedBox(height: 3),
-                  Text('Order ${order.orderNumber.isEmpty ? order.externalOrderId : order.orderNumber}', maxLines: 1, overflow: TextOverflow.ellipsis, style: const TextStyle(color: AppTheme.textPrimary, fontSize: 11, fontWeight: FontWeight.w800)),
+                  Text('Order ${order.orderNumber.isEmpty ? order.externalOrderId : order.orderNumber}', maxLines: 1, overflow: TextOverflow.ellipsis, style: TextStyle(color: AppTheme.textPrimaryColor(context), fontSize: 11, fontWeight: FontWeight.w800)),
                   const SizedBox(height: 3),
-                  Text('${order.storeName} · ${Formatters.dateTime(order.orderCreatedAt)}$amountText$profitText', maxLines: 1, overflow: TextOverflow.ellipsis, style: const TextStyle(color: AppTheme.textMuted, fontSize: 11, fontWeight: FontWeight.w700)),
+                  Text('${order.storeName} · ${Formatters.dateTime(order.orderCreatedAt)}$amountText$profitText', maxLines: 1, overflow: TextOverflow.ellipsis, style: TextStyle(color: AppTheme.textMutedColor(context), fontSize: 11, fontWeight: FontWeight.w700)),
                 ],
               ),
             ),
@@ -728,9 +728,9 @@ class _SyncScreenState extends State<SyncScreen> with WidgetsBindingObserver {
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: <Widget>[
-                  Text(item.title, maxLines: 1, overflow: TextOverflow.ellipsis, style: const TextStyle(fontWeight: FontWeight.w900, fontSize: 13)),
+                  Text(item.title, maxLines: 1, overflow: TextOverflow.ellipsis, style: TextStyle(fontWeight: FontWeight.w900, fontSize: 13, color: AppTheme.textPrimaryColor(context))),
                   const SizedBox(height: 3),
-                  Text('${item.storeCode} · Qty ${item.quantity} · Order ${item.orderNumber}', maxLines: 1, overflow: TextOverflow.ellipsis, style: const TextStyle(color: AppTheme.textMuted, fontSize: 11, fontWeight: FontWeight.w700)),
+                  Text('${item.storeCode} · Qty ${item.quantity} · Order ${item.orderNumber}', maxLines: 1, overflow: TextOverflow.ellipsis, style: TextStyle(color: AppTheme.textMutedColor(context), fontSize: 11, fontWeight: FontWeight.w700)),
                   if (hasError) ...<Widget>[
                     const SizedBox(height: 3),
                     Text(item.errorMessage, maxLines: 1, overflow: TextOverflow.ellipsis, style: const TextStyle(color: AppTheme.danger, fontSize: 11, fontWeight: FontWeight.w800)),
@@ -760,14 +760,14 @@ class _SyncScreenState extends State<SyncScreen> with WidgetsBindingObserver {
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: <Widget>[
-                  Text(item.title, maxLines: 1, overflow: TextOverflow.ellipsis, style: const TextStyle(fontWeight: FontWeight.w900, fontSize: 13)),
+                  Text(item.title, maxLines: 1, overflow: TextOverflow.ellipsis, style: TextStyle(fontWeight: FontWeight.w900, fontSize: 13, color: AppTheme.textPrimaryColor(context))),
                   const SizedBox(height: 3),
-                  Text('Return order ${item.externalOrderItemId} · Original ${item.orderNumber}', maxLines: 1, overflow: TextOverflow.ellipsis, style: const TextStyle(color: AppTheme.textPrimary, fontSize: 11, fontWeight: FontWeight.w800)),
+                  Text('Return order ${item.externalOrderItemId} · Original ${item.orderNumber}', maxLines: 1, overflow: TextOverflow.ellipsis, style: TextStyle(color: AppTheme.textPrimaryColor(context), fontSize: 11, fontWeight: FontWeight.w800)),
                   const SizedBox(height: 3),
-                  Text('${item.hubName} · Arrived ${Formatters.date(item.hubArrivedAt ?? item.logisticFacilityAt)} · Deadline ${Formatters.date(item.collectionDeadlineAt)}', maxLines: 1, overflow: TextOverflow.ellipsis, style: const TextStyle(color: AppTheme.textMuted, fontSize: 11, fontWeight: FontWeight.w700)),
+                  Text('${item.hubName} · Arrived ${Formatters.date(item.hubArrivedAt ?? item.logisticFacilityAt)} · Deadline ${Formatters.date(item.collectionDeadlineAt)}', maxLines: 1, overflow: TextOverflow.ellipsis, style: TextStyle(color: AppTheme.textMutedColor(context), fontSize: 11, fontWeight: FontWeight.w700)),
                   if (item.returnReason.isNotEmpty) ...<Widget>[
                     const SizedBox(height: 3),
-                    Text(item.returnReason, maxLines: 1, overflow: TextOverflow.ellipsis, style: const TextStyle(color: AppTheme.textMuted, fontSize: 11, fontWeight: FontWeight.w700)),
+                    Text(item.returnReason, maxLines: 1, overflow: TextOverflow.ellipsis, style: TextStyle(color: AppTheme.textMutedColor(context), fontSize: 11, fontWeight: FontWeight.w700)),
                   ],
                 ],
               ),
@@ -814,11 +814,11 @@ class _SyncScreenState extends State<SyncScreen> with WidgetsBindingObserver {
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: <Widget>[
-                  Text(item.title, maxLines: 1, overflow: TextOverflow.ellipsis, style: const TextStyle(fontWeight: FontWeight.w900, fontSize: 13)),
+                  Text(item.title, maxLines: 1, overflow: TextOverflow.ellipsis, style: TextStyle(fontWeight: FontWeight.w900, fontSize: 13, color: AppTheme.textPrimaryColor(context))),
                   const SizedBox(height: 3),
-                  Text('Order ${item.orderNumber} · ${item.storeName}', maxLines: 1, overflow: TextOverflow.ellipsis, style: const TextStyle(color: AppTheme.textPrimary, fontSize: 11, fontWeight: FontWeight.w800)),
+                  Text('Order ${item.orderNumber} · ${item.storeName}', maxLines: 1, overflow: TextOverflow.ellipsis, style: TextStyle(color: AppTheme.textPrimaryColor(context), fontSize: 11, fontWeight: FontWeight.w800)),
                   const SizedBox(height: 3),
-                  Text('${item.hubName} · Arrived ${Formatters.date(item.hubArrivedAt ?? item.logisticFacilityAt)} · Deadline ${Formatters.date(item.collectionDeadlineAt)}', maxLines: 1, overflow: TextOverflow.ellipsis, style: const TextStyle(color: AppTheme.textMuted, fontSize: 11, fontWeight: FontWeight.w700)),
+                  Text('${item.hubName} · Arrived ${Formatters.date(item.hubArrivedAt ?? item.logisticFacilityAt)} · Deadline ${Formatters.date(item.collectionDeadlineAt)}', maxLines: 1, overflow: TextOverflow.ellipsis, style: TextStyle(color: AppTheme.textMutedColor(context), fontSize: 11, fontWeight: FontWeight.w700)),
                 ],
               ),
             ),

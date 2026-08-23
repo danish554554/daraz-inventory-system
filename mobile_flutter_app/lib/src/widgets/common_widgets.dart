@@ -136,10 +136,11 @@ class MetricCard extends StatelessWidget {
             value,
             maxLines: 1,
             overflow: TextOverflow.ellipsis,
-            style: const TextStyle(
+            style: TextStyle(
               fontSize: 22,
               fontWeight: FontWeight.w900,
               letterSpacing: -0.6,
+              color: AppTheme.textPrimaryColor(context),
             ),
           ),
           const SizedBox(height: 3),
@@ -147,10 +148,10 @@ class MetricCard extends StatelessWidget {
             label,
             maxLines: 1,
             overflow: TextOverflow.ellipsis,
-            style: const TextStyle(
-              color: AppTheme.textPrimary,
+            style: TextStyle(
+              color: AppTheme.textMutedColor(context),
               fontSize: 12,
-              fontWeight: FontWeight.w700,
+              fontWeight: FontWeight.w800,
             ),
           ),
           if (caption != null) ...<Widget>[
@@ -225,10 +226,11 @@ class SectionHeader extends StatelessWidget {
                 title,
                 maxLines: 1,
                 overflow: TextOverflow.ellipsis,
-                style: const TextStyle(
+                style: TextStyle(
                   fontSize: 21,
                   fontWeight: FontWeight.w900,
                   letterSpacing: -0.6,
+                  color: AppTheme.textPrimaryColor(context),
                 ),
               ),
               if (subtitle != null) ...<Widget>[
@@ -237,8 +239,8 @@ class SectionHeader extends StatelessWidget {
                   subtitle!,
                   maxLines: 2,
                   overflow: TextOverflow.ellipsis,
-                  style: const TextStyle(
-                    color: AppTheme.textMuted,
+                  style: TextStyle(
+                    color: AppTheme.textMutedColor(context),
                     fontSize: 12,
                     fontWeight: FontWeight.w700,
                     height: 1.25,

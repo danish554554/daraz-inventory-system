@@ -302,8 +302,8 @@ class _DashboardScreenState extends State<DashboardScreen> {
               const SizedBox(height: 3),
               Text(
                 'Hello, $user 👋',
-                style: const TextStyle(
-                  color: AppTheme.textPrimary,
+                style: TextStyle(
+                  color: AppTheme.textPrimaryColor(context),
                   fontSize: 20,
                   fontWeight: FontWeight.w900,
                   letterSpacing: -0.5,
