@@ -2,11 +2,11 @@ import 'package:flutter/material.dart';
 
 import '../services/session_manager.dart';
 import '../widgets/app_theme.dart';
+import 'account_screen.dart';
 import 'dashboard_screen.dart';
+import 'finance_screen.dart';
 import 'inventory_screen.dart';
-import 'settings_screen.dart';
 import 'stores_screen.dart';
-import 'sync_screen.dart';
 
 class HomeShell extends StatefulWidget {
   const HomeShell({super.key, required this.sessionManager});
@@ -24,8 +24,11 @@ class _HomeShellState extends State<HomeShell> {
     DashboardScreen(sessionManager: widget.sessionManager),
     const StoresScreen(),
     const InventoryScreen(),
-    const SyncScreen(),
-    SettingsScreen(sessionManager: widget.sessionManager),
+    const FinanceScreen(),
+    AccountScreen(
+      sessionManager: widget.sessionManager,
+      onNavigateToTab: (tabIndex) => setState(() => _currentIndex = tabIndex),
+    ),
   ];
 
   @override
@@ -71,14 +74,14 @@ class _HomeShellState extends State<HomeShell> {
                 label: 'Stock',
               ),
               NavigationDestination(
-                icon: Icon(Icons.sync_rounded),
-                selectedIcon: Icon(Icons.sync_rounded),
-                label: 'Sync Hub',
+                icon: Icon(Icons.account_balance_wallet_outlined),
+                selectedIcon: Icon(Icons.account_balance_wallet_rounded),
+                label: 'Finance',
               ),
               NavigationDestination(
-                icon: Icon(Icons.tune_rounded),
-                selectedIcon: Icon(Icons.tune_rounded),
-                label: 'Settings',
+                icon: Icon(Icons.person_outline_rounded),
+                selectedIcon: Icon(Icons.person_rounded),
+                label: 'Account',
               ),
             ],
           ),
@@ -87,3 +90,4 @@ class _HomeShellState extends State<HomeShell> {
     );
   }
 }
+

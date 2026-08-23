@@ -578,7 +578,41 @@ router.post('/restock', async (req, res, next) => {
       note: String(req.body.note || 'Manual restock').trim()
     });
 
-    res.json({ message: 'Stock added successfully', target: refreshed, receipt });
+    if (unitCost > 0) {
+      if (refreshed.stock_doc_id) {
+        const invItem = await CentralInventory.findById(refreshed.stock_doc_id);
+        if (invItem) {
+          invItem.cost_price = unitCost;
+          invItem.purchase_price = unitCost;
+          if (invItem.selling_price > 0) {
+            invItem.profit_margin = Number((((invItem.selling_price - unitCost) / invItem.selling_price) * 100).toFixed(2));
+          }
+          await invItem.save();
+        }
+      }
+
+      if (refreshed.seller_sku) {
+        await Product.findOneAndUpdate(
+          { sku: refreshed.seller_sku },
+          { $set: { purchase_price: unitCost } }
+        );
+
+        const orderItems = await CentralOrderItem.find({ seller_sku: refreshed.seller_sku });
+        for (const orderItem of orderItems) {
+          const itemUnitPrice = toNumber(orderItem.unit_price, 0);
+          const itemQty = toNumber(orderItem.quantity, 1);
+          const itemRev = itemUnitPrice * itemQty;
+          const itemCost = unitCost * itemQty;
+          orderItem.cost_price = unitCost;
+          orderItem.profit = itemRev - itemCost;
+          orderItem.profit_margin = itemRev > 0 ? Number((((itemRev - itemCost) / itemRev) * 100).toFixed(2)) : 0;
+          orderItem.profit_ready = true;
+          await orderItem.save();
+        }
+      }
+    }
+
+    res.json({ message: 'Stock added and profit recalculated successfully', target: refreshed, receipt });
   } catch (error) { next(error); }
 });
 

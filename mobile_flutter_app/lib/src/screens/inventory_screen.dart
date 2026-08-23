@@ -1204,6 +1204,12 @@ class _RestockSheetState extends State<RestockSheet> {
     _selected =
         widget.selected ??
         (widget.inventory.isNotEmpty ? widget.inventory.first : null);
+    if (_selected != null) {
+      final defaultCost = _selected!.costPrice > 0 ? _selected!.costPrice : _selected!.purchasePrice;
+      if (defaultCost > 0) {
+        _unitCost.text = defaultCost.toStringAsFixed(defaultCost.truncateToDouble() == defaultCost ? 0 : 2);
+      }
+    }
   }
 
   @override
@@ -1221,6 +1227,30 @@ class _RestockSheetState extends State<RestockSheet> {
       showAppSnackBar(context, 'Select an inventory row first.', error: true);
       return;
     }
+    final unitCostVal = double.tryParse(_unitCost.text.trim()) ?? 0;
+    if (unitCostVal <= 0) {
+      final proceed = await showDialog<bool>(
+        context: context,
+        builder: (context) => AlertDialog(
+          backgroundColor: AppTheme.cardColor(context),
+          title: Text('No Unit Cost Entered', style: TextStyle(color: AppTheme.textPrimaryColor(context), fontWeight: FontWeight.w900)),
+          content: Text(
+            'Without a purchase price per piece, net profit for orders of this SKU cannot be calculated accurately. Do you want to proceed with 0 cost?',
+            style: TextStyle(color: AppTheme.textMutedColor(context)),
+          ),
+          actions: <Widget>[
+            TextButton(onPressed: () => Navigator.pop(context, false), child: const Text('Go Back')),
+            FilledButton(
+              style: FilledButton.styleFrom(backgroundColor: AppTheme.primary),
+              onPressed: () => Navigator.pop(context, true),
+              child: const Text('Proceed Anyway'),
+            ),
+          ],
+        ),
+      );
+      if (proceed != true) return;
+    }
+
     setState(() => _saving = true);
     try {
       await ApiClient.instance.post(
@@ -1228,7 +1258,7 @@ class _RestockSheetState extends State<RestockSheet> {
         body: <String, dynamic>{
           'product_id': _selected!.inventoryId.isNotEmpty ? _selected!.inventoryId : _selected!.id,
           'quantity': int.tryParse(_quantity.text.trim()) ?? 1,
-          'unit_cost': double.tryParse(_unitCost.text.trim()) ?? 0,
+          'unit_cost': unitCostVal,
           'supplier_name': _supplier.text.trim(),
           'invoice_number': _invoice.text.trim(),
           'note': _note.text.trim(),
@@ -1262,7 +1292,7 @@ class _RestockSheetState extends State<RestockSheet> {
             SectionHeader(
               title: 'Restock Inventory',
               subtitle:
-                  'Add stock back into the internal ledger using the existing restock endpoint.',
+                  'Add physical stock and record single piece purchase price for profit calculation.',
               action: IconButton(
                 onPressed: () => Navigator.pop(context),
                 icon: const Icon(Icons.close),
@@ -1291,31 +1321,43 @@ class _RestockSheetState extends State<RestockSheet> {
                     _selected = widget.inventory.firstWhere(
                       (item) => item.id == value,
                     );
+                    if (_selected != null) {
+                      final defaultCost = _selected!.costPrice > 0 ? _selected!.costPrice : _selected!.purchasePrice;
+                      if (defaultCost > 0) {
+                        _unitCost.text = defaultCost.toStringAsFixed(defaultCost.truncateToDouble() == defaultCost ? 0 : 2);
+                      }
+                    }
                   }),
             ),
             const SizedBox(height: 12),
             AppTextField(
               controller: _quantity,
-              labelText: 'Quantity',
+              labelText: 'Quantity (Units to add)',
               keyboardType: TextInputType.number,
             ),
             const SizedBox(height: 12),
             AppTextField(
               controller: _unitCost,
-              labelText: 'Unit cost',
+              labelText: 'Purchase Price / Unit Cost (PKR per piece)',
+              hintText: 'e.g. 250',
               keyboardType: const TextInputType.numberWithOptions(
                 decimal: true,
               ),
             ),
+            const SizedBox(height: 4),
+            Text(
+              '💡 This unit cost will automatically calculate true net profit and margin on all sales of this SKU.',
+              style: TextStyle(fontSize: 11, color: AppTheme.textMutedColor(context), fontWeight: FontWeight.w700),
+            ),
             const SizedBox(height: 12),
-            AppTextField(controller: _supplier, labelText: 'Supplier name'),
+            AppTextField(controller: _supplier, labelText: 'Supplier name (Optional)'),
             const SizedBox(height: 12),
-            AppTextField(controller: _invoice, labelText: 'Invoice number'),
+            AppTextField(controller: _invoice, labelText: 'Invoice number (Optional)'),
             const SizedBox(height: 12),
-            AppTextField(controller: _note, labelText: 'Note', maxLines: 3),
+            AppTextField(controller: _note, labelText: 'Note', maxLines: 2),
             const SizedBox(height: 18),
             PrimaryButton(
-              label: 'Add Stock',
+              label: 'Add Stock & Save Cost',
               onPressed: _submit,
               icon: Icons.check,
               expanded: true,
