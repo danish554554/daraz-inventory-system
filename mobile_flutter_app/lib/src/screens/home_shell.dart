@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 
 import '../services/session_manager.dart';
+import '../widgets/app_theme.dart';
 import 'dashboard_screen.dart';
 import 'inventory_screen.dart';
 import 'settings_screen.dart';
@@ -32,22 +33,34 @@ class _HomeShellState extends State<HomeShell> {
     return Scaffold(
       extendBody: true,
       body: IndexedStack(index: _currentIndex, children: _pages),
-      bottomNavigationBar: Padding(
-        padding: const EdgeInsets.fromLTRB(10, 0, 10, 10),
+      bottomNavigationBar: Container(
+        margin: const EdgeInsets.fromLTRB(14, 0, 14, 14),
+        decoration: BoxDecoration(
+          color: Colors.white,
+          borderRadius: BorderRadius.circular(26),
+          border: Border.all(color: AppTheme.border),
+          boxShadow: <BoxShadow>[
+            BoxShadow(
+              color: Colors.black.withValues(alpha: 0.06),
+              blurRadius: 20,
+              offset: const Offset(0, 8),
+            ),
+          ],
+        ),
         child: ClipRRect(
-          borderRadius: BorderRadius.circular(24),
+          borderRadius: BorderRadius.circular(26),
           child: NavigationBar(
             selectedIndex: _currentIndex,
             onDestinationSelected: (index) => setState(() => _currentIndex = index),
             destinations: const <Widget>[
               NavigationDestination(
-                icon: Icon(Icons.dashboard_outlined),
-                selectedIcon: Icon(Icons.dashboard_rounded),
-                label: 'Home',
+                icon: Icon(Icons.analytics_outlined),
+                selectedIcon: Icon(Icons.analytics_rounded),
+                label: 'Profit',
               ),
               NavigationDestination(
-                icon: Icon(Icons.storefront_outlined),
-                selectedIcon: Icon(Icons.storefront),
+                icon: Icon(Icons.store_mall_directory_outlined),
+                selectedIcon: Icon(Icons.store_mall_directory_rounded),
                 label: 'Stores',
               ),
               NavigationDestination(
@@ -56,13 +69,13 @@ class _HomeShellState extends State<HomeShell> {
                 label: 'Stock',
               ),
               NavigationDestination(
-                icon: Icon(Icons.sync_outlined),
-                selectedIcon: Icon(Icons.sync),
-                label: 'Sync',
+                icon: Icon(Icons.sync_rounded),
+                selectedIcon: Icon(Icons.sync_rounded),
+                label: 'Sync Hub',
               ),
               NavigationDestination(
-                icon: Icon(Icons.settings_outlined),
-                selectedIcon: Icon(Icons.settings),
+                icon: Icon(Icons.tune_rounded),
+                selectedIcon: Icon(Icons.tune_rounded),
                 label: 'Settings',
               ),
             ],

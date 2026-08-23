@@ -20,28 +20,47 @@ extension ColorWithValuesCompat on Color {
   }
 }
 class AppTheme {
-  static const Color background = Color(0xFFF7F7F4);
+  static const Color background = Color(0xFFF8FAFC);
   static const Color card = Colors.white;
-  static const Color textPrimary = Color(0xFF202124);
-  static const Color textMuted = Color(0xFF8A8D94);
-  static const Color border = Color(0xFFEDE9E4);
-  static const Color primary = Color(0xFFFF4B1F);
-  static const Color primaryDark = Color(0xFFE93412);
-  static const Color primarySoft = Color(0xFFFFF0E9);
-  static const Color success = Color(0xFF22A45D);
-  static const Color successSoft = Color(0xFFEAF8EF);
-  static const Color warning = Color(0xFFF0AA2A);
-  static const Color warningSoft = Color(0xFFFFF5DD);
-  static const Color danger = Color(0xFFE85454);
-  static const Color dangerSoft = Color(0xFFFFECEB);
-  static const Color info = Color(0xFF3578F6);
-  static const Color infoSoft = Color(0xFFEAF1FF);
-  static const Color softGrey = Color(0xFFF3F3F1);
+  static const Color textPrimary = Color(0xFF0F172A);
+  static const Color textMuted = Color(0xFF64748B);
+  static const Color border = Color(0xFFE2E8F0);
+  static const Color borderLight = Color(0xFFF1F5F9);
+  
+  // Brand colors
+  static const Color primary = Color(0xFFFF5500);
+  static const Color primaryDark = Color(0xFFE03E00);
+  static const Color primarySoft = Color(0xFFFFF1EB);
+  
+  // Status colors
+  static const Color success = Color(0xFF10B981);
+  static const Color successSoft = Color(0xFFECFDF5);
+  static const Color warning = Color(0xFFF59E0B);
+  static const Color warningSoft = Color(0xFFFFFBEB);
+  static const Color danger = Color(0xFFEF4444);
+  static const Color dangerSoft = Color(0xFFFEF2F2);
+  static const Color info = Color(0xFF0EA5E9);
+  static const Color infoSoft = Color(0xFFF0F9FF);
+  static const Color accent = Color(0xFF6366F1);
+  static const Color accentSoft = Color(0xFFEEF2FF);
+  static const Color softGrey = Color(0xFFF1F5F9);
 
   static LinearGradient get primaryGradient => const LinearGradient(
         begin: Alignment.topLeft,
         end: Alignment.bottomRight,
-        colors: <Color>[primary, primaryDark],
+        colors: <Color>[Color(0xFFFF5500), Color(0xFFFF2200)],
+      );
+
+  static LinearGradient get heroGradient => const LinearGradient(
+        begin: Alignment.topLeft,
+        end: Alignment.bottomRight,
+        colors: <Color>[Color(0xFF1E293B), Color(0xFF0F172A)],
+      );
+
+  static LinearGradient get profitGradient => const LinearGradient(
+        begin: Alignment.topLeft,
+        end: Alignment.bottomRight,
+        colors: <Color>[Color(0xFF059669), Color(0xFF10B981)],
       );
 
   static ThemeData get lightTheme {
@@ -51,7 +70,7 @@ class AppTheme {
       scaffoldBackgroundColor: background,
       colorScheme: base.colorScheme.copyWith(
         primary: primary,
-        secondary: primary,
+        secondary: success,
         surface: card,
         error: danger,
       ),
@@ -70,11 +89,12 @@ class AppTheme {
           color: textPrimary,
           fontSize: 18,
           fontWeight: FontWeight.w900,
+          letterSpacing: -0.4,
         ),
       ),
       navigationBarTheme: NavigationBarThemeData(
-        height: 64,
-        elevation: 12,
+        height: 66,
+        elevation: 0,
         backgroundColor: Colors.white,
         indicatorColor: primarySoft,
         iconTheme: WidgetStateProperty.resolveWith<IconThemeData>((states) {
@@ -105,7 +125,7 @@ class AppTheme {
       inputDecorationTheme: InputDecorationTheme(
         filled: true,
         fillColor: Colors.white,
-        contentPadding: const EdgeInsets.symmetric(horizontal: 14, vertical: 13),
+        contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
         hintStyle: const TextStyle(color: textMuted, fontSize: 13),
         labelStyle: const TextStyle(color: textMuted, fontWeight: FontWeight.w700),
         prefixIconColor: textMuted,
@@ -116,7 +136,7 @@ class AppTheme {
         ),
         focusedBorder: OutlineInputBorder(
           borderRadius: BorderRadius.circular(14),
-          borderSide: const BorderSide(color: primary, width: 1.2),
+          borderSide: const BorderSide(color: primary, width: 1.5),
         ),
         errorBorder: OutlineInputBorder(
           borderRadius: BorderRadius.circular(14),

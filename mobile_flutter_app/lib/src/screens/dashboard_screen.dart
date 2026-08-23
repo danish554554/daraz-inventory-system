@@ -210,147 +210,474 @@ class _DashboardScreenState extends State<DashboardScreen> {
                   child: Column(
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: <Widget>[
-                      _heroCard(),
+                      _headerBar(),
                       const SizedBox(height: 14),
+                      _heroProfitCard(),
+                      const SizedBox(height: 14),
+                      _quickActionsGrid(context),
+                      const SizedBox(height: 18),
+                      _sectionTitle('Key Metrics'),
+                      const SizedBox(height: 10),
                       _metricsGrid(context),
                       const SizedBox(height: 18),
                       _sectionTitle(
-                        'Low stock alerts',
+                        'Low stock radar',
                         action: _lowStockItems.isEmpty ? null : 'View all',
                       ),
                       const SizedBox(height: 10),
                       if (_lowStockItems.isEmpty)
                         const EmptyState(
                           title: 'Stock is healthy',
-                          message:
-                              'No products are below their reorder limit.',
+                          message: 'No products are below their reorder limit.',
                           icon: Icons.check_circle_outline,
                         )
                       else
                         ..._lowStockItems.take(4).map(_lowStockCard),
                       const SizedBox(height: 18),
                       _sectionTitle(
-                        'Orders History',
-                        action: _historyPeriod.toUpperCase(),
+                        'Recent Live Orders',
+                        action: _orders.isEmpty ? null : '${_orders.length} orders',
                       ),
-                      const SizedBox(height: 10),
-                      _ordersHistoryCard(),
                       const SizedBox(height: 10),
                       if (_orders.isEmpty)
                         const EmptyState(
                           title: 'No orders yet',
-                          message:
-                              'Today, weekly and monthly order history appears here after sync.',
+                          message: 'Live orders from connected stores will appear here after sync.',
                           icon: Icons.receipt_long_outlined,
                         )
                       else
-                        ..._orders.take(5).map(_dashboardOrderCard),
+                        ..._orders.take(6).map(_dashboardOrderCard),
                     ],
                   ),
                 ),
     );
   }
 
-  Widget _heroCard() {
+  Widget _headerBar() {
     final user = widget.sessionManager.username.isEmpty
         ? 'Admin'
         : widget.sessionManager.username.split('@').first;
 
-    return Container(
-      padding: const EdgeInsets.all(16),
-      decoration: BoxDecoration(
-        gradient: AppTheme.primaryGradient,
-        borderRadius: BorderRadius.circular(22),
-        boxShadow: <BoxShadow>[
-          BoxShadow(
-            color: AppTheme.primary.withValues(alpha: 0.18),
-            blurRadius: 18,
-            offset: const Offset(0, 8),
-          ),
-        ],
-      ),
-      child: Stack(
-        children: <Widget>[
-          Positioned(
-            right: -26,
-            top: -34,
-            child: Container(
-              height: 116,
-              width: 116,
-              decoration: BoxDecoration(
-                color: Colors.white.withValues(alpha: 0.12),
-                shape: BoxShape.circle,
-              ),
-            ),
-          ),
-          Column(
+    return Row(
+      children: <Widget>[
+        Expanded(
+          child: Column(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: <Widget>[
               Row(
                 children: <Widget>[
-                  Expanded(
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: <Widget>[
-                        Text(
-                          _greeting(),
-                          style: TextStyle(
-                            color: Colors.white.withValues(alpha: 0.82),
-                            fontSize: 11,
-                            fontWeight: FontWeight.w700,
-                          ),
-                        ),
-                        const SizedBox(height: 3),
-                        Text(
-                          user,
-                          maxLines: 1,
-                          overflow: TextOverflow.ellipsis,
-                          style: const TextStyle(
-                            color: Colors.white,
-                            fontSize: 20,
-                            fontWeight: FontWeight.w900,
-                          ),
+                  Container(
+                    width: 8,
+                    height: 8,
+                    decoration: BoxDecoration(
+                      color: _isLiveSyncing ? AppTheme.warning : AppTheme.success,
+                      shape: BoxShape.circle,
+                      boxShadow: <BoxShadow>[
+                        BoxShadow(
+                          color: (_isLiveSyncing ? AppTheme.warning : AppTheme.success).withValues(alpha: 0.5),
+                          blurRadius: 6,
+                          spreadRadius: 1,
                         ),
                       ],
                     ),
                   ),
-                  CircleIconButton(
-                    icon: Icons.refresh_rounded,
-                    onPressed: _load,
-                    background: Colors.white.withValues(alpha: 0.17),
-                    foreground: Colors.white,
-                  ),
-                  const SizedBox(width: 8),
-                  CircleAvatar(
-                    radius: 19,
-                    backgroundColor: Colors.white.withValues(alpha: 0.18),
-                    child: const Text(
-                      'AR',
-                      style: TextStyle(
-                        color: Colors.white,
-                        fontWeight: FontWeight.w900,
-                        fontSize: 12,
-                      ),
+                  const SizedBox(width: 6),
+                  Text(
+                    _isLiveSyncing
+                        ? 'SYNCING LIVE...'
+                        : (_syncStatus?.syncRunningNow == true
+                            ? 'SCHEDULER RUNNING'
+                            : 'DARAZ LIVE CONNECTED'),
+                    style: TextStyle(
+                      color: _isLiveSyncing ? AppTheme.warning : AppTheme.success,
+                      fontSize: 10,
+                      fontWeight: FontWeight.w900,
+                      letterSpacing: 0.8,
                     ),
                   ),
                 ],
               ),
-              const SizedBox(height: 20),
-              Wrap(
-                spacing: 8,
-                runSpacing: 8,
-                children: <Widget>[
-                  _heroPill(
-                    Icons.link_rounded,
-                    '$_connectedStores/${_stores.length} stores connected',
+              const SizedBox(height: 3),
+              Text(
+                'Hello, $user 👋',
+                style: const TextStyle(
+                  color: AppTheme.textPrimary,
+                  fontSize: 20,
+                  fontWeight: FontWeight.w900,
+                  letterSpacing: -0.5,
+                ),
+              ),
+            ],
+          ),
+        ),
+        InkWell(
+          onTap: _isLiveSyncing ? null : () async {
+            await _triggerBackgroundLiveSync();
+          },
+          borderRadius: BorderRadius.circular(14),
+          child: Container(
+            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+            decoration: BoxDecoration(
+              color: AppTheme.primarySoft,
+              borderRadius: BorderRadius.circular(14),
+              border: Border.all(color: AppTheme.primary.withValues(alpha: 0.2)),
+            ),
+            child: const Row(
+              mainAxisSize: MainAxisSize.min,
+              children: <Widget>[
+                Icon(
+                  Icons.sync_rounded,
+                  size: 16,
+                  color: AppTheme.primary,
+                ),
+                SizedBox(width: 6),
+                Text(
+                  'Sync Live',
+                  style: TextStyle(
+                    color: AppTheme.primary,
+                    fontWeight: FontWeight.w900,
+                    fontSize: 12,
                   ),
-                  _heroPill(
-                    _isLiveSyncing ? Icons.sync : Icons.schedule_rounded,
-                    _isLiveSyncing ? 'Syncing live from Daraz...' : 'Last sync · ${_lastSyncLabel()}',
+                ),
+              ],
+            ),
+          ),
+        ),
+      ],
+    );
+  }
+
+  Widget _heroProfitCard() {
+    final revenue = JsonReaders.number(
+      _historySummary,
+      'revenue',
+      _orderItems.fold<double>(0, (sum, item) => sum + item.amount),
+    );
+
+    final totalCost = JsonReaders.number(
+      _historySummary,
+      'total_cost',
+      _orderItems.fold<double>(0, (sum, item) => sum + item.totalCost),
+    );
+
+    final profit = JsonReaders.number(
+      _historySummary,
+      'profit',
+      revenue - totalCost,
+    );
+
+    final profitMargin = JsonReaders.number(
+      _historySummary,
+      'profit_margin',
+      revenue > 0 ? (((revenue - totalCost) / revenue) * 100) : 0,
+    );
+
+    final totalOrders = JsonReaders.integer(
+      _historySummary,
+      'total_orders',
+      _orders.length,
+    );
+
+    final returns = JsonReaders.integer(
+      _historySummary,
+      'returns',
+      _orderItems.where((item) => item.isReturn).length,
+    );
+
+    return Container(
+      width: double.infinity,
+      padding: const EdgeInsets.all(18),
+      decoration: BoxDecoration(
+        gradient: AppTheme.heroGradient,
+        borderRadius: BorderRadius.circular(22),
+        border: Border.all(color: const Color(0xFF334155)),
+        boxShadow: <BoxShadow>[
+          BoxShadow(
+            color: Colors.black.withValues(alpha: 0.25),
+            blurRadius: 20,
+            offset: const Offset(0, 10),
+          ),
+        ],
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: <Widget>[
+          Row(
+            mainAxisAlignment: MainAxisAlignment.spaceBetween,
+            children: <Widget>[
+              Row(
+                children: <Widget>[
+                  Container(
+                    padding: const EdgeInsets.all(6),
+                    decoration: BoxDecoration(
+                      color: AppTheme.success.withValues(alpha: 0.18),
+                      borderRadius: BorderRadius.circular(10),
+                    ),
+                    child: const Icon(
+                      Icons.trending_up_rounded,
+                      color: AppTheme.success,
+                      size: 16,
+                    ),
+                  ),
+                  const SizedBox(width: 8),
+                  Text(
+                    'TRUE NET PROFIT (${_historyPeriod.toUpperCase()})',
+                    style: TextStyle(
+                      color: Colors.white.withValues(alpha: 0.75),
+                      fontSize: 11,
+                      fontWeight: FontWeight.w800,
+                      letterSpacing: 0.5,
+                    ),
                   ),
                 ],
               ),
+              Container(
+                padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+                decoration: BoxDecoration(
+                  gradient: AppTheme.profitGradient,
+                  borderRadius: BorderRadius.circular(20),
+                  boxShadow: <BoxShadow>[
+                    BoxShadow(
+                      color: AppTheme.success.withValues(alpha: 0.3),
+                      blurRadius: 8,
+                      offset: const Offset(0, 2),
+                    ),
+                  ],
+                ),
+                child: Text(
+                  profitMargin > 0 ? '+${profitMargin.toStringAsFixed(1)}% Margin' : 'Margin --',
+                  style: const TextStyle(
+                    color: Colors.white,
+                    fontSize: 11,
+                    fontWeight: FontWeight.w900,
+                  ),
+                ),
+              ),
             ],
+          ),
+          const SizedBox(height: 12),
+          Text(
+            profit > 0 ? 'PKR ${Formatters.money(profit)}' : 'PKR 0',
+            style: const TextStyle(
+              color: Colors.white,
+              fontSize: 30,
+              fontWeight: FontWeight.w900,
+              letterSpacing: -1.0,
+            ),
+          ),
+          const SizedBox(height: 16),
+          Container(
+            padding: const EdgeInsets.all(12),
+            decoration: BoxDecoration(
+              color: Colors.white.withValues(alpha: 0.07),
+              borderRadius: BorderRadius.circular(14),
+              border: Border.all(color: Colors.white.withValues(alpha: 0.1)),
+            ),
+            child: Row(
+              mainAxisAlignment: MainAxisAlignment.spaceAround,
+              children: <Widget>[
+                _heroSubMetric('Gross Revenue', 'PKR ${Formatters.money(revenue)}'),
+                Container(height: 24, width: 1, color: Colors.white.withValues(alpha: 0.15)),
+                _heroSubMetric('Orders', Formatters.quantity(totalOrders)),
+                Container(height: 24, width: 1, color: Colors.white.withValues(alpha: 0.15)),
+                _heroSubMetric('Returns', Formatters.quantity(returns)),
+              ],
+            ),
+          ),
+          const SizedBox(height: 14),
+          SingleChildScrollView(
+            scrollDirection: Axis.horizontal,
+            child: Row(
+              children: <Widget>[
+                _periodFilterPill('today', 'Today'),
+                const SizedBox(width: 8),
+                _periodFilterPill('week', 'This Week'),
+                const SizedBox(width: 8),
+                _periodFilterPill('month', 'This Month'),
+              ],
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _periodFilterPill(String value, String label) {
+    final selected = _historyPeriod == value;
+    return InkWell(
+      onTap: () async {
+        if (selected || _loading) return;
+        setState(() => _historyPeriod = value);
+        await _load();
+      },
+      borderRadius: BorderRadius.circular(20),
+      child: Container(
+        padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 6),
+        decoration: BoxDecoration(
+          color: selected ? AppTheme.primary : Colors.white.withValues(alpha: 0.12),
+          borderRadius: BorderRadius.circular(20),
+          border: Border.all(
+            color: selected ? AppTheme.primary : Colors.white.withValues(alpha: 0.2),
+          ),
+        ),
+        child: Text(
+          label,
+          style: TextStyle(
+            color: Colors.white,
+            fontSize: 11,
+            fontWeight: selected ? FontWeight.w900 : FontWeight.w700,
+          ),
+        ),
+      ),
+    );
+  }
+
+  Widget _heroSubMetric(String label, String value) {
+    return Column(
+      children: <Widget>[
+        Text(
+          value,
+          style: const TextStyle(
+            color: Colors.white,
+            fontWeight: FontWeight.w900,
+            fontSize: 13,
+          ),
+        ),
+        const SizedBox(height: 2),
+        Text(
+          label,
+          style: TextStyle(
+            color: Colors.white.withValues(alpha: 0.6),
+            fontSize: 10,
+            fontWeight: FontWeight.w700,
+          ),
+        ),
+      ],
+    );
+  }
+
+  Widget _quickActionsGrid(BuildContext context) {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: <Widget>[
+        _sectionTitle('Quick Operations'),
+        const SizedBox(height: 10),
+        Row(
+          children: <Widget>[
+            Expanded(
+              child: _quickActionTile(
+                title: 'Pull Orders',
+                subtitle: 'Live Sync',
+                icon: Icons.cloud_download_rounded,
+                color: AppTheme.primary,
+                background: AppTheme.primarySoft,
+                onTap: _isLiveSyncing ? null : () => _triggerBackgroundLiveSync(),
+              ),
+            ),
+            const SizedBox(width: 10),
+            Expanded(
+              child: _quickActionTile(
+                title: 'Returns',
+                subtitle: 'Scan Claims',
+                icon: Icons.assignment_return_rounded,
+                color: AppTheme.warning,
+                background: AppTheme.warningSoft,
+                onTap: () async {
+                  await ApiClient.instance.post('/daraz-sync/scan-returns', body: <String, dynamic>{'history_days': 60});
+                  await _load(silent: true);
+                  if (!context.mounted) return;
+                  showAppSnackBar(context, 'Return orders scanned from all stores.');
+                },
+              ),
+            ),
+          ],
+        ),
+        const SizedBox(height: 10),
+        Row(
+          children: <Widget>[
+            Expanded(
+              child: _quickActionTile(
+                title: 'Failed Delivery',
+                subtitle: '6-Day Hub Watch',
+                icon: Icons.local_shipping_rounded,
+                color: AppTheme.danger,
+                background: AppTheme.dangerSoft,
+                onTap: () async {
+                  await ApiClient.instance.post('/daraz-sync/scan-failed-delivery', body: <String, dynamic>{'history_days': 60});
+                  await _load(silent: true);
+                  if (!context.mounted) return;
+                  showAppSnackBar(context, 'Failed delivery records scanned.');
+                },
+              ),
+            ),
+            const SizedBox(width: 10),
+            Expanded(
+              child: _quickActionTile(
+                title: 'Add Stock',
+                subtitle: 'Quick Audit',
+                icon: Icons.add_business_rounded,
+                color: AppTheme.info,
+                background: AppTheme.infoSoft,
+                onTap: () {
+                  showAppSnackBar(context, 'Switch to Stock tab to audit or add inventory.');
+                },
+              ),
+            ),
+          ],
+        ),
+      ],
+    );
+  }
+
+  Widget _quickActionTile({
+    required String title,
+    required String subtitle,
+    required IconData icon,
+    required Color color,
+    required Color background,
+    required VoidCallback? onTap,
+  }) {
+    return AppCard(
+      onTap: onTap,
+      padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
+      child: Row(
+        children: <Widget>[
+          Container(
+            padding: const EdgeInsets.all(8),
+            decoration: BoxDecoration(
+              color: background,
+              borderRadius: BorderRadius.circular(12),
+            ),
+            child: Icon(icon, color: color, size: 20),
+          ),
+          const SizedBox(width: 10),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              mainAxisSize: MainAxisSize.min,
+              children: <Widget>[
+                Text(
+                  title,
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: const TextStyle(
+                    fontWeight: FontWeight.w900,
+                    fontSize: 13,
+                    letterSpacing: -0.2,
+                  ),
+                ),
+                Text(
+                  subtitle,
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: const TextStyle(
+                    color: AppTheme.textMuted,
+                    fontSize: 10,
+                    fontWeight: FontWeight.w700,
+                  ),
+                ),
+              ],
+            ),
           ),
         ],
       ),
@@ -508,290 +835,137 @@ class _DashboardScreenState extends State<DashboardScreen> {
     );
   }
 
-  Widget _ordersHistoryCard() {
-    final summaryOrders = JsonReaders.integer(
-      _historySummary,
-      'total_orders',
-      _orders.length,
-    );
-
-    final revenue = JsonReaders.number(
-      _historySummary,
-      'revenue',
-      _orderItems.fold<double>(0, (sum, item) => sum + item.amount),
-    );
-
-    final revenueAvailable = JsonReaders.boolean(
-      _historySummary,
-      'revenue_available',
-      revenue > 0,
-    );
-
-    final totalCost = JsonReaders.number(
-      _historySummary,
-      'total_cost',
-      _orderItems.fold<double>(0, (sum, item) => sum + item.totalCost),
-    );
-
-    final profit = JsonReaders.number(
-      _historySummary,
-      'profit',
-      revenue - totalCost,
-    );
-
-    final profitMargin = JsonReaders.number(
-      _historySummary,
-      'profit_margin',
-      revenue > 0 ? (((revenue - totalCost) / revenue) * 100) : 0,
-    );
-
-    final returns = JsonReaders.integer(
-      _historySummary,
-      'returns',
-      _orderItems.where((item) => item.isReturn).length,
-    );
-
-    final failed = JsonReaders.integer(
-      _historySummary,
-      'failed_deliveries',
-      _orderItems.where((item) => item.isFailedDelivery).length,
-    );
-
-    return AppCard(
-      padding: const EdgeInsets.all(13),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: <Widget>[
-          SingleChildScrollView(
-            scrollDirection: Axis.horizontal,
-            child: Row(
-              children: <Widget>[
-                _historyChip('today', 'Today'),
-                const SizedBox(width: 8),
-                _historyChip('week', 'Week'),
-                const SizedBox(width: 8),
-                _historyChip('month', 'Month'),
-              ],
-            ),
-          ),
-          const SizedBox(height: 12),
-          Row(
-            children: <Widget>[
-              Expanded(
-                child: _historyMetric(
-                  'Orders',
-                  Formatters.quantity(summaryOrders),
-                ),
-              ),
-              if (revenueAvailable)
-                Expanded(
-                  child: _historyMetric(
-                    'Revenue',
-                    'Rs. ${Formatters.money(revenue)}',
-                  ),
-                ),
-            ],
-          ),
-          const SizedBox(height: 10),
-          Row(
-            children: <Widget>[
-              Expanded(
-                child: _historyMetric(
-                  'Net Profit',
-                  profit > 0 ? 'Rs. ${Formatters.money(profit)}' : 'Rs. 0',
-                ),
-              ),
-              Expanded(
-                child: _historyMetric(
-                  'Profit Margin',
-                  profitMargin > 0 ? '${profitMargin.toStringAsFixed(1)}%' : '--',
-                ),
-              ),
-            ],
-          ),
-          const SizedBox(height: 10),
-          Row(
-            children: <Widget>[
-              Expanded(
-                child: _historyMetric(
-                  'Returns',
-                  Formatters.quantity(returns),
-                ),
-              ),
-              Expanded(
-                child: _historyMetric(
-                  'Failed Delivery',
-                  Formatters.quantity(failed),
-                ),
-              ),
-            ],
-          ),
-        ],
-      ),
-    );
-  }
-
-  Widget _historyChip(String value, String label) {
-    final selected = _historyPeriod == value;
-
-    return ChoiceChip(
-      selected: selected,
-      label: Text(label),
-      onSelected: (_) async {
-        if (selected || _loading) return;
-        setState(() => _historyPeriod = value);
-        await _load();
-      },
-      selectedColor: AppTheme.primary,
-      backgroundColor: Colors.white,
-      labelStyle: TextStyle(
-        color: selected ? Colors.white : AppTheme.textPrimary,
-        fontSize: 12,
-        fontWeight: FontWeight.w900,
-      ),
-      side: BorderSide(
-        color: selected ? AppTheme.primary : AppTheme.border,
-      ),
-      shape: RoundedRectangleBorder(
-        borderRadius: BorderRadius.circular(24),
-      ),
-    );
-  }
-
-  Widget _historyMetric(String label, String value) {
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: <Widget>[
-        Text(
-          value,
-          maxLines: 1,
-          overflow: TextOverflow.ellipsis,
-          style: const TextStyle(
-            fontSize: 16,
-            fontWeight: FontWeight.w900,
-          ),
-        ),
-        const SizedBox(height: 2),
-        Text(
-          label,
-          maxLines: 1,
-          overflow: TextOverflow.ellipsis,
-          style: const TextStyle(
-            color: AppTheme.textMuted,
-            fontSize: 11,
-            fontWeight: FontWeight.w800,
-          ),
-        ),
-      ],
-    );
-  }
-
   Widget _dashboardOrderCard(CentralOrder order) {
-    final amountText =
-        order.amount > 0 ? ' · Rs. ${Formatters.money(order.amount)}' : '';
-    final profitText = (order.profit != null && order.profit! > 0)
-        ? ' · Profit Rs. ${Formatters.money(order.profit!)}'
-        : '';
-
+    final hasProfit = order.profit != null && order.profit! > 0;
     final isCancelled = order.status.toLowerCase().contains('cancel');
+    final isReturned = order.status.toLowerCase().contains('return');
+    final isFailed = order.status.toLowerCase().contains('failed');
 
-    final color = isCancelled ? AppTheme.danger : AppTheme.success;
-    final softColor = isCancelled ? AppTheme.dangerSoft : AppTheme.successSoft;
+    Color statusColor = AppTheme.success;
+    Color statusSoft = AppTheme.successSoft;
+    if (isCancelled || isReturned || isFailed) {
+      statusColor = AppTheme.danger;
+      statusSoft = AppTheme.dangerSoft;
+    } else if (order.status.toLowerCase().contains('pending') || order.status.toLowerCase().contains('ready')) {
+      statusColor = AppTheme.primary;
+      statusSoft = AppTheme.primarySoft;
+    }
 
     return Padding(
       padding: const EdgeInsets.only(bottom: 10),
       child: AppCard(
         padding: const EdgeInsets.all(12),
-        child: Row(
+        child: Column(
           children: <Widget>[
-            ProductImageBox(
-              imageUrl: order.productImageUrl,
-              icon: Icons.shopping_bag_outlined,
-              size: 44,
+            Row(
+              children: <Widget>[
+                ProductImageBox(
+                  imageUrl: order.productImageUrl,
+                  icon: Icons.shopping_bag_outlined,
+                  size: 46,
+                ),
+                const SizedBox(width: 12),
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: <Widget>[
+                      Text(
+                        order.productTitle,
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style: const TextStyle(
+                          fontSize: 13,
+                          fontWeight: FontWeight.w900,
+                          letterSpacing: -0.2,
+                        ),
+                      ),
+                      const SizedBox(height: 3),
+                      Row(
+                        children: <Widget>[
+                          Container(
+                            padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                            decoration: BoxDecoration(
+                              color: AppTheme.softGrey,
+                              borderRadius: BorderRadius.circular(6),
+                              border: Border.all(color: AppTheme.border),
+                            ),
+                            child: Text(
+                              order.storeName.isEmpty ? 'Daraz Store' : order.storeName,
+                              style: const TextStyle(
+                                fontSize: 10,
+                                fontWeight: FontWeight.w800,
+                                color: AppTheme.textMuted,
+                              ),
+                            ),
+                          ),
+                          const SizedBox(width: 6),
+                          Expanded(
+                            child: Text(
+                              '#${order.orderNumber.isEmpty ? order.externalOrderId : order.orderNumber}',
+                              maxLines: 1,
+                              overflow: TextOverflow.ellipsis,
+                              style: const TextStyle(
+                                fontSize: 11,
+                                color: AppTheme.textMuted,
+                                fontWeight: FontWeight.w700,
+                              ),
+                            ),
+                          ),
+                        ],
+                      ),
+                    ],
+                  ),
+                ),
+                const SizedBox(width: 8),
+                StatusChip(
+                  label: order.status.isEmpty ? 'Order' : order.status.toUpperCase(),
+                  color: statusColor,
+                  softColor: statusSoft,
+                ),
+              ],
             ),
-            const SizedBox(width: 12),
-            Expanded(
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
+            const SizedBox(height: 10),
+            Container(
+              padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+              decoration: BoxDecoration(
+                color: AppTheme.softGrey,
+                borderRadius: BorderRadius.circular(10),
+              ),
+              child: Row(
+                mainAxisAlignment: MainAxisAlignment.spaceBetween,
                 children: <Widget>[
                   Text(
-                    order.productTitle,
-                    maxLines: 1,
-                    overflow: TextOverflow.ellipsis,
-                    style: const TextStyle(
-                      fontSize: 13,
-                      fontWeight: FontWeight.w900,
-                    ),
-                  ),
-                  const SizedBox(height: 3),
-                  Text(
-                    'Order ${order.orderNumber.isEmpty ? order.externalOrderId : order.orderNumber} · ${order.storeName}$amountText$profitText',
-                    maxLines: 1,
-                    overflow: TextOverflow.ellipsis,
+                    order.amount > 0 ? 'Sale: PKR ${Formatters.money(order.amount)}' : 'Sale: PKR --',
                     style: const TextStyle(
                       fontSize: 11,
-                      color: AppTheme.textMuted,
-                      fontWeight: FontWeight.w700,
+                      fontWeight: FontWeight.w800,
+                      color: AppTheme.textPrimary,
+                    ),
+                  ),
+                  Container(
+                    padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
+                    decoration: BoxDecoration(
+                      color: hasProfit ? AppTheme.successSoft : AppTheme.softGrey,
+                      borderRadius: BorderRadius.circular(8),
+                      border: Border.all(
+                        color: hasProfit ? AppTheme.success.withValues(alpha: 0.3) : AppTheme.border,
+                      ),
+                    ),
+                    child: Text(
+                      hasProfit ? 'Profit: +PKR ${Formatters.money(order.profit!)}' : 'Profit: Calc on COGS',
+                      style: TextStyle(
+                        fontSize: 10,
+                        fontWeight: FontWeight.w900,
+                        color: hasProfit ? AppTheme.success : AppTheme.textMuted,
+                      ),
                     ),
                   ),
                 ],
               ),
             ),
-            const SizedBox(width: 8),
-            StatusChip(
-              label: order.status.isEmpty ? 'Order' : order.status,
-              color: color,
-              softColor: softColor,
-            ),
           ],
         ),
       ),
     );
-  }
-
-  Widget _heroPill(IconData icon, String label) {
-    return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
-      decoration: BoxDecoration(
-        color: Colors.white.withValues(alpha: 0.18),
-        borderRadius: BorderRadius.circular(20),
-      ),
-      child: Row(
-        mainAxisSize: MainAxisSize.min,
-        children: <Widget>[
-          Icon(icon, color: Colors.white, size: 13),
-          const SizedBox(width: 5),
-          Text(
-            label,
-            style: const TextStyle(
-              color: Colors.white,
-              fontSize: 11,
-              fontWeight: FontWeight.w800,
-            ),
-          ),
-        ],
-      ),
-    );
-  }
-
-  String _greeting() {
-    final hour = DateTime.now().hour;
-    if (hour < 12) return 'Welcome back';
-    if (hour < 18) return 'Good afternoon';
-    return 'Good evening';
-  }
-
-  String _lastSyncLabel() {
-    final dates = _stores
-        .map((store) => store.lastSyncFinishedAt)
-        .whereType<DateTime>()
-        .toList()
-      ..sort((a, b) => b.compareTo(a));
-
-    if (dates.isEmpty) {
-      return _syncStatus?.syncRunningNow == true ? 'running' : 'not synced';
-    }
-
-    return Formatters.dateTime(dates.first);
   }
 }
