@@ -103,12 +103,20 @@ class _DashboardScreenState extends State<DashboardScreen> {
             bypassCache: true,
           ),
         ),
+        safe(
+          ApiClient.instance.get(
+            '/daraz-sync/orders',
+            queryParameters: <String, dynamic>{'limit': 20},
+            bypassCache: true,
+          ),
+        ),
       ]);
 
       final storesMap = JsonReaders.map(results[0]);
       final inventoryList = JsonReaders.list(results[1]);
       final itemsMap = JsonReaders.map(results[2]);
       final historyMap = JsonReaders.map(results[4]);
+      final liveOrdersMap = JsonReaders.map(results[5]);
 
       if (storesMap.isEmpty && inventoryList.isEmpty) {
         throw ApiException(
@@ -129,7 +137,9 @@ class _DashboardScreenState extends State<DashboardScreen> {
             .toList();
 
         final historyOrders = JsonReaders.list(historyMap['orders']);
-        _orders = historyOrders
+        final liveOrders = JsonReaders.list(liveOrdersMap['orders']);
+        final targetOrders = historyOrders.isNotEmpty ? historyOrders : liveOrders;
+        _orders = targetOrders
             .map((item) => CentralOrder.fromJson(JsonReaders.map(item)))
             .where(
               (order) =>

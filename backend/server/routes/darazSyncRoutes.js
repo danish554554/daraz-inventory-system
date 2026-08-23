@@ -68,8 +68,15 @@ function applyDateRange(query, field, { period = "today", start, end } = {}) {
   return { startDate, endDate };
 }
 
-function buildEventDateRangeQuery(fields, { period = "today", start, end } = {}) {
-  const { startDate, endDate } = resolveHistoryWindow({ period, start, end });
+function buildEventDateRangeQuery(fields, { period = "all", start, end } = {}) {
+  if (period === "all" && !start && !end) {
+    return {
+      startDate: null,
+      endDate: null,
+      dateQuery: {}
+    };
+  }
+  const { startDate, endDate } = resolveHistoryWindow({ period: period === "all" ? "month" : period, start, end });
   return {
     startDate,
     endDate,
@@ -488,11 +495,13 @@ router.get("/order-items", async (req, res) => {
 
 router.get("/return-orders", async (req, res) => {
   try {
-    const { store_id, period = "today", start, end, limit = 100 } = req.query;
-    const { startDate, endDate, dateQuery } = buildEventDateRangeQuery(["claim_date", "hub_arrived_at", "updatedAt", "createdAt"], { period, start, end });
-    const query = {
-      $and: [returnOrClaimQuery(), dateQuery]
-    };
+    const { store_id, period, start, end, limit = 100 } = req.query;
+    const effectivePeriod = period || (start || end ? "custom" : "all");
+    const { startDate, endDate, dateQuery } = buildEventDateRangeQuery(["claim_date", "hub_arrived_at", "logistic_facility_at", "updatedAt", "createdAt"], { period: effectivePeriod, start, end });
+    const baseQuery = returnOrClaimQuery();
+    const query = Object.keys(dateQuery).length
+      ? { $and: [baseQuery, dateQuery] }
+      : baseQuery;
     if (store_id) query.store_id = store_id;
 
     const items = await CentralOrderItem.find(query)
@@ -520,11 +529,13 @@ router.get("/return-orders", async (req, res) => {
 
 router.get("/failed-delivery", async (req, res) => {
   try {
-    const { store_id, period = "today", start, end, limit = 100 } = req.query;
-    const { startDate, endDate, dateQuery } = buildEventDateRangeQuery(["hub_arrived_at", "logistic_facility_at", "updatedAt", "createdAt"], { period, start, end });
-    const query = {
-      $and: [failedDeliveryQuery(), dateQuery]
-    };
+    const { store_id, period, start, end, limit = 100 } = req.query;
+    const effectivePeriod = period || (start || end ? "custom" : "all");
+    const { startDate, endDate, dateQuery } = buildEventDateRangeQuery(["hub_arrived_at", "logistic_facility_at", "updatedAt", "createdAt"], { period: effectivePeriod, start, end });
+    const baseQuery = failedDeliveryQuery();
+    const query = Object.keys(dateQuery).length
+      ? { $and: [baseQuery, dateQuery] }
+      : baseQuery;
     if (store_id) query.store_id = store_id;
 
     const items = await CentralOrderItem.find(query)

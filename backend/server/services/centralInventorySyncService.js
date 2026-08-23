@@ -212,29 +212,32 @@ function getHubName(item = {}) {
   ) || orderRules.DEFAULT_COLLECTION_HUB_NAME;
 }
 
-function makeSyncWindow(lastSyncAt) {
-  if (!lastSyncAt) return new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString();
-  return new Date(new Date(lastSyncAt).getTime() - 10 * 60 * 1000).toISOString();
+function makeSyncWindow(lastSyncAt, fallbackDays = 7) {
+  if (!lastSyncAt) return new Date(Date.now() - fallbackDays * 24 * 60 * 60 * 1000).toISOString();
+  // Look back at least 24 hours or 10 min before lastSyncAt, whichever is wider
+  const fromLastSync = new Date(new Date(lastSyncAt).getTime() - 60 * 60 * 1000);
+  const minLookback = new Date(Date.now() - fallbackDays * 24 * 60 * 60 * 1000);
+  const target = fromLastSync < minLookback ? fromLastSync : minLookback;
+  return target.toISOString();
 }
 
 function statusesForTrigger(triggerSource = '') {
   const source = safeString(triggerSource).toLowerCase();
   if (source.includes('return')) {
-    return [null, 'returned', 'return', 'refund', 'shipped_back', 'return_to_seller'];
+    // Official Daraz Open Platform status for returns is 'returned'
+    return ['returned', null];
   }
   if (source.includes('failed')) {
-    return [null, 'failed_delivery', 'delivery_failed', 'undelivered', 'return_to_seller', 'returned_to_shipper', 'shipped_back'];
+    // Official Daraz Open Platform status for failed deliveries is 'failed'
+    return ['failed', null];
   }
-  return [null];
+  return [null, 'pending', 'ready_to_ship', 'shipped', 'delivered', 'returned', 'failed'];
 }
 
 function makeStatusScanWindow(triggerSource = '', lastSyncAt = null, historyDays = 30) {
   const source = safeString(triggerSource).toLowerCase();
-  if (source.includes('return') || source.includes('failed')) {
-    const days = Math.min(Math.max(Number(historyDays) || 30, 1), 180);
-    return new Date(Date.now() - days * 24 * 60 * 60 * 1000).toISOString();
-  }
-  return makeSyncWindow(lastSyncAt);
+  const days = Math.min(Math.max(Number(historyDays) || (source.includes('return') || source.includes('failed') ? 60 : 30), 1), 180);
+  return new Date(Date.now() - days * 24 * 60 * 60 * 1000).toISOString();
 }
 
 function syncKindForTrigger(triggerSource = '') {
@@ -840,7 +843,13 @@ async function syncStoreOrders(store, options = {}) {
         let hasMore = true;
 
         while (hasMore && page < maxPages) {
-          const ordersResponse = await getOrders({ storeToken, updatedAfter: since, status: statusFilter, offset, limit });
+          const ordersResponse = await getOrders({
+            storeToken,
+            updatedAfter: since,
+            status: statusFilter,
+            offset,
+            limit
+          });
           const orders = Array.isArray(ordersResponse)
             ? ordersResponse
             : ordersResponse?.orders || ordersResponse?.data || [];
@@ -855,16 +864,20 @@ async function syncStoreOrders(store, options = {}) {
             if (!orderDoc) continue;
             stats.orders_upserted += 1;
 
-            const orderItemsResponse = await getOrderItems({
-              storeToken,
-              orderId: orderDoc.external_order_id
-            });
-            const itemsPayload = Array.isArray(orderItemsResponse)
-              ? orderItemsResponse
-              : orderItemsResponse?.items || orderItemsResponse?.data || [];
-            stats.items_seen += itemsPayload.length;
-            await upsertOrderItems(store, orderDoc, itemsPayload, stats);
-            await processOrderInventory(store, orderDoc, stats);
+            try {
+              const orderItemsResponse = await getOrderItems({
+                storeToken,
+                orderId: orderDoc.external_order_id
+              });
+              const itemsPayload = Array.isArray(orderItemsResponse)
+                ? orderItemsResponse
+                : orderItemsResponse?.items || orderItemsResponse?.data || [];
+              stats.items_seen += itemsPayload.length;
+              await upsertOrderItems(store, orderDoc, itemsPayload, stats);
+              await processOrderInventory(store, orderDoc, stats);
+            } catch (itemErr) {
+              console.warn(`[Daraz Sync] Could not fetch items for order ${orderDoc.external_order_id}: ${itemErr.message}`);
+            }
           }
 
           page += 1;
@@ -873,10 +886,61 @@ async function syncStoreOrders(store, options = {}) {
         }
       } catch (error) {
         const statusLabel = statusFilter || 'all statuses';
-        const warning = `Skipped ${statusLabel} order scan because Daraz API returned: ${error.message}`;
+        const warning = `Skipped ${statusLabel} order scan: ${error.message}`;
         warnings.push(warning);
-        stats.failed += 1;
         console.warn(`[Daraz Sync] ${warning}`);
+      }
+    }
+
+    // Also scan recent created orders if all statuses were checked
+    if (triggerSource === 'manual' || triggerSource === 'orders' || triggerSource === 'background_live_sync') {
+      try {
+        let offset = 0;
+        let page = 0;
+        let hasMore = true;
+        while (hasMore && page < 5) {
+          const recentResponse = await getOrders({
+            storeToken,
+            createdAfter: since,
+            offset,
+            limit
+          });
+          const recentOrders = Array.isArray(recentResponse)
+            ? recentResponse
+            : recentResponse?.orders || recentResponse?.data || [];
+          stats.orders_seen += recentOrders.length;
+
+          for (const orderPayload of recentOrders) {
+            const externalId = getOrderId(orderPayload);
+            if (externalId && seenOrderIds.has(externalId)) continue;
+            if (externalId) seenOrderIds.add(externalId);
+
+            const orderDoc = await upsertOrder(store, orderPayload);
+            if (!orderDoc) continue;
+            stats.orders_upserted += 1;
+
+            try {
+              const orderItemsResponse = await getOrderItems({
+                storeToken,
+                orderId: orderDoc.external_order_id
+              });
+              const itemsPayload = Array.isArray(orderItemsResponse)
+                ? orderItemsResponse
+                : orderItemsResponse?.items || orderItemsResponse?.data || [];
+              stats.items_seen += itemsPayload.length;
+              await upsertOrderItems(store, orderDoc, itemsPayload, stats);
+              await processOrderInventory(store, orderDoc, stats);
+            } catch (itemErr) {
+              console.warn(`[Daraz Sync] Could not fetch items for order ${orderDoc.external_order_id}: ${itemErr.message}`);
+            }
+          }
+
+          page += 1;
+          offset += limit;
+          hasMore = recentResponse?.hasMore === true && recentOrders.length > 0;
+        }
+      } catch (recentErr) {
+        console.warn(`[Daraz Sync] Secondary created_after scan skipped: ${recentErr.message}`);
       }
     }
 
@@ -1103,7 +1167,7 @@ async function syncAllStores(options = {}) {
 
   syncInProgress = true;
   try {
-    const stores = await Store.find({ status: 'active' }).sort({ createdAt: 1 });
+    const stores = await Store.find({ status: { $ne: 'inactive' } }).sort({ createdAt: 1 });
     const results = [];
 
     for (const store of stores) {

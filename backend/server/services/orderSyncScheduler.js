@@ -70,7 +70,7 @@ function dateForTrigger(store, token, triggerSource) {
 }
 
 async function getDueStores({ triggerSource, intervalMinutes = null } = {}) {
-  const stores = await Store.find({ status: "active" }).sort({ createdAt: 1 }).lean();
+  const stores = await Store.find({ status: { $ne: "inactive" } }).sort({ createdAt: 1 }).lean();
   if (!stores.length) return [];
 
   const storeIds = stores.map((store) => store._id);

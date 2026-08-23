@@ -379,27 +379,53 @@ async function darazRequest(path, storeToken, customParams = {}) {
   return json;
 }
 
+function toDarazIso(value) {
+  if (!value) return undefined;
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return undefined;
+  return date.toISOString().replace(/\.\d{3}Z$/, "Z");
+}
+
 async function getOrders({
   storeToken,
   createdAfter,
+  createdBefore,
   updatedAfter,
+  updatedBefore,
   status,
+  sortBy,
+  sortDirection = "DESC",
   offset = 0,
   limit = 50
 }) {
   const params = {
-    sort_direction: "DESC",
+    sort_direction: sortDirection,
     offset,
     limit
   };
 
-  if (createdAfter) params.created_after = createdAfter;
-  if (updatedAfter) params.update_after = updatedAfter;
+  const cAfter = toDarazIso(createdAfter);
+  const cBefore = toDarazIso(createdBefore);
+  const uAfter = toDarazIso(updatedAfter);
+  const uBefore = toDarazIso(updatedBefore);
+
+  if (cAfter) params.created_after = cAfter;
+  if (cBefore) params.created_before = cBefore;
+  if (uAfter) params.update_after = uAfter;
+  if (uBefore) params.update_before = uBefore;
   if (status) params.status = status;
 
+  if (sortBy) {
+    params.sort_by = sortBy;
+  } else if (uAfter) {
+    params.sort_by = "updated_at";
+  } else {
+    params.sort_by = "created_at";
+  }
+
   const result = await darazRequest("/orders/get", storeToken, params);
-  const orders = extractOrdersFromData(result.data);
-  const count = extractCount(result.data, orders.length);
+  const orders = extractOrdersFromData(result.data || result);
+  const count = extractCount(result.data || result, orders.length);
 
   return {
     raw: result,
@@ -407,7 +433,7 @@ async function getOrders({
     count,
     offset,
     limit,
-    hasMore: orders.length === limit || offset + orders.length < count
+    hasMore: orders.length === limit || (count > 0 && offset + orders.length < count)
   };
 }
 

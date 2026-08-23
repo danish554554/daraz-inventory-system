@@ -72,8 +72,13 @@ function isCancelledStatus(status = '') {
 }
 
 function isReturnStatus(status = '', payload = {}) {
-  const normalized = `${normalizeStatus(status)} ${payloadText(payload)}`;
-  if (!normalized.trim()) return false;
+  const statusNorm = normalizeStatus(status);
+  const normalized = `${statusNorm} ${payloadText(payload)}`.trim();
+  if (!normalized) return false;
+
+  if (statusNorm === 'returned' || statusNorm === 'customer_return' || statusNorm === 'buyer_return') {
+    return true;
+  }
 
   const logisticsOnlyReturn = normalized.includes('return_to_seller') ||
     normalized.includes('return_to_origin') ||
@@ -90,17 +95,26 @@ function isReturnStatus(status = '', payload = {}) {
     normalized.includes('buyer_return') ||
     normalized.includes('return_requested') ||
     normalized.includes('returning') ||
-    normalized === 'return' ||
+    statusNorm === 'return' ||
     normalized.includes('returned') ||
     normalized.includes('refund') ||
     normalized.includes('claim');
 }
 
 function isFailedDeliveryStatus(status = '', payload = {}) {
-  const normalized = `${normalizeStatus(status)} ${payloadText(payload)}`;
-  if (!normalized.trim()) return false;
+  const statusNorm = normalizeStatus(status);
+  const normalized = `${statusNorm} ${payloadText(payload)}`.trim();
+  if (!normalized) return false;
 
-  // Do not treat generic "failed" as failed delivery unless delivery/logistics words are also present.
+  if (normalized.includes('payment_failed') || normalized.includes('failed_payment')) {
+    return false;
+  }
+
+  // In Daraz Open API, 'failed' is the official status code for failed delivery
+  if (statusNorm === 'failed' || statusNorm === 'failed_delivery' || statusNorm === 'delivery_failed' || statusNorm === 'undelivered') {
+    return true;
+  }
+
   const explicitFailedDelivery = normalized.includes('failed_delivery') ||
     normalized.includes('delivery_failed') ||
     normalized.includes('failed_to_deliver') ||
@@ -116,7 +130,7 @@ function isFailedDeliveryStatus(status = '', payload = {}) {
     normalized.includes('arrived_at_hub');
 
   const genericFailedWithDeliveryContext = normalized.includes('failed') &&
-    (normalized.includes('deliver') || normalized.includes('logistic') || normalized.includes('shipment') || normalized.includes('courier'));
+    (normalized.includes('deliver') || normalized.includes('logistic') || normalized.includes('shipment') || normalized.includes('courier') || normalized.includes('package'));
 
   return explicitFailedDelivery || genericFailedWithDeliveryContext;
 }
