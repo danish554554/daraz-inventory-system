@@ -367,21 +367,26 @@ async function callDarazAuthApi(path, params = {}, country = "PK") {
     .digest("hex")
     .toUpperCase();
 
+  const formBody = new URLSearchParams();
   Object.keys(finalParams).forEach((key) => {
     if (finalParams[key] !== undefined && finalParams[key] !== null && finalParams[key] !== "") {
       url.searchParams.append(key, String(finalParams[key]));
+      formBody.append(key, String(finalParams[key]));
     }
   });
 
   url.searchParams.append("sign", sign);
+  formBody.append("sign", sign);
 
-  console.log(`[Daraz Auth API] Calling ${baseUrl}${path} for country=${country}`);
+  console.log(`[Daraz Auth API] Calling ${baseUrl}${path} (POST) for country=${country}`);
 
   const response = await fetch(url.toString(), {
-    method: "GET",
+    method: "POST",
     headers: {
-      Accept: "application/json"
-    }
+      Accept: "application/json",
+      "Content-Type": "application/x-www-form-urlencoded;charset=utf-8"
+    },
+    body: formBody.toString()
   });
 
   const text = await response.text();
