@@ -18,6 +18,7 @@ const productRoutes = require('./routes/productRoutes');
 const financeRoutes = require('./routes/financeRoutes');
 const purchaseRoutes = require('./routes/purchaseRoutes');
 const stockRoutes = require('./routes/stockRoutes');
+const notificationRoutes = require('./routes/notificationRoutes');
 const { startOrderSyncScheduler } = require('./services/orderSyncScheduler');
 const { getSecurityConfigSummary } = require('./utils/adminAuth');
 
@@ -124,6 +125,7 @@ app.use('/api/products', protectAdmin, productRoutes);
 app.use('/api/finance', protectAdmin, financeRoutes);
 app.use('/api/purchases', protectAdmin, purchaseRoutes);
 app.use('/api/stocks', protectAdmin, stockRoutes);
+app.use('/api/notifications', protectAdmin, notificationRoutes);
 
 app.use((req, res) => {
   return res.status(404).json({

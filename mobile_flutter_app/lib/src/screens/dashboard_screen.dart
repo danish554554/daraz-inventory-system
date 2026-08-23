@@ -6,9 +6,11 @@ import '../models/app_models.dart';
 import '../services/api_client.dart';
 import '../services/api_exception.dart';
 import '../services/formatters.dart';
+import '../services/report_generator_service.dart';
 import '../services/session_manager.dart';
 import '../widgets/app_theme.dart';
 import '../widgets/common_widgets.dart';
+import 'scanner_screen.dart';
 
 class DashboardScreen extends StatefulWidget {
   const DashboardScreen({super.key, required this.sessionManager});
@@ -310,13 +312,54 @@ class _DashboardScreenState extends State<DashboardScreen> {
             ],
           ),
         ),
+        IconButton(
+          tooltip: 'Scan Barcode / QR',
+          onPressed: () async {
+            await Navigator.push(
+              context,
+              MaterialPageRoute<void>(builder: (context) => const ScannerScreen()),
+            );
+            await _load(silent: true);
+          },
+          icon: Container(
+            padding: const EdgeInsets.all(8),
+            decoration: BoxDecoration(
+              color: AppTheme.cardColor(context),
+              borderRadius: BorderRadius.circular(12),
+              border: Border.all(color: AppTheme.borderColor(context)),
+            ),
+            child: const Icon(Icons.qr_code_scanner_rounded, size: 18, color: AppTheme.primary),
+          ),
+        ),
+        IconButton(
+          tooltip: 'Share Daily Profit Report',
+          onPressed: () async {
+            await ReportGeneratorService.shareDailySummary(
+              historySummary: _historySummary,
+              orders: _orders,
+              lowStockItems: _lowStockItems,
+              period: _historyPeriod,
+              connectedStoresCount: _connectedStores,
+              totalStoresCount: _stores.length,
+            );
+          },
+          icon: Container(
+            padding: const EdgeInsets.all(8),
+            decoration: BoxDecoration(
+              color: AppTheme.cardColor(context),
+              borderRadius: BorderRadius.circular(12),
+              border: Border.all(color: AppTheme.borderColor(context)),
+            ),
+            child: const Icon(Icons.share_rounded, size: 18, color: AppTheme.success),
+          ),
+        ),
         InkWell(
           onTap: _isLiveSyncing ? null : () async {
             await _triggerBackgroundLiveSync();
           },
           borderRadius: BorderRadius.circular(14),
           child: Container(
-            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+            padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
             decoration: BoxDecoration(
               color: AppTheme.primarySoft,
               borderRadius: BorderRadius.circular(14),
@@ -330,13 +373,13 @@ class _DashboardScreenState extends State<DashboardScreen> {
                   size: 16,
                   color: AppTheme.primary,
                 ),
-                SizedBox(width: 6),
+                SizedBox(width: 4),
                 Text(
-                  'Sync Live',
+                  'Sync',
                   style: TextStyle(
                     color: AppTheme.primary,
                     fontWeight: FontWeight.w900,
-                    fontSize: 12,
+                    fontSize: 11,
                   ),
                 ),
               ],
@@ -620,6 +663,47 @@ class _DashboardScreenState extends State<DashboardScreen> {
                 background: AppTheme.infoSoft,
                 onTap: () {
                   showAppSnackBar(context, 'Switch to Stock tab to audit or add inventory.');
+                },
+              ),
+            ),
+          ],
+        ),
+        const SizedBox(height: 10),
+        Row(
+          children: <Widget>[
+            Expanded(
+              child: _quickActionTile(
+                title: 'Scan Barcode',
+                subtitle: 'Warehouse Audit',
+                icon: Icons.qr_code_scanner_rounded,
+                color: AppTheme.accent,
+                background: AppTheme.accentSoft,
+                onTap: () async {
+                  await Navigator.push(
+                    context,
+                    MaterialPageRoute<void>(builder: (context) => const ScannerScreen()),
+                  );
+                  await _load(silent: true);
+                },
+              ),
+            ),
+            const SizedBox(width: 10),
+            Expanded(
+              child: _quickActionTile(
+                title: 'Daily Report',
+                subtitle: 'Share WhatsApp',
+                icon: Icons.share_rounded,
+                color: AppTheme.success,
+                background: AppTheme.successSoft,
+                onTap: () async {
+                  await ReportGeneratorService.shareDailySummary(
+                    historySummary: _historySummary,
+                    orders: _orders,
+                    lowStockItems: _lowStockItems,
+                    period: _historyPeriod,
+                    connectedStoresCount: _connectedStores,
+                    totalStoresCount: _stores.length,
+                  );
                 },
               ),
             ),

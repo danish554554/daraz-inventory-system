@@ -9,6 +9,7 @@ import '../services/api_exception.dart';
 import '../services/formatters.dart';
 import '../widgets/app_theme.dart';
 import '../widgets/common_widgets.dart';
+import 'scanner_screen.dart';
 
 class InventoryScreen extends StatefulWidget {
   const InventoryScreen({super.key});
@@ -381,12 +382,25 @@ class _InventoryScreenState extends State<InventoryScreen> {
                               onChanged: (value) => setState(() => _search = value),
                             ),
                           ),
-                          const SizedBox(width: 10),
+                          const SizedBox(width: 8),
+                          CircleIconButton(
+                            icon: Icons.qr_code_scanner_rounded,
+                            onPressed: () async {
+                              await Navigator.push(
+                                context,
+                                MaterialPageRoute<void>(builder: (context) => const ScannerScreen(mode: ScannerScanMode.productSku)),
+                              );
+                              await _load(silent: true);
+                            },
+                            background: AppTheme.primary,
+                            foreground: Colors.white,
+                          ),
+                          const SizedBox(width: 8),
                           CircleIconButton(
                             icon: Icons.tune_rounded,
                             onPressed: _openReports,
-                            background: Colors.white,
-                            foreground: AppTheme.textPrimary,
+                            background: AppTheme.cardColor(context),
+                            foreground: AppTheme.textPrimaryColor(context),
                           ),
                         ],
                       ),

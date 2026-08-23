@@ -18,6 +18,7 @@ dependencies:
   package_info_plus: ^8.0.2
   share_plus: ^10.1.2
   cached_network_image: ^3.4.1
+  mobile_scanner: ^5.2.3
 
 dev_dependencies:
   flutter_test:

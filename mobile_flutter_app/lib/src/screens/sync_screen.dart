@@ -9,6 +9,7 @@ import '../services/api_exception.dart';
 import '../services/formatters.dart';
 import '../widgets/app_theme.dart';
 import '../widgets/common_widgets.dart';
+import 'scanner_screen.dart';
 
 class SyncScreen extends StatefulWidget {
   const SyncScreen({super.key});
@@ -360,10 +361,28 @@ class _SyncScreenState extends State<SyncScreen> with WidgetsBindingObserver {
                       SectionHeader(
                         title: 'Sync Center',
                         subtitle: 'Orders, products, returns and failed delivery control',
-                        action: StatusChip(
-                          label: _status?.syncRunningNow == true ? 'Running' : 'Healthy',
-                          color: _status?.syncRunningNow == true ? AppTheme.info : AppTheme.success,
-                          softColor: _status?.syncRunningNow == true ? AppTheme.infoSoft : AppTheme.successSoft,
+                        action: Row(
+                          mainAxisSize: MainAxisSize.min,
+                          children: <Widget>[
+                            CircleIconButton(
+                              icon: Icons.qr_code_scanner_rounded,
+                              onPressed: () async {
+                                await Navigator.push(
+                                  context,
+                                  MaterialPageRoute<void>(builder: (context) => const ScannerScreen(mode: ScannerScanMode.returnParcels)),
+                                );
+                                await _load(silent: true);
+                              },
+                              background: AppTheme.primary,
+                              foreground: Colors.white,
+                            ),
+                            const SizedBox(width: 8),
+                            StatusChip(
+                              label: _status?.syncRunningNow == true ? 'Running' : 'Healthy',
+                              color: _status?.syncRunningNow == true ? AppTheme.info : AppTheme.success,
+                              softColor: _status?.syncRunningNow == true ? AppTheme.infoSoft : AppTheme.successSoft,
+                            ),
+                          ],
                         ),
                       ),
                       const SizedBox(height: 14),
