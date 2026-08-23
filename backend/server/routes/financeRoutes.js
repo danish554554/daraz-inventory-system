@@ -534,7 +534,7 @@ router.post("/import-csv", async (req, res) => {
         entry,
         {
           upsert: true,
-          new: true,
+          returnDocument: 'after',
           setDefaultsOnInsert: true
         }
       );

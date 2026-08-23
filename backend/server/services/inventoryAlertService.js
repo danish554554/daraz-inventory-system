@@ -86,7 +86,7 @@ async function createDailyLowStockAlert({ force = false, triggered_by = "schedul
   const alert = await InventoryAlertLog.findOneAndUpdate(
     { alert_date },
     { $set: payload },
-    { upsert: true, new: true, setDefaultsOnInsert: true }
+    { upsert: true, returnDocument: 'after', setDefaultsOnInsert: true }
   );
 
   console.log(

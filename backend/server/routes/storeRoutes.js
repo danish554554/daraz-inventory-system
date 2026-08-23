@@ -1,4 +1,4 @@
-﻿
+
 const express = require("express");
 const crypto = require("crypto");
 
@@ -160,7 +160,7 @@ router.put("/:id", async (req, res) => {
     const store = await Store.findByIdAndUpdate(
       req.params.id,
       req.body,
-      { new: true }
+      { returnDocument: 'after' }
     );
 
     res.json({
@@ -206,7 +206,7 @@ router.post("/:id/disconnect", async (req, res) => {
         last_error_message: "Store disconnected by admin",
         last_validated_at: new Date()
       },
-      { new: true }
+      { returnDocument: 'after' }
     );
 
     if (!config) {
@@ -323,7 +323,7 @@ router.post("/:id/daraz-config", async (req, res) => {
       },
       {
         upsert: true,
-        new: true
+        returnDocument: 'after'
       }
     );
 

@@ -575,7 +575,7 @@ async function upsertOrder(store, orderPayload) {
         processing_status: 'pending'
       }
     },
-    { upsert: true, new: true }
+    { upsert: true, returnDocument: 'after' }
   );
 }
 
@@ -732,7 +732,7 @@ async function upsertOrderItems(store, orderDoc, itemsPayload, stats) {
           collection_notes: ''
         }
       },
-      { upsert: true, new: true }
+      { upsert: true, returnDocument: 'after' }
     );
 
     stats.items_upserted += 1;

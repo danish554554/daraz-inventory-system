@@ -75,7 +75,7 @@ async function findInventoryByPayload({ inventory_id, product_id, store_id, sell
         },
         $set: product_name ? { product_name: String(product_name).trim(), original_product_name: String(product_name).trim(), display_title: String(product_name).trim() } : {}
       },
-      { upsert: true, new: true }
+      { upsert: true, returnDocument: 'after' }
     );
   }
 

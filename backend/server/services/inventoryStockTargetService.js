@@ -82,7 +82,7 @@ async function findOrCreateInventoryBySku({ store_id, seller_sku, product_name =
       },
       $set: update
     },
-    { upsert: true, new: true, setDefaultsOnInsert: true }
+    { upsert: true, returnDocument: 'after', setDefaultsOnInsert: true }
   ).populate('store_id', 'name code');
 }
 

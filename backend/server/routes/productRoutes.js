@@ -265,7 +265,7 @@ router.put("/:id", async (req, res) => {
         low_stock_limit: Number(low_stock_limit) || 5
       },
       {
-        new: true,
+        returnDocument: 'after',
         runValidators: true
       }
     );
