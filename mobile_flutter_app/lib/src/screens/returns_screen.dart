@@ -43,13 +43,23 @@ class _ReturnsAndFailedDeliveryScreenState extends State<ReturnsAndFailedDeliver
     }
 
     try {
-      final res = await ApiClient.instance.get(
-        '/daraz-sync/order-items',
-        queryParameters: <String, dynamic>{'limit': 200},
-        bypassCache: true,
-      ) as Map<String, dynamic>;
+      dynamic res;
+      try {
+        res = await ApiClient.instance.get(
+          '/daraz-sync/order-items',
+          queryParameters: <String, dynamic>{'limit': 200},
+          bypassCache: true,
+        );
+      } catch (_) {
+        res = await ApiClient.instance.get(
+          '/daraz-sync/collection-watch',
+          queryParameters: <String, dynamic>{'limit': 200, 'include_collected': 'true'},
+          bypassCache: true,
+        );
+      }
 
-      final rawList = JsonReaders.list(res['items']);
+      final resMap = JsonReaders.map(res);
+      final rawList = JsonReaders.list(resMap['items'] ?? resMap['parcels']);
       final parsed = rawList
           .map((e) => CentralOrderItem.fromJson(JsonReaders.map(e)))
           .where((item) => item.isReturn || item.isFailedDelivery || item.hubArrivedAt != null || item.logisticFacilityAt != null)

@@ -190,86 +190,137 @@ function storePayload(value) {
 }
 
 function itemPayload(item) {
-  const store = storePayload(item.store_id);
-  const order = item.order_id && typeof item.order_id === "object" ? item.order_id : {};
-  const title = item.display_title || item.product_name || item.seller_sku || "Daraz Product";
-  const unitPrice = toNumber(item.unit_price, 0);
-  const quantity = toNumber(item.quantity, 1);
-  const costPrice = toNumber(item.cost_price, 0);
-  const totalAmount = unitPrice * quantity;
-  const totalCost = costPrice * quantity;
-  const profitReady = item.profit_ready || (costPrice > 0);
-  const itemProfit = (item.profit !== null && item.profit !== undefined)
-    ? Number(item.profit)
-    : (costPrice > 0 ? totalAmount - totalCost : null);
-  const itemProfitMargin = (item.profit_margin !== null && item.profit_margin !== undefined)
-    ? Number(item.profit_margin)
-    : (totalAmount > 0 && costPrice > 0 ? Number((((totalAmount - totalCost) / totalAmount) * 100).toFixed(2)) : null);
+  if (!item) return {};
+  try {
+    const store = storePayload(item.store_id);
+    const order = item.order_id && typeof item.order_id === "object" ? item.order_id : {};
+    const title = item.display_title || item.product_name || item.seller_sku || "Daraz Product";
+    const unitPrice = toNumber(item.unit_price, 0);
+    const quantity = toNumber(item.quantity, 1);
+    const costPrice = toNumber(item.cost_price, 0);
+    const totalAmount = unitPrice * quantity;
+    const totalCost = costPrice * quantity;
+    const profitReady = !!(item.profit_ready || (costPrice > 0));
+    const itemProfit = (item.profit !== null && item.profit !== undefined)
+      ? Number(item.profit)
+      : (costPrice > 0 ? totalAmount - totalCost : null);
+    const itemProfitMargin = (item.profit_margin !== null && item.profit_margin !== undefined)
+      ? Number(item.profit_margin)
+      : (totalAmount > 0 && costPrice > 0 ? Number((((totalAmount - totalCost) / totalAmount) * 100).toFixed(2)) : null);
 
-  const hubArrivedAt = item.hub_arrived_at || item.logistic_facility_at || null;
-  const storedDeadline = item.collection_deadline_at || null;
-  const deadline = storedDeadline || (hubArrivedAt ? new Date(new Date(hubArrivedAt).getTime() + orderRules.DEFAULT_COLLECTION_DEADLINE_DAYS * 24 * 60 * 60 * 1000) : null);
-  const rawInspectionText = `${item.status || ''} ${item.return_reason || ''} ${item.hub_name || ''} ${item.collection_notes || ''}`;
-  const isAutoReturned = orderRules.isSuccessfullyReturnedToMerchant(rawInspectionText, item.raw_payload || {});
-  const baseCollectionStatus = item.collection_status || "pending";
-  const collectionStatus = isAutoReturned ? "collected" : baseCollectionStatus;
-  const collected = isAutoReturned || ["collected", "received"].includes(normalizeStatus(collectionStatus)) || !!item.collected_at;
-  const daysLeft = collected ? 0 : (deadline ? Math.ceil((new Date(deadline).getTime() - Date.now()) / (24 * 60 * 60 * 1000)) : null);
-  const notificationLevel = collected ? "collected" : orderRules.collectionNotificationLevel({
-    collectionStatus,
-    deadline,
-    hubArrivedAt
-  });
+    const hubArrivedAt = item.hub_arrived_at || item.logistic_facility_at || null;
+    const storedDeadline = item.collection_deadline_at || null;
+    const defaultDeadlineDays = orderRules.DEFAULT_COLLECTION_DEADLINE_DAYS || 6;
+    const deadline = storedDeadline || (hubArrivedAt ? new Date(new Date(hubArrivedAt).getTime() + defaultDeadlineDays * 24 * 60 * 60 * 1000) : null);
+    const rawInspectionText = `${item.status || ''} ${item.return_reason || ''} ${item.hub_name || ''} ${item.collection_notes || ''}`;
+    const isAutoReturned = orderRules.isSuccessfullyReturnedToMerchant(rawInspectionText, item.raw_payload || {});
+    const baseCollectionStatus = item.collection_status || "pending";
+    const collectionStatus = isAutoReturned ? "collected" : baseCollectionStatus;
+    const collected = isAutoReturned || ["collected", "received"].includes(normalizeStatus(collectionStatus)) || !!item.collected_at;
+    const daysLeft = collected ? 0 : (deadline ? Math.ceil((new Date(deadline).getTime() - Date.now()) / (24 * 60 * 60 * 1000)) : null);
+    const notificationLevel = collected ? "collected" : orderRules.collectionNotificationLevel({
+      collectionStatus,
+      deadline,
+      hubArrivedAt
+    });
 
-  return {
-    _id: item._id,
-    store_id: store.id,
-    store_name: store.name,
-    store_code: store.code,
-    order_id: order._id || item.order_id || "",
-    order_number: order.order_number || item.order_number || "-",
-    order_status: order.status || item.order_status || "-",
-    external_order_item_id: item.external_order_item_id,
-    seller_sku: item.seller_sku,
-    product_name: item.product_name,
-    original_title: item.original_product_name || item.product_name,
-    display_title: title,
-    image_url: item.image_url || "",
-    quantity,
-    unit_price: unitPrice,
-    cost_price: costPrice,
-    amount: totalAmount,
-    total_cost: totalCost,
-    profit: itemProfit,
-    profit_margin: itemProfitMargin,
-    profit_ready: profitReady,
-    status: item.status || "pending",
-    status_category: item.status_category || "pending",
-    parcel_type: item.parcel_type || "none",
-    revenue_countable: !!item.revenue_countable,
-    return_status: isReturnStatus(item.status, item) ? item.status : "",
-    return_reason: item.return_reason || "",
-    claim_date: item.claim_date || null,
-    logistic_facility_at: item.logistic_facility_at || null,
-    hub_name: item.hub_name || orderRules.DEFAULT_COLLECTION_HUB_NAME,
-    hub_arrived_at: hubArrivedAt,
-    collection_deadline_at: deadline,
-    days_left_to_collect: daysLeft,
-    collection_status: collected ? "collected" : collectionStatus,
-    collection_action_required: orderRules.collectionActionRequired({
-      parcelType: item.parcel_type || "none",
-      hubArrivedAt,
-      collectionStatus
-    }),
-    collection_notification_level: notificationLevel,
-    collected_at: item.collected_at || null,
-    processing_status: item.processing_status,
-    stock_deducted: !!item.stock_deducted,
-    stock_restored: !!item.stock_restored,
-    error_message: item.error_message || "",
-    createdAt: item.createdAt,
-    updatedAt: item.updatedAt
-  };
+    return {
+      _id: item._id,
+      store_id: store.id,
+      store_name: store.name,
+      store_code: store.code,
+      order_id: order._id || item.order_id || "",
+      order_number: order.order_number || item.order_number || "-",
+      order_status: order.status || item.order_status || "-",
+      external_order_item_id: item.external_order_item_id || "",
+      seller_sku: item.seller_sku || "",
+      product_name: item.product_name || "",
+      original_title: item.original_product_name || item.product_name || "",
+      display_title: title,
+      image_url: item.image_url || "",
+      quantity,
+      unit_price: unitPrice,
+      cost_price: costPrice,
+      amount: totalAmount,
+      total_cost: totalCost,
+      profit: itemProfit,
+      profit_margin: itemProfitMargin,
+      profit_ready: profitReady,
+      status: item.status || "pending",
+      status_category: item.status_category || "pending",
+      parcel_type: item.parcel_type || "none",
+      revenue_countable: !!item.revenue_countable,
+      return_status: isReturnStatus(item.status, item) ? item.status : "",
+      return_reason: item.return_reason || "",
+      claim_date: item.claim_date || null,
+      logistic_facility_at: item.logistic_facility_at || null,
+      hub_name: item.hub_name || orderRules.DEFAULT_COLLECTION_HUB_NAME || "Islamabad I9 Center",
+      hub_arrived_at: hubArrivedAt,
+      collection_deadline_at: deadline,
+      days_left_to_collect: daysLeft,
+      collection_status: collected ? "collected" : collectionStatus,
+      collection_action_required: orderRules.collectionActionRequired({
+        parcelType: item.parcel_type || "none",
+        hubArrivedAt,
+        collectionStatus
+      }),
+      collection_notification_level: notificationLevel,
+      collected_at: item.collected_at || null,
+      processing_status: item.processing_status || "pending",
+      stock_deducted: !!item.stock_deducted,
+      stock_restored: !!item.stock_restored,
+      error_message: item.error_message || "",
+      createdAt: item.createdAt || new Date(),
+      updatedAt: item.updatedAt || new Date()
+    };
+  } catch (err) {
+    console.error("itemPayload processing error:", err);
+    return {
+      _id: item._id || "",
+      store_id: "",
+      store_name: "-",
+      store_code: "-",
+      order_id: item.order_id || "",
+      order_number: item.order_number || "-",
+      order_status: item.status || "-",
+      external_order_item_id: item.external_order_item_id || "",
+      seller_sku: item.seller_sku || "",
+      product_name: item.product_name || "",
+      original_title: item.product_name || "",
+      display_title: item.product_name || item.seller_sku || "Daraz Product",
+      image_url: item.image_url || "",
+      quantity: 1,
+      unit_price: 0,
+      cost_price: 0,
+      amount: 0,
+      total_cost: 0,
+      profit: null,
+      profit_margin: null,
+      profit_ready: false,
+      status: item.status || "pending",
+      status_category: item.status_category || "pending",
+      parcel_type: item.parcel_type || "none",
+      revenue_countable: false,
+      return_status: "",
+      return_reason: item.return_reason || "",
+      claim_date: null,
+      logistic_facility_at: null,
+      hub_name: "Islamabad I9 Center",
+      hub_arrived_at: null,
+      collection_deadline_at: null,
+      days_left_to_collect: null,
+      collection_status: "pending",
+      collection_action_required: false,
+      collection_notification_level: "none",
+      collected_at: null,
+      processing_status: "pending",
+      stock_deducted: false,
+      stock_restored: false,
+      error_message: "",
+      createdAt: new Date(),
+      updatedAt: new Date()
+    };
+  }
 }
 
 async function enrichOrder(order) {

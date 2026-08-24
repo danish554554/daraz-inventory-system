@@ -246,28 +246,19 @@ function getParcelType(statusCategory) {
   return 'none';
 }
 
-function extractAllStrings(obj, visited = new Set()) {
-  if (!obj) return '';
-  if (typeof obj === 'string') return obj;
-  if (typeof obj === 'number' || typeof obj === 'boolean') return String(obj);
-  if (typeof obj !== 'object' || visited.has(obj)) return '';
-  visited.add(obj);
-  const parts = [];
-  if (Array.isArray(obj)) {
-    for (const item of obj) {
-      parts.push(extractAllStrings(item, visited));
-    }
-  } else {
-    for (const key of Object.keys(obj)) {
-      parts.push(extractAllStrings(obj[key], visited));
-    }
+function safePayloadString(payload) {
+  if (!payload) return '';
+  if (typeof payload === 'string') return payload;
+  try {
+    return JSON.stringify(payload);
+  } catch (_) {
+    return '';
   }
-  return parts.join(' ');
 }
 
 function isSuccessfullyReturnedToMerchant(status = '', payload = {}) {
   const statusNorm = safeString(status).toLowerCase();
-  const allText = `${statusNorm} ${extractAllStrings(payload)}`.toLowerCase().replace(/[\s\-_\[\]!.,]+/g, ' ');
+  const allText = `${statusNorm} ${safePayloadString(payload)}`.toLowerCase().replace(/[\s\-_\[\]!.,/]+/g, ' ');
   return (
     allText.includes('successfully returned') ||
     allText.includes('package returned') ||
