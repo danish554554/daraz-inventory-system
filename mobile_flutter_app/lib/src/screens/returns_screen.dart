@@ -163,13 +163,38 @@ class _ReturnsAndFailedDeliveryScreenState extends State<ReturnsAndFailedDeliver
     final category = item.statusCategory.toLowerCase();
     final hub = item.hubName.toLowerCase();
     final reason = item.returnReason.toLowerCase();
-    return status.contains('successfully returned') ||
-        status.contains('delivered_to_merchant') ||
-        category.contains('successfully returned') ||
-        category.contains('delivered_to_merchant') ||
-        hub.contains('successfully returned') ||
-        hub.contains('returned to seller') ||
-        reason.contains('successfully returned');
+    final remarks = item.errorMessage.toLowerCase();
+    final combined = '$status $category $hub $reason $remarks';
+    return combined.contains('successfully returned') ||
+        combined.contains('successfully_returned') ||
+        combined.contains('your parcel has been successfully returned') ||
+        combined.contains('package returned') ||
+        combined.contains('package_returned') ||
+        combined.contains('delivered_to_merchant') ||
+        combined.contains('returned_to_merchant') ||
+        combined.contains('return_delivered') ||
+        combined.contains('merchant_collected') ||
+        combined.contains('collected_by_seller') ||
+        combined.contains('handed_over_to_seller') ||
+        combined.contains('package_collected') ||
+        combined.contains('delivered_to_shipper') ||
+        combined.contains('returned to seller') ||
+        combined.contains('returned_to_seller');
+  }
+
+  bool _isDay5OrScrapRisk(CentralOrderItem item) {
+    if (_isItemAlreadyReturned(item) || _isCancelledOrder(item)) return false;
+    final daysLeft = item.daysLeftToCollect;
+    final arrival = item.hubArrivedAt ?? item.logisticFacilityAt;
+    int daysElapsed = 0;
+    if (arrival != null) {
+      daysElapsed = DateTime.now().difference(arrival).inDays + 1;
+    }
+    return daysElapsed >= 5 ||
+        (daysLeft != null && daysLeft <= 1) ||
+        item.collectionNotificationLevel == 'deadline' ||
+        item.collectionNotificationLevel == 'one_day' ||
+        item.collectionNotificationLevel == 'overdue';
   }
 
   Future<void> _markItemCollected(CentralOrderItem item) async {
@@ -196,21 +221,27 @@ class _ReturnsAndFailedDeliveryScreenState extends State<ReturnsAndFailedDeliver
       final isFailed = _isFailedDeliveryOrder(item);
       final isReturn = _isCustomerReturnOrder(item);
       final isCompleted = _isItemAlreadyReturned(item);
-      final daysLeft = item.daysLeftToCollect ?? 99;
-      final isScrapRisk = daysLeft <= 2 || item.collectionNotificationLevel == 'overdue' || item.collectionNotificationLevel == 'deadline';
+      final isScrapRisk = _isDay5OrScrapRisk(item);
 
       // 1. Separate by Primary Section
-      if (_primarySection == 'failed_delivery' && !isFailed) return false;
-      if (_primarySection == 'returns' && !isReturn) return false;
+      if (_primarySection == 'failed_delivery') {
+        if (!isFailed) return false;
+      } else if (_primarySection == 'returns') {
+        if (!isReturn) return false;
+      } else if (_primarySection == 'at_risk') {
+        if (isCompleted || !isScrapRisk) return false;
+      }
 
       // 2. Sub-filter: Active (auto-hide completed), Scrap Risk, or Collected Archive
-      if (_subFilter == 'active') {
-        // Automatically exclude / remove orders that have been successfully returned
-        if (isCompleted) return false;
-      } else if (_subFilter == 'scrap_risk') {
-        if (isCompleted || !isScrapRisk) return false;
-      } else if (_subFilter == 'collected') {
-        if (!isCompleted) return false;
+      if (_primarySection != 'at_risk') {
+        if (_subFilter == 'active') {
+          // Automatically exclude / remove orders that have been successfully returned
+          if (isCompleted) return false;
+        } else if (_subFilter == 'scrap_risk') {
+          if (isCompleted || !isScrapRisk) return false;
+        } else if (_subFilter == 'collected') {
+          if (!isCompleted) return false;
+        }
       }
 
       // 3. Search query match
@@ -234,7 +265,7 @@ class _ReturnsAndFailedDeliveryScreenState extends State<ReturnsAndFailedDeliver
     final nonCancelledItems = _items.where((i) => !_isCancelledOrder(i)).toList();
     final activeFailedCount = nonCancelledItems.where((i) => _isFailedDeliveryOrder(i) && !_isItemAlreadyReturned(i)).length;
     final activeReturnsCount = nonCancelledItems.where((i) => _isCustomerReturnOrder(i) && !_isItemAlreadyReturned(i)).length;
-    final urgentScrapRiskCount = nonCancelledItems.where((i) => _isFailedDeliveryOrder(i) && !_isItemAlreadyReturned(i) && ((i.daysLeftToCollect ?? 99) <= 2 || i.collectionNotificationLevel == 'overdue')).length;
+    final urgentScrapRiskCount = nonCancelledItems.where((i) => !_isItemAlreadyReturned(i) && _isDay5OrScrapRisk(i)).length;
 
     return Scaffold(
       body: _loading
@@ -286,15 +317,19 @@ class _ReturnsAndFailedDeliveryScreenState extends State<ReturnsAndFailedDeliver
                         ),
                       ),
                       const SizedBox(height: 14),
-                      _primarySegmentSelector(activeFailedCount, activeReturnsCount),
-                      const SizedBox(height: 14),
-                      _subFilterChips(urgentScrapRiskCount),
+                      _primarySegmentSelector(activeFailedCount, activeReturnsCount, urgentScrapRiskCount),
+                      if (_primarySection != 'at_risk') ...<Widget>[
+                        const SizedBox(height: 14),
+                        _subFilterChips(urgentScrapRiskCount),
+                      ],
                       const SizedBox(height: 12),
                       TextField(
                         decoration: InputDecoration(
                           hintText: _primarySection == 'failed_delivery'
                               ? 'Search failed delivery by title, order #, or hub...'
-                              : 'Search customer return claims by product or reason...',
+                              : (_primarySection == 'returns'
+                                  ? 'Search customer return claims by product or reason...'
+                                  : 'Search at-risk parcels...'),
                           prefixIcon: const Icon(Icons.search_rounded),
                           isDense: true,
                         ),
@@ -305,10 +340,14 @@ class _ReturnsAndFailedDeliveryScreenState extends State<ReturnsAndFailedDeliver
                         EmptyState(
                           title: _primarySection == 'failed_delivery'
                               ? (_subFilter == 'active' ? 'No Pending Failed Deliveries 🎉' : 'No records found')
-                              : (_subFilter == 'active' ? 'No Customer Returns Pending 🎉' : 'No return claims found'),
-                          message: _subFilter == 'active'
-                              ? 'All packages have either been successfully returned to your warehouse or there are no new orders at the Daraz hub.'
-                              : 'Try adjusting your search query or switching tabs.',
+                              : (_primarySection == 'returns'
+                                  ? (_subFilter == 'active' ? 'No Customer Returns Pending 🎉' : 'No return claims found')
+                                  : 'No Parcels at Scrap Risk 🎉'),
+                          message: _primarySection == 'at_risk'
+                              ? 'None of your packages have been at the center for 5+ days. All parcels are safe.'
+                              : (_subFilter == 'active'
+                                  ? 'All packages have either been successfully returned to your warehouse or there are no new orders at the Daraz hub.'
+                                  : 'Try adjusting your search query or switching tabs.'),
                           icon: Icons.check_circle_outline_rounded,
                         )
                       else
@@ -319,9 +358,80 @@ class _ReturnsAndFailedDeliveryScreenState extends State<ReturnsAndFailedDeliver
     );
   }
 
-  Widget _primarySegmentSelector(int failedCount, int returnsCount) {
+  Widget _primarySegmentSelector(int failedCount, int returnsCount, int scrapCount) {
     final isDark = AppTheme.isDark(context);
-    final isFailed = _primarySection == 'failed_delivery';
+
+    Widget buildTab({
+      required String key,
+      required String label,
+      required IconData icon,
+      required int count,
+      required Color color,
+      required Color softColor,
+    }) {
+      final isSelected = _primarySection == key;
+      return Expanded(
+        child: InkWell(
+          onTap: () => setState(() {
+            _primarySection = key;
+            _subFilter = 'active';
+          }),
+          borderRadius: BorderRadius.circular(12),
+          child: Container(
+            padding: const EdgeInsets.symmetric(vertical: 10, horizontal: 4),
+            decoration: BoxDecoration(
+              color: isSelected ? (isDark ? const Color(0xFF0F172A) : Colors.white) : Colors.transparent,
+              borderRadius: BorderRadius.circular(12),
+              boxShadow: isSelected
+                  ? <BoxShadow>[
+                      BoxShadow(color: Colors.black.withValues(alpha: 0.1), blurRadius: 4, offset: const Offset(0, 2)),
+                    ]
+                  : null,
+            ),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: <Widget>[
+                Row(
+                  mainAxisAlignment: MainAxisAlignment.center,
+                  children: <Widget>[
+                    Icon(icon, size: 14, color: isSelected ? color : AppTheme.textMutedColor(context)),
+                    const SizedBox(width: 4),
+                    Flexible(
+                      child: Text(
+                        label,
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style: TextStyle(
+                          fontSize: 11,
+                          fontWeight: FontWeight.w900,
+                          color: isSelected ? AppTheme.textPrimaryColor(context) : AppTheme.textMutedColor(context),
+                        ),
+                      ),
+                    ),
+                  ],
+                ),
+                const SizedBox(height: 4),
+                Container(
+                  padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 1),
+                  decoration: BoxDecoration(
+                    color: isSelected ? softColor : (isDark ? Colors.black38 : Colors.grey.shade300),
+                    borderRadius: BorderRadius.circular(10),
+                  ),
+                  child: Text(
+                    '$count',
+                    style: TextStyle(
+                      fontSize: 10,
+                      fontWeight: FontWeight.w900,
+                      color: isSelected ? color : AppTheme.textMutedColor(context),
+                    ),
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ),
+      );
+    }
 
     return Container(
       padding: const EdgeInsets.all(4),
@@ -332,111 +442,29 @@ class _ReturnsAndFailedDeliveryScreenState extends State<ReturnsAndFailedDeliver
       ),
       child: Row(
         children: <Widget>[
-          Expanded(
-            child: InkWell(
-              onTap: () => setState(() => _primarySection = 'failed_delivery'),
-              borderRadius: BorderRadius.circular(12),
-              child: Container(
-                padding: const EdgeInsets.symmetric(vertical: 10),
-                decoration: BoxDecoration(
-                  color: isFailed ? (isDark ? const Color(0xFF0F172A) : Colors.white) : Colors.transparent,
-                  borderRadius: BorderRadius.circular(12),
-                  boxShadow: isFailed
-                      ? <BoxShadow>[
-                          BoxShadow(color: Colors.black.withValues(alpha: 0.1), blurRadius: 4, offset: const Offset(0, 2)),
-                        ]
-                      : null,
-                ),
-                child: Row(
-                  mainAxisAlignment: MainAxisAlignment.center,
-                  children: <Widget>[
-                    Icon(
-                      Icons.local_shipping_rounded,
-                      size: 16,
-                      color: isFailed ? AppTheme.primary : AppTheme.textMutedColor(context),
-                    ),
-                    const SizedBox(width: 6),
-                    Text(
-                      'Failed Delivery',
-                      style: TextStyle(
-                        fontSize: 12,
-                        fontWeight: FontWeight.w900,
-                        color: isFailed ? AppTheme.textPrimaryColor(context) : AppTheme.textMutedColor(context),
-                      ),
-                    ),
-                    const SizedBox(width: 6),
-                    Container(
-                      padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
-                      decoration: BoxDecoration(
-                        color: isFailed ? AppTheme.dangerSoft : (isDark ? Colors.black38 : Colors.grey.shade300),
-                        borderRadius: BorderRadius.circular(10),
-                      ),
-                      child: Text(
-                        '$failedCount',
-                        style: TextStyle(
-                          fontSize: 10,
-                          fontWeight: FontWeight.w900,
-                          color: isFailed ? AppTheme.danger : AppTheme.textMutedColor(context),
-                        ),
-                      ),
-                    ),
-                  ],
-                ),
-              ),
-            ),
+          buildTab(
+            key: 'failed_delivery',
+            label: 'Failed Delivery',
+            icon: Icons.local_shipping_rounded,
+            count: failedCount,
+            color: AppTheme.primary,
+            softColor: AppTheme.primarySoft,
           ),
-          Expanded(
-            child: InkWell(
-              onTap: () => setState(() => _primarySection = 'returns'),
-              borderRadius: BorderRadius.circular(12),
-              child: Container(
-                padding: const EdgeInsets.symmetric(vertical: 10),
-                decoration: BoxDecoration(
-                  color: !isFailed ? (isDark ? const Color(0xFF0F172A) : Colors.white) : Colors.transparent,
-                  borderRadius: BorderRadius.circular(12),
-                  boxShadow: !isFailed
-                      ? <BoxShadow>[
-                          BoxShadow(color: Colors.black.withValues(alpha: 0.1), blurRadius: 4, offset: const Offset(0, 2)),
-                        ]
-                      : null,
-                ),
-                child: Row(
-                  mainAxisAlignment: MainAxisAlignment.center,
-                  children: <Widget>[
-                    Icon(
-                      Icons.assignment_return_rounded,
-                      size: 16,
-                      color: !isFailed ? AppTheme.warning : AppTheme.textMutedColor(context),
-                    ),
-                    const SizedBox(width: 6),
-                    Text(
-                      'Customer Returns',
-                      style: TextStyle(
-                        fontSize: 12,
-                        fontWeight: FontWeight.w900,
-                        color: !isFailed ? AppTheme.textPrimaryColor(context) : AppTheme.textMutedColor(context),
-                      ),
-                    ),
-                    const SizedBox(width: 6),
-                    Container(
-                      padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
-                      decoration: BoxDecoration(
-                        color: !isFailed ? AppTheme.warningSoft : (isDark ? Colors.black38 : Colors.grey.shade300),
-                        borderRadius: BorderRadius.circular(10),
-                      ),
-                      child: Text(
-                        '$returnsCount',
-                        style: TextStyle(
-                          fontSize: 10,
-                          fontWeight: FontWeight.w900,
-                          color: !isFailed ? AppTheme.warning : AppTheme.textMutedColor(context),
-                        ),
-                      ),
-                    ),
-                  ],
-                ),
-              ),
-            ),
+          buildTab(
+            key: 'returns',
+            label: 'Returns',
+            icon: Icons.assignment_return_rounded,
+            count: returnsCount,
+            color: AppTheme.warning,
+            softColor: AppTheme.warningSoft,
+          ),
+          buildTab(
+            key: 'at_risk',
+            label: '🚨 At Risk (Day 5+)',
+            icon: Icons.warning_amber_rounded,
+            count: scrapCount,
+            color: AppTheme.danger,
+            softColor: AppTheme.dangerSoft,
           ),
         ],
       ),
@@ -488,6 +516,12 @@ class _ReturnsAndFailedDeliveryScreenState extends State<ReturnsAndFailedDeliver
     final deadlineDate = item.collectionDeadlineAt;
 
     // Calculate deadline & scrap urgency
+    int daysElapsed = 0;
+    if (arrivalDate != null) {
+      daysElapsed = DateTime.now().difference(arrivalDate).inDays + 1;
+    }
+    final isDay5Or6 = daysElapsed >= 5 || (daysLeft != null && daysLeft <= 1) || item.collectionNotificationLevel == 'deadline' || item.collectionNotificationLevel == 'one_day' || item.collectionNotificationLevel == 'overdue';
+
     Color countdownColor = AppTheme.info;
     Color countdownSoftColor = AppTheme.infoSoft;
     String limitText = 'In Transit';
@@ -503,15 +537,15 @@ class _ReturnsAndFailedDeliveryScreenState extends State<ReturnsAndFailedDeliver
     } else if (item.collectionNotificationLevel == 'deadline' || daysLeft == 0) {
       countdownColor = AppTheme.danger;
       countdownSoftColor = AppTheme.dangerSoft;
-      limitText = '🚨 Due Today (Destruction Risk)';
-    } else if (daysLeft != null && daysLeft == 1) {
+      limitText = '🚨 Day 6/6: Due Today (Scrap Risk)';
+    } else if (daysElapsed >= 5 || (daysLeft != null && daysLeft == 1)) {
       countdownColor = AppTheme.danger;
       countdownSoftColor = AppTheme.dangerSoft;
-      limitText = '⚠️ 1 Day Left Before Destroy';
-    } else if (daysLeft != null && daysLeft <= 3) {
-      countdownColor = AppTheme.warning;
-      countdownSoftColor = AppTheme.warningSoft;
-      limitText = '⚠️ $daysLeft Days Left (6-Day Limit)';
+      limitText = '🚨 Day 5/6: 24h Before Scrap!';
+    } else if (daysElapsed > 0 && daysLeft != null) {
+      countdownColor = daysLeft <= 3 ? AppTheme.warning : AppTheme.info;
+      countdownSoftColor = daysLeft <= 3 ? AppTheme.warningSoft : AppTheme.infoSoft;
+      limitText = '⚠️ Day $daysElapsed of 6 ($daysLeft Days Left)';
     } else if (daysLeft != null) {
       countdownColor = AppTheme.info;
       countdownSoftColor = AppTheme.infoSoft;
@@ -525,6 +559,30 @@ class _ReturnsAndFailedDeliveryScreenState extends State<ReturnsAndFailedDeliver
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: <Widget>[
+            if (isDay5Or6 && !isCompleted) ...<Widget>[
+              Container(
+                width: double.infinity,
+                padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+                decoration: BoxDecoration(
+                  color: AppTheme.dangerSoft,
+                  borderRadius: BorderRadius.circular(8),
+                  border: Border.all(color: AppTheme.danger.withValues(alpha: 0.4)),
+                ),
+                child: const Row(
+                  children: <Widget>[
+                    Icon(Icons.warning_rounded, color: AppTheme.danger, size: 16),
+                    SizedBox(width: 6),
+                    Expanded(
+                      child: Text(
+                        'Day 5+ Alert: Package at risk of being scrapped by Daraz Center!',
+                        style: TextStyle(color: AppTheme.danger, fontSize: 11, fontWeight: FontWeight.w900),
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+              const SizedBox(height: 10),
+            ],
             // Product Header Row: High-Res Image & Clear Title for Easy Comparison
             Row(
               crossAxisAlignment: CrossAxisAlignment.start,

@@ -246,20 +246,52 @@ function getParcelType(statusCategory) {
   return 'none';
 }
 
+function isSuccessfullyReturnedToMerchant(status = '', payload = {}) {
+  const statusNorm = normalizeStatus(status);
+  const text = `${statusNorm} ${payloadText(payload)}`.toLowerCase().replace(/[\s-]+/g, '_');
+  return (
+    text.includes('successfully_returned') ||
+    text.includes('your_parcel_has_been_successfully_returned') ||
+    text.includes('package_returned') ||
+    text.includes('delivered_to_merchant') ||
+    text.includes('returned_to_merchant') ||
+    text.includes('return_delivered') ||
+    text.includes('merchant_collected') ||
+    text.includes('collected_by_seller') ||
+    text.includes('handed_over_to_seller') ||
+    text.includes('delivered_to_shipper') ||
+    text.includes('delivered_to_origin') ||
+    text.includes('package_collected') ||
+    text.includes('item_received_back')
+  );
+}
+
 function classifyOrderItem({ status = '', orderStatus = '', returnReason = '', claimDate = null, hubArrivedAt = null, rawPayload = {} } = {}) {
   const combined = [status, orderStatus, returnReason, payloadText(rawPayload)].join(' ');
 
-  // 1. Check if cancelled or has a cancellation reason (e.g. out of stock / seller asked to cancel)
+  // 1. Check if collected / package successfully returned to merchant
+  if (isSuccessfullyReturnedToMerchant(combined, rawPayload)) {
+    const isReturn = isReturnStatus(combined, rawPayload);
+    return {
+      statusCategory: 'collected',
+      parcelType: isReturn ? 'return' : 'failed_delivery',
+      revenueCountable: false,
+      isCollected: true,
+      collectionStatus: 'collected'
+    };
+  }
+
+  // 2. Check if cancelled or has a cancellation reason (e.g. out of stock / seller asked to cancel)
   if (isCancelledStatus(status) || isCancelledStatus(orderStatus) || isCancellationReason(returnReason)) {
     return { statusCategory: 'cancelled', parcelType: 'none', revenueCountable: false };
   }
 
-  // 2. Check if Failed Delivery (by failed delivery status OR failed delivery reasons like rejected at doorstep, SLA expired, missing mapping)
+  // 3. Check if Failed Delivery (by failed delivery status OR failed delivery reasons like rejected at doorstep, SLA expired, missing mapping)
   if (isFailedDeliveryReason(returnReason) || isFailedDeliveryStatus(combined, rawPayload) || (!isReturnStatus(combined, rawPayload) && hubArrivedAt)) {
     return { statusCategory: 'failed_delivery', parcelType: 'failed_delivery', revenueCountable: false };
   }
 
-  // 3. Genuine Customer Returns (customer claims, defective, wrong item, etc.)
+  // 4. Genuine Customer Returns (customer claims, defective, wrong item, etc.)
   if (claimDate || isReturnStatus(combined, rawPayload) || (returnReason && !isCancellationReason(returnReason) && !isFailedDeliveryReason(returnReason))) {
     return { statusCategory: 'return', parcelType: 'return', revenueCountable: false };
   }
@@ -273,11 +305,12 @@ function classifyOrderItem({ status = '', orderStatus = '', returnReason = '', c
 
 function normalizeCollectionStatus({ statusCategory = '', parcelType = 'none', hubArrivedAt = null, existingStatus = '' } = {}) {
   const existing = normalizeStatus(existingStatus);
-  if (['collected', 'received', 'scrapped', 'expired'].includes(existing)) {
-    return existing === 'received' ? 'collected' : existing;
+  if (['collected', 'received', 'scrapped', 'expired'].includes(existing) || isSuccessfullyReturnedToMerchant(existingStatus)) {
+    return existing === 'received' ? 'collected' : (existing === 'scrapped' || existing === 'expired' ? existing : 'collected');
   }
 
   if (statusCategory === 'cancelled') return 'not_required';
+  if (statusCategory === 'collected') return 'collected';
   if (!['return', 'failed_delivery'].includes(parcelType)) return 'not_required';
   if (hubArrivedAt) return 'needs_collection';
   return parcelType === 'return' ? 'return_in_transit' : 'failed_delivery_tracking';
