@@ -213,7 +213,16 @@ function itemPayload(item) {
     const defaultDeadlineDays = orderRules.DEFAULT_COLLECTION_DEADLINE_DAYS || 6;
     const deadline = storedDeadline || (hubArrivedAt ? new Date(new Date(hubArrivedAt).getTime() + defaultDeadlineDays * 24 * 60 * 60 * 1000) : null);
     const rawInspectionText = `${item.status || ''} ${item.return_reason || ''} ${item.hub_name || ''} ${item.collection_notes || ''}`;
-    const isAutoReturned = orderRules.isSuccessfullyReturnedToMerchant(rawInspectionText, item.raw_payload || {});
+    const classification = orderRules.classifyOrderItem({
+      status: item.status || "",
+      orderStatus: order.status || item.order_status || "",
+      returnReason: item.return_reason || "",
+      claimDate: item.claim_date || null,
+      hubArrivedAt,
+      rawPayload: item.raw_payload || {}
+    });
+
+    const isAutoReturned = classification.isCollected || orderRules.isSuccessfullyReturnedToMerchant(rawInspectionText, item.raw_payload || {});
     const baseCollectionStatus = item.collection_status || "pending";
     const collectionStatus = isAutoReturned ? "collected" : baseCollectionStatus;
     const collected = isAutoReturned || ["collected", "received"].includes(normalizeStatus(collectionStatus)) || !!item.collected_at;
@@ -247,8 +256,15 @@ function itemPayload(item) {
       profit_margin: itemProfitMargin,
       profit_ready: profitReady,
       status: item.status || "pending",
-      status_category: item.status_category || "pending",
-      parcel_type: item.parcel_type || "none",
+      original_daraz_status: item.original_daraz_status || item.status || "",
+      original_daraz_reason: item.original_daraz_reason || item.return_reason || "",
+      reason_code: item.reason_code || classification.reasonCode || "",
+      reason_label: item.reason_label || classification.reasonLabel || "",
+      mapping_confidence: item.mapping_confidence || classification.mappingConfidence || "mapped",
+      needs_review: item.needs_review !== undefined ? !!item.needs_review : !!classification.needsReview,
+      review_reason: item.review_reason || classification.reviewReason || "",
+      status_category: item.status_category || classification.statusCategory || "pending",
+      parcel_type: item.parcel_type || classification.parcelType || "none",
       revenue_countable: !!item.revenue_countable,
       return_status: isReturnStatus(item.status, item) ? item.status : "",
       return_reason: item.return_reason || "",

@@ -719,17 +719,46 @@ class _ReturnsAndFailedDeliveryScreenState extends State<ReturnsAndFailedDeliver
                         ),
                     ],
                   ),
-                  if (isReturn && item.returnReason.isNotEmpty) ...<Widget>[
+                  if (item.isUnknownReviewNeeded) ...<Widget>[
                     const SizedBox(height: 6),
                     Container(
+                      width: double.infinity,
                       padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
                       decoration: BoxDecoration(
                         color: AppTheme.warningSoft,
                         borderRadius: BorderRadius.circular(6),
+                        border: Border.all(color: AppTheme.warning.withValues(alpha: 0.5)),
+                      ),
+                      child: Row(
+                        children: <Widget>[
+                          const Icon(Icons.rate_review_outlined, color: AppTheme.warning, size: 13),
+                          const SizedBox(width: 4),
+                          Expanded(
+                            child: Text(
+                              '⚠️ Review Needed: ${item.reviewReason.isNotEmpty ? item.reviewReason : (item.originalDarazReason.isNotEmpty ? item.originalDarazReason : item.originalDarazStatus)}',
+                              style: const TextStyle(color: AppTheme.warning, fontSize: 10, fontWeight: FontWeight.w800),
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                  ] else if (item.reasonLabel.isNotEmpty || item.returnReason.isNotEmpty) ...<Widget>[
+                    const SizedBox(height: 6),
+                    Container(
+                      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                      decoration: BoxDecoration(
+                        color: isReturn ? AppTheme.warningSoft : AppTheme.infoSoft,
+                        borderRadius: BorderRadius.circular(6),
                       ),
                       child: Text(
-                        'Customer Claim Reason: ${item.returnReason}',
-                        style: const TextStyle(color: AppTheme.warning, fontSize: 10, fontWeight: FontWeight.w800),
+                        item.reasonLabel.isNotEmpty
+                            ? 'Reason: ${item.reasonLabel}${item.reasonCode.isNotEmpty ? ' (${item.reasonCode})' : ''}'
+                            : 'Reason: ${item.returnReason}',
+                        style: TextStyle(
+                          color: isReturn ? AppTheme.warning : AppTheme.info,
+                          fontSize: 10,
+                          fontWeight: FontWeight.w800,
+                        ),
                       ),
                     ),
                   ],

@@ -99,6 +99,43 @@ const centralOrderItemSchema = new mongoose.Schema(
       default: "",
       trim: true
     },
+    original_daraz_status: {
+      type: String,
+      default: "",
+      trim: true
+    },
+    original_daraz_reason: {
+      type: String,
+      default: "",
+      trim: true
+    },
+    reason_code: {
+      type: String,
+      default: "",
+      trim: true,
+      index: true
+    },
+    reason_label: {
+      type: String,
+      default: "",
+      trim: true
+    },
+    mapping_confidence: {
+      type: String,
+      enum: ["mapped", "heuristic", "unknown_review_needed"],
+      default: "mapped",
+      index: true
+    },
+    needs_review: {
+      type: Boolean,
+      default: false,
+      index: true
+    },
+    review_reason: {
+      type: String,
+      default: "",
+      trim: true
+    },
     claim_date: {
       type: Date,
       default: null

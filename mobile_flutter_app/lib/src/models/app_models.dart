@@ -981,6 +981,13 @@ class CentralOrderItem {
     required this.stockRestored,
     required this.errorMessage,
     required this.createdAt,
+    this.originalDarazStatus = '',
+    this.originalDarazReason = '',
+    this.reasonCode = '',
+    this.reasonLabel = '',
+    this.mappingConfidence = 'mapped',
+    this.needsReview = false,
+    this.reviewReason = '',
   });
 
   final String id;
@@ -1024,12 +1031,20 @@ class CentralOrderItem {
   final bool stockRestored;
   final String errorMessage;
   final DateTime? createdAt;
+  final String originalDarazStatus;
+  final String originalDarazReason;
+  final String reasonCode;
+  final String reasonLabel;
+  final String mappingConfidence;
+  final bool needsReview;
+  final String reviewReason;
 
   String get title => displayTitle.isNotEmpty ? displayTitle : (productName.isEmpty ? sellerSku : productName);
   bool get isReturn => parcelType == 'return' || statusCategory == 'return' || returnStatus.isNotEmpty || returnReason.isNotEmpty;
   bool get isFailedDelivery => parcelType == 'failed_delivery' || statusCategory == 'failed_delivery' || status.toLowerCase().contains('failed_delivery') || status.toLowerCase().contains('undelivered');
   bool get isCollected => collectionStatus == 'collected' || collectionStatus == 'received' || collectedAt != null;
   bool get isScrapRisk => !isCollected && daysLeftToCollect != null && daysLeftToCollect! <= 2;
+  bool get isUnknownReviewNeeded => needsReview || mappingConfidence == 'unknown_review_needed';
 
   factory CentralOrderItem.fromJson(Map<String, dynamic> json) {
     final storeRaw = json['store_id'];
@@ -1082,6 +1097,13 @@ class CentralOrderItem {
       stockRestored: JsonReaders.boolean(json, 'stock_restored'),
       errorMessage: JsonReaders.string(json, 'error_message'),
       createdAt: JsonReaders.date(json, 'createdAt'),
+      originalDarazStatus: JsonReaders.string(json, 'original_daraz_status', JsonReaders.string(json, 'status')),
+      originalDarazReason: JsonReaders.string(json, 'original_daraz_reason', JsonReaders.string(json, 'return_reason')),
+      reasonCode: JsonReaders.string(json, 'reason_code'),
+      reasonLabel: JsonReaders.string(json, 'reason_label'),
+      mappingConfidence: JsonReaders.string(json, 'mapping_confidence', 'mapped'),
+      needsReview: JsonReaders.boolean(json, 'needs_review'),
+      reviewReason: JsonReaders.string(json, 'review_reason'),
     );
   }
 }

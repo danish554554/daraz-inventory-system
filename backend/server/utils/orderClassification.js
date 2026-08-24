@@ -32,220 +32,6 @@ function daysLeftUntil(date, now = new Date()) {
   return Math.ceil((deadline.getTime() - now.getTime()) / (24 * 60 * 60 * 1000));
 }
 
-function payloadText(payload = {}) {
-  if (!payload || typeof payload !== 'object') return '';
-  const parts = [];
-  const keys = [
-    'status',
-    'order_status',
-    'order_item_status',
-    'shipment_status',
-    'delivery_status',
-    'reason',
-    'return_reason',
-    'cancel_reason',
-    'logistic_status',
-    'tracking_status',
-    'package_status',
-    'remarks'
-  ];
-  for (const key of keys) {
-    if (payload[key]) parts.push(String(payload[key]));
-  }
-  return parts.join(' ').toLowerCase().replace(/[\s-]+/g, '_');
-}
-
-function isCancellationReason(reasonText = '') {
-  const normalized = safeString(reasonText).toLowerCase().replace(/[\s-]+/g, '_');
-  if (!normalized) return false;
-  return normalized.includes('seller_asked_me_to_cancel') ||
-    normalized.includes('out_of_stock') ||
-    normalized.includes('item_is_out_of_stock') ||
-    normalized.includes('buyer_asked_to_cancel') ||
-    normalized.includes('cancelled_by_buyer') ||
-    normalized.includes('cancelled_by_seller') ||
-    normalized.includes('canceled_by_buyer') ||
-    normalized.includes('canceled_by_seller') ||
-    normalized.includes('duplicate_order') ||
-    normalized.includes('sourcing_issue') ||
-    normalized.includes('change_of_mind_before_shipping') ||
-    normalized.includes('payment_cancelled') ||
-    normalized.includes('unpaid') ||
-    normalized.includes('cancel');
-}
-
-function isFailedDeliveryReason(reasonText = '') {
-  const normalized = safeString(reasonText).toLowerCase().replace(/[\s-]+/g, '_');
-  if (!normalized) return false;
-  return normalized.includes('rejected_at_doorstep') ||
-    normalized.includes('customer_rescheduled_outside_of_delivery_sla') ||
-    normalized.includes('others_missing_mapping') ||
-    normalized.includes('delivery_address_is_wrong') ||
-    normalized.includes('delivery_address_wrong') ||
-    normalized.includes('address_is_wrong') ||
-    normalized.includes('wrong_address') ||
-    normalized.includes('address_not_found') ||
-    normalized.includes('incorrect_address') ||
-    normalized.includes('invalid_address') ||
-    normalized.includes('incomplete_address') ||
-    normalized.includes('fake_address') ||
-    normalized.includes('rescheduled_outside') ||
-    normalized.includes('outside_of_delivery_sla') ||
-    normalized.includes('delivery_sla') ||
-    normalized.includes('doorstep') ||
-    normalized.includes('refused_to_accept') ||
-    normalized.includes('refused_delivery') ||
-    normalized.includes('refused') ||
-    normalized.includes('consignee_not_available') ||
-    normalized.includes('customer_not_available') ||
-    normalized.includes('customer_unreachable') ||
-    normalized.includes('unreachable') ||
-    normalized.includes('phone_switched_off') ||
-    normalized.includes('no_answer') ||
-    normalized.includes('premises_closed') ||
-    normalized.includes('out_of_delivery_area') ||
-    normalized.includes('failed_delivery') ||
-    normalized.includes('delivery_failed') ||
-    normalized.includes('delivery_attempt_failed') ||
-    normalized.includes('unable_to_deliver') ||
-    normalized.includes('undelivered');
-}
-
-function isCancelledStatus(status = '') {
-  const normalized = normalizeStatus(status);
-  if (!normalized) return false;
-  return normalized.includes('cancel') ||
-    normalized === 'closed' ||
-    normalized.includes('closed') ||
-    normalized.includes('unpaid') ||
-    normalized.includes('payment_failed') ||
-    normalized.includes('failed_payment') ||
-    normalized.includes('payment_rejected') ||
-    normalized.includes('order_rejected') ||
-    normalized.includes('customer_not_completed') ||
-    normalized.includes('not_completed') ||
-    normalized.includes('incomplete') ||
-    isCancellationReason(status);
-}
-
-function isReturnStatus(status = '', payload = {}) {
-  const statusNorm = normalizeStatus(status);
-  const normalized = `${statusNorm} ${payloadText(payload)}`.trim();
-  if (!normalized) return false;
-
-  // If reason or status indicates failed delivery reasons or cancellation, it is NOT a customer return
-  if (isFailedDeliveryReason(normalized) || isCancellationReason(normalized)) {
-    return false;
-  }
-
-  if (statusNorm === 'returned' || statusNorm === 'customer_return' || statusNorm === 'buyer_return') {
-    return true;
-  }
-
-  const logisticsOnlyReturn = normalized.includes('return_to_seller') ||
-    normalized.includes('return_to_origin') ||
-    normalized.includes('returned_to_shipper');
-  const hasCustomerReturnContext = normalized.includes('refund') ||
-    normalized.includes('claim') ||
-    normalized.includes('return_reason') ||
-    normalized.includes('customer_return') ||
-    normalized.includes('buyer_return');
-
-  if (logisticsOnlyReturn && !hasCustomerReturnContext) return false;
-
-  return normalized.includes('customer_return') ||
-    normalized.includes('buyer_return') ||
-    normalized.includes('return_requested') ||
-    normalized.includes('returning') ||
-    statusNorm === 'return' ||
-    normalized.includes('returned') ||
-    normalized.includes('refund') ||
-    normalized.includes('claim');
-}
-
-function isFailedDeliveryStatus(status = '', payload = {}) {
-  const statusNorm = normalizeStatus(status);
-  const normalized = `${statusNorm} ${payloadText(payload)}`.trim();
-  if (!normalized) return false;
-
-  if (isCancellationReason(normalized)) {
-    return false;
-  }
-
-  if (isFailedDeliveryReason(normalized)) {
-    return true;
-  }
-
-  if (normalized.includes('payment_failed') || normalized.includes('failed_payment')) {
-    return false;
-  }
-
-  // In Daraz Open API, 'failed' is the official status code for failed delivery
-  if (statusNorm === 'failed' || statusNorm === 'failed_delivery' || statusNorm === 'delivery_failed' || statusNorm === 'undelivered') {
-    return true;
-  }
-
-  const explicitFailedDelivery = normalized.includes('failed_delivery') ||
-    normalized.includes('delivery_failed') ||
-    normalized.includes('failed_to_deliver') ||
-    normalized.includes('unable_to_deliver') ||
-    normalized.includes('undelivered') ||
-    normalized.includes('delivery_attempt_failed') ||
-    normalized.includes('returned_to_shipper') ||
-    normalized.includes('return_to_seller') ||
-    normalized.includes('return_to_origin') ||
-    normalized.includes('package_scrapped') ||
-    normalized.includes('logistic_facility') ||
-    normalized.includes('arrived_at_facility') ||
-    normalized.includes('arrived_at_hub') ||
-    normalized.includes('rejected_at_doorstep') ||
-    normalized.includes('outside_of_delivery_sla') ||
-    normalized.includes('others_missing_mapping');
-
-  const genericFailedWithDeliveryContext = normalized.includes('failed') &&
-    (normalized.includes('deliver') || normalized.includes('logistic') || normalized.includes('shipment') || normalized.includes('courier') || normalized.includes('package'));
-
-  return explicitFailedDelivery || genericFailedWithDeliveryContext;
-}
-
-function isSaleEligibleStatus(status = '') {
-  const normalized = normalizeStatus(status);
-  if (!normalized) return false;
-  if (isCancelledStatus(normalized) || isReturnStatus(normalized) || isFailedDeliveryStatus(normalized)) return false;
-  return [
-    'confirmed',
-    'created',
-    'pending',
-    'packed',
-    'ready_to_ship',
-    'ready_to_ship_pending',
-    'shipped',
-    'delivered',
-    'completed',
-    'processed'
-  ].some((key) => normalized === key || normalized.includes(key));
-}
-
-function shouldCountAsSale(status = '', category = '') {
-  const cat = normalizeStatus(category);
-  if (cat) return cat === 'active_sale' || cat === 'delivered';
-  return isSaleEligibleStatus(status);
-}
-
-function classifyOrderStatus(status = '', payload = {}) {
-  if (isCancelledStatus(status)) return 'cancelled';
-  if (isReturnStatus(status, payload)) return 'return';
-  if (isFailedDeliveryStatus(status, payload)) return 'failed_delivery';
-  if (isSaleEligibleStatus(status)) return 'active_sale';
-  return 'pending';
-}
-
-function getParcelType(statusCategory) {
-  if (statusCategory === 'return') return 'return';
-  if (statusCategory === 'failed_delivery') return 'failed_delivery';
-  return 'none';
-}
-
 function safePayloadString(payload) {
   if (!payload) return '';
   if (typeof payload === 'string') return payload;
@@ -256,61 +42,293 @@ function safePayloadString(payload) {
   }
 }
 
-function isSuccessfullyReturnedToMerchant(status = '', payload = {}) {
-  const statusNorm = safeString(status).toLowerCase();
-  const allText = `${statusNorm} ${safePayloadString(payload)}`.toLowerCase().replace(/[\s\-_\[\]!.,/]+/g, ' ');
-  return (
-    allText.includes('successfully returned') ||
-    allText.includes('package returned') ||
-    allText.includes('your parcel has been successfully returned') ||
-    allText.includes('delivered to merchant') ||
-    allText.includes('returned to merchant') ||
-    allText.includes('return delivered') ||
-    allText.includes('merchant collected') ||
-    allText.includes('collected by seller') ||
-    allText.includes('handed over to seller') ||
-    allText.includes('delivered to shipper') ||
-    allText.includes('delivered to origin') ||
-    allText.includes('package collected') ||
-    allText.includes('item received back')
-  );
+// -----------------------------------------------------------------------------
+// CONTROLLED DARAZ OFFICIAL STATUS ENUM & REASON CODE DICTIONARIES
+// -----------------------------------------------------------------------------
+
+const DARAZ_OFFICIAL_STATUSES = {
+  unpaid: { category: 'cancelled', parcelType: 'none', revenueCountable: false, isControlled: true, label: 'Unpaid' },
+  pending: { category: 'pending', parcelType: 'none', revenueCountable: false, isControlled: true, label: 'Pending' },
+  ready_to_ship: { category: 'active_sale', parcelType: 'none', revenueCountable: true, isControlled: true, label: 'Ready To Ship' },
+  ready_to_ship_pending: { category: 'active_sale', parcelType: 'none', revenueCountable: true, isControlled: true, label: 'RTS Pending' },
+  packed: { category: 'active_sale', parcelType: 'none', revenueCountable: true, isControlled: true, label: 'Packed' },
+  shipped: { category: 'active_sale', parcelType: 'none', revenueCountable: true, isControlled: true, label: 'Shipped' },
+  delivered: { category: 'active_sale', parcelType: 'none', revenueCountable: true, isControlled: true, label: 'Delivered' },
+  canceled: { category: 'cancelled', parcelType: 'none', revenueCountable: false, isControlled: true, label: 'Canceled' },
+  cancelled: { category: 'cancelled', parcelType: 'none', revenueCountable: false, isControlled: true, label: 'Cancelled' },
+  failed: { category: 'failed_delivery', parcelType: 'failed_delivery', revenueCountable: false, isControlled: true, label: 'Failed Delivery' },
+  failed_delivery: { category: 'failed_delivery', parcelType: 'failed_delivery', revenueCountable: false, isControlled: true, label: 'Failed Delivery' },
+  returned: { category: 'return', parcelType: 'return', revenueCountable: false, isControlled: true, label: 'Customer Return' },
+  lost_by_3pl: { category: 'cancelled', parcelType: 'none', revenueCountable: false, isControlled: true, label: 'Lost by 3PL' },
+  damaged_by_3pl: { category: 'cancelled', parcelType: 'none', revenueCountable: false, isControlled: true, label: 'Damaged by 3PL' },
+  scrapped: { category: 'scrapped', parcelType: 'none', revenueCountable: false, isControlled: true, label: 'Scrapped' },
+  package_scrapped: { category: 'scrapped', parcelType: 'none', revenueCountable: false, isControlled: true, label: 'Package Scrapped' }
+};
+
+const DARAZ_OFFICIAL_COLLECTION_STATUSES = [
+  { code: 'PARCEL_RETURNED_COLLECTED', label: 'Parcel Collected by Seller', keywords: ['successfully returned', 'package returned', 'your parcel has been successfully returned', 'delivered to merchant', 'returned to merchant', 'collected by seller', 'handed over to seller', 'merchant collected', 'delivered to shipper', 'delivered to origin', 'package collected', 'item received back'] }
+];
+
+const DARAZ_OFFICIAL_CANCELLATION_REASONS = [
+  { code: 'SELLER_CANCEL_OUT_OF_STOCK', label: 'Seller Out of Stock', keywords: ['seller_asked_me_to_cancel', 'item_is_out_of_stock', 'out_of_stock', 'seller asked me to cancel'] },
+  { code: 'BUYER_CANCEL_REQUEST', label: 'Buyer Cancelled', keywords: ['buyer_asked_to_cancel', 'cancelled_by_buyer', 'canceled_by_buyer', 'buyer requested cancel'] },
+  { code: 'SELLER_CANCELLED', label: 'Seller Cancelled', keywords: ['cancelled_by_seller', 'canceled_by_seller', 'seller cancelled'] },
+  { code: 'DUPLICATE_ORDER', label: 'Duplicate Order', keywords: ['duplicate_order', 'duplicate order'] },
+  { code: 'SOURCING_ISSUE', label: 'Sourcing Issue', keywords: ['sourcing_issue', 'cannot source item'] },
+  { code: 'CHANGE_OF_MIND_PRE_SHIP', label: 'Change of Mind (Pre-shipment)', keywords: ['change_of_mind_before_shipping', 'customer changed mind before shipping'] },
+  { code: 'PAYMENT_FAILED', label: 'Payment Unsuccessful', keywords: ['payment_cancelled', 'payment_failed', 'failed_payment', 'unpaid', 'payment_timeout'] },
+  { code: 'SYSTEM_CANCELLED', label: 'System Cancelled', keywords: ['system_cancelled', 'auto_cancelled_by_daraz', 'timeout_cancelled'] }
+];
+
+const DARAZ_OFFICIAL_FAILED_DELIVERY_REASONS = [
+  { code: 'REJECTED_AT_DOORSTEP', label: 'Rejected at Doorstep', keywords: ['rejected_at_doorstep', 'rejected at doorstep', 'refused at doorstep'] },
+  { code: 'RESCHEDULED_OUTSIDE_SLA', label: 'Rescheduled Outside SLA', keywords: ['customer_rescheduled_outside_of_delivery_sla', 'rescheduled outside of delivery sla', 'outside_of_delivery_sla'] },
+  { code: 'OTHERS_MISSING_MAPPING', label: 'Daraz Missing Mapping Code', keywords: ['others_missing_mapping', 'missing mapping'] },
+  { code: 'WRONG_DELIVERY_ADDRESS', label: 'Wrong Delivery Address', keywords: ['delivery_address_is_wrong', 'delivery_address_wrong', 'wrong_address', 'address_is_wrong', 'incorrect_address', 'invalid_address', 'address_not_found', 'incomplete_address', 'fake_address'] },
+  { code: 'CUSTOMER_UNAVAILABLE', label: 'Customer Not Available', keywords: ['consignee_not_available', 'customer_not_available', 'customer unavailable'] },
+  { code: 'CUSTOMER_UNREACHABLE', label: 'Customer Phone Unreachable', keywords: ['customer_unreachable', 'phone_switched_off', 'no_answer', 'unreachable'] },
+  { code: 'PREMISES_CLOSED', label: 'Premises / Office Closed', keywords: ['premises_closed', 'office_closed', 'door_locked'] },
+  { code: 'OUT_OF_DELIVERY_AREA', label: 'Out of Delivery Area', keywords: ['out_of_delivery_area', 'remote_area', 'non_serviceable_area'] },
+  { code: 'CUSTOMER_REFUSED', label: 'Customer Refused Delivery', keywords: ['refused_delivery', 'refused_to_accept', 'refused'] },
+  { code: 'DELIVERY_ATTEMPT_FAILED', label: 'Delivery Attempt Failed', keywords: ['failed_delivery', 'delivery_failed', 'delivery_attempt_failed', 'unable_to_deliver', 'undelivered'] }
+];
+
+const DARAZ_OFFICIAL_RETURN_REASONS = [
+  { code: 'RMA_DEFECTIVE_ITEM', label: 'Defective / Not Working', keywords: ['defective_item', 'item_defective', 'not_working', 'faulty_item', 'defective'] },
+  { code: 'RMA_WRONG_ITEM', label: 'Wrong Item Received', keywords: ['wrong_item', 'wrong_product_sent', 'different_from_description', 'incorrect_item'] },
+  { code: 'RMA_DAMAGED_ITEM', label: 'Damaged in Transit / Broken', keywords: ['damaged_item', 'damaged_in_transit', 'broken_item'] },
+  { code: 'RMA_MISSING_PARTS', label: 'Missing Accessories / Incomplete', keywords: ['missing_items', 'missing_parts', 'incomplete_order', 'items_missing'] },
+  { code: 'RMA_COUNTERFEIT', label: 'Counterfeit / Replica Item', keywords: ['counterfeit_item', 'fake_item', 'counterfeit'] },
+  { code: 'RMA_POOR_QUALITY', label: 'Quality Not as Expected', keywords: ['quality_not_as_expected', 'poor_quality'] },
+  { code: 'RMA_CHANGE_OF_MIND', label: 'Change of Mind (Return Policy)', keywords: ['change_of_mind', 'buyer_change_of_mind'] },
+  { code: 'RMA_GENERIC_RETURN', label: 'Customer Return Claim', keywords: ['customer_return', 'buyer_return', 'return_requested', 'returning', 'refund', 'claim', 'daraz_return_claim'] }
+];
+
+// -----------------------------------------------------------------------------
+// CONTROLLED MATCHING HELPERS
+// -----------------------------------------------------------------------------
+
+function matchControlledReason(text, reasonTable) {
+  const norm = safeString(text).toLowerCase().replace(/[\s-]+/g, '_');
+  if (!norm) return null;
+  for (const entry of reasonTable) {
+    for (const kw of entry.keywords) {
+      const kwNorm = kw.toLowerCase().replace(/[\s-]+/g, '_');
+      if (norm.includes(kwNorm) || norm === kwNorm) {
+        return entry;
+      }
+    }
+  }
+  return null;
 }
 
-function classifyOrderItem({ status = '', orderStatus = '', returnReason = '', claimDate = null, hubArrivedAt = null, rawPayload = {} } = {}) {
-  const combined = [status, orderStatus, returnReason, payloadText(rawPayload)].join(' ');
+function matchControlledCollectionStatus(statusText = '', payload = {}) {
+  const statusNorm = safeString(statusText).toLowerCase();
+  const allText = `${statusNorm} ${safePayloadString(payload)}`.toLowerCase().replace(/[\s\-_\[\]!.,/]+/g, ' ');
+  for (const entry of DARAZ_OFFICIAL_COLLECTION_STATUSES) {
+    for (const kw of entry.keywords) {
+      if (allText.includes(kw)) {
+        return entry;
+      }
+    }
+  }
+  return null;
+}
 
-  // 1. Check if collected / package successfully returned to merchant
-  if (isSuccessfullyReturnedToMerchant(combined, rawPayload)) {
-    const isReturn = isReturnStatus(combined, rawPayload);
+function isSuccessfullyReturnedToMerchant(status = '', payload = {}) {
+  return !!matchControlledCollectionStatus(status, payload);
+}
+
+function isCancellationReason(reasonText = '') {
+  return !!matchControlledReason(reasonText, DARAZ_OFFICIAL_CANCELLATION_REASONS);
+}
+
+function isFailedDeliveryReason(reasonText = '') {
+  return !!matchControlledReason(reasonText, DARAZ_OFFICIAL_FAILED_DELIVERY_REASONS);
+}
+
+function isReturnReason(reasonText = '') {
+  return !!matchControlledReason(reasonText, DARAZ_OFFICIAL_RETURN_REASONS);
+}
+
+function isCancelledStatus(status = '') {
+  const norm = normalizeStatus(status);
+  if (!norm) return false;
+  if (DARAZ_OFFICIAL_STATUSES[norm]?.category === 'cancelled') return true;
+  return isCancellationReason(status);
+}
+
+function isReturnStatus(status = '', payload = {}) {
+  const norm = normalizeStatus(status);
+  if (!norm && !payload) return false;
+
+  // Controlled cancellation and failed delivery always override return heuristics
+  if (isCancellationReason(status) || isFailedDeliveryReason(status)) return false;
+  if (DARAZ_OFFICIAL_STATUSES[norm]?.category === 'return') return true;
+
+  return isReturnReason(status) || isReturnReason(safePayloadString(payload));
+}
+
+function isFailedDeliveryStatus(status = '', payload = {}) {
+  const norm = normalizeStatus(status);
+  if (!norm && !payload) return false;
+
+  if (isCancellationReason(status)) return false;
+  if (DARAZ_OFFICIAL_STATUSES[norm]?.category === 'failed_delivery') return true;
+
+  return isFailedDeliveryReason(status) || isFailedDeliveryReason(safePayloadString(payload));
+}
+
+function isSaleEligibleStatus(status = '') {
+  const norm = normalizeStatus(status);
+  if (!norm) return false;
+  return DARAZ_OFFICIAL_STATUSES[norm]?.category === 'active_sale' || false;
+}
+
+function shouldCountAsSale(status = '', category = '') {
+  const cat = normalizeStatus(category);
+  if (cat) return cat === 'active_sale' || cat === 'delivered';
+  return isSaleEligibleStatus(status);
+}
+
+function classifyOrderStatus(status = '', payload = {}) {
+  const norm = normalizeStatus(status);
+  if (DARAZ_OFFICIAL_STATUSES[norm]) {
+    return DARAZ_OFFICIAL_STATUSES[norm].category;
+  }
+  if (isSuccessfullyReturnedToMerchant(status, payload)) return 'collected';
+  if (isCancelledStatus(status)) return 'cancelled';
+  if (isReturnStatus(status, payload)) return 'return';
+  if (isFailedDeliveryStatus(status, payload)) return 'failed_delivery';
+  return 'pending';
+}
+
+function getParcelType(statusCategory) {
+  if (statusCategory === 'return') return 'return';
+  if (statusCategory === 'failed_delivery') return 'failed_delivery';
+  return 'none';
+}
+
+// -----------------------------------------------------------------------------
+// CONTROLLED ORDER ITEM CLASSIFICATION WITH REVIEW LABELING
+// -----------------------------------------------------------------------------
+
+function classifyOrderItem({
+  status = '',
+  orderStatus = '',
+  returnReason = '',
+  claimDate = null,
+  hubArrivedAt = null,
+  rawPayload = {}
+} = {}) {
+  const originalStatus = safeString(status);
+  const originalReason = safeString(returnReason);
+  const normStatus = normalizeStatus(status);
+  const normOrderStatus = normalizeStatus(orderStatus);
+  const inspectionText = `${originalStatus} ${safeString(orderStatus)} ${originalReason}`;
+
+  // 1. Check if collected / parcel received back by merchant
+  const collectionMatch = matchControlledCollectionStatus(inspectionText, rawPayload);
+  if (collectionMatch) {
+    const isReturn = isReturnStatus(inspectionText, rawPayload);
     return {
       statusCategory: 'collected',
       parcelType: isReturn ? 'return' : 'failed_delivery',
       revenueCountable: false,
       isCollected: true,
-      collectionStatus: 'collected'
+      collectionStatus: 'collected',
+      reasonCode: collectionMatch.code,
+      reasonLabel: collectionMatch.label,
+      mappingConfidence: 'mapped',
+      needsReview: false,
+      reviewReason: '',
+      originalStatus,
+      originalReason
     };
   }
 
-  // 2. Check if cancelled or has a cancellation reason (e.g. out of stock / seller asked to cancel)
-  if (isCancelledStatus(status) || isCancelledStatus(orderStatus) || isCancellationReason(returnReason)) {
-    return { statusCategory: 'cancelled', parcelType: 'none', revenueCountable: false };
+  // 2. Check if cancelled by official status or known cancellation reason code
+  const cancelReasonMatch = matchControlledReason(originalReason || originalStatus, DARAZ_OFFICIAL_CANCELLATION_REASONS);
+  if (cancelReasonMatch || isCancelledStatus(originalStatus) || isCancelledStatus(orderStatus)) {
+    return {
+      statusCategory: 'cancelled',
+      parcelType: 'none',
+      revenueCountable: false,
+      reasonCode: cancelReasonMatch?.code || 'ORDER_CANCELLED',
+      reasonLabel: cancelReasonMatch?.label || 'Order Cancelled',
+      mappingConfidence: cancelReasonMatch || DARAZ_OFFICIAL_STATUSES[normStatus] ? 'mapped' : 'heuristic',
+      needsReview: false,
+      reviewReason: '',
+      originalStatus,
+      originalReason
+    };
   }
 
-  // 3. Check if Failed Delivery (by failed delivery status OR failed delivery reasons like rejected at doorstep, SLA expired, missing mapping)
-  if (isFailedDeliveryReason(returnReason) || isFailedDeliveryStatus(combined, rawPayload) || (!isReturnStatus(combined, rawPayload) && hubArrivedAt)) {
-    return { statusCategory: 'failed_delivery', parcelType: 'failed_delivery', revenueCountable: false };
+  // 3. Check if Failed Delivery by official Daraz failed status or known failed delivery reasons
+  const failedReasonMatch = matchControlledReason(originalReason || originalStatus, DARAZ_OFFICIAL_FAILED_DELIVERY_REASONS);
+  if (failedReasonMatch || normStatus === 'failed' || normStatus === 'failed_delivery' || (!isReturnStatus(inspectionText, rawPayload) && hubArrivedAt)) {
+    return {
+      statusCategory: 'failed_delivery',
+      parcelType: 'failed_delivery',
+      revenueCountable: false,
+      reasonCode: failedReasonMatch?.code || 'FAILED_DELIVERY_GENERIC',
+      reasonLabel: failedReasonMatch?.label || 'Failed Delivery',
+      mappingConfidence: failedReasonMatch || DARAZ_OFFICIAL_STATUSES[normStatus] ? 'mapped' : 'heuristic',
+      needsReview: false,
+      reviewReason: '',
+      originalStatus,
+      originalReason
+    };
   }
 
-  // 4. Genuine Customer Returns (customer claims, defective, wrong item, etc.)
-  if (claimDate || isReturnStatus(combined, rawPayload) || (returnReason && !isCancellationReason(returnReason) && !isFailedDeliveryReason(returnReason))) {
-    return { statusCategory: 'return', parcelType: 'return', revenueCountable: false };
+  // 4. Check if Customer Return (RMA claim or returned status)
+  const returnReasonMatch = matchControlledReason(originalReason || originalStatus, DARAZ_OFFICIAL_RETURN_REASONS);
+  if (returnReasonMatch || claimDate || normStatus === 'returned' || (originalReason && !isFailedDeliveryReason(originalReason) && !isCancellationReason(originalReason))) {
+    return {
+      statusCategory: 'return',
+      parcelType: 'return',
+      revenueCountable: false,
+      reasonCode: returnReasonMatch?.code || 'RMA_GENERIC_RETURN',
+      reasonLabel: returnReasonMatch?.label || 'Customer Return Claim',
+      mappingConfidence: returnReasonMatch || DARAZ_OFFICIAL_STATUSES[normStatus] || claimDate ? 'mapped' : 'heuristic',
+      needsReview: false,
+      reviewReason: '',
+      originalStatus,
+      originalReason
+    };
   }
 
-  if (isSaleEligibleStatus(status) || isSaleEligibleStatus(orderStatus)) {
-    return { statusCategory: 'active_sale', parcelType: 'none', revenueCountable: true };
+  // 5. Active Sale (Confirmed, RTS, Shipped, Delivered)
+  if (DARAZ_OFFICIAL_STATUSES[normStatus]?.category === 'active_sale' || DARAZ_OFFICIAL_STATUSES[normOrderStatus]?.category === 'active_sale') {
+    const statusMeta = DARAZ_OFFICIAL_STATUSES[normStatus] || DARAZ_OFFICIAL_STATUSES[normOrderStatus];
+    return {
+      statusCategory: 'active_sale',
+      parcelType: 'none',
+      revenueCountable: true,
+      reasonCode: 'ACTIVE_SALE',
+      reasonLabel: statusMeta?.label || 'Active Sale',
+      mappingConfidence: 'mapped',
+      needsReview: false,
+      reviewReason: '',
+      originalStatus,
+      originalReason
+    };
   }
 
-  return { statusCategory: 'pending', parcelType: 'none', revenueCountable: false };
+  // 6. Unknown / Unmapped Status or Reason -> Flag explicitly for review
+  const hasNovelText = originalReason.length > 0 || (originalStatus.length > 0 && !DARAZ_OFFICIAL_STATUSES[normStatus]);
+  return {
+    statusCategory: 'pending',
+    parcelType: 'none',
+    revenueCountable: false,
+    reasonCode: 'UNMAPPED_DARAZ_STATUS',
+    reasonLabel: originalReason || originalStatus || 'Unmapped Daraz Status',
+    mappingConfidence: hasNovelText ? 'unknown_review_needed' : 'mapped',
+    needsReview: hasNovelText,
+    reviewReason: hasNovelText ? `Unmapped Daraz status or reason code: "${originalReason || originalStatus}"` : '',
+    originalStatus,
+    originalReason
+  };
 }
 
 function normalizeCollectionStatus({ statusCategory = '', parcelType = 'none', hubArrivedAt = null, existingStatus = '' } = {}) {
@@ -368,6 +386,11 @@ function nonSaleCategories() {
 module.exports = {
   DEFAULT_COLLECTION_HUB_NAME,
   DEFAULT_COLLECTION_DEADLINE_DAYS,
+  DARAZ_OFFICIAL_STATUSES,
+  DARAZ_OFFICIAL_COLLECTION_STATUSES,
+  DARAZ_OFFICIAL_CANCELLATION_REASONS,
+  DARAZ_OFFICIAL_FAILED_DELIVERY_REASONS,
+  DARAZ_OFFICIAL_RETURN_REASONS,
   safeString,
   normalizeStatus,
   toDate,
@@ -375,10 +398,12 @@ module.exports = {
   daysLeftUntil,
   isCancellationReason,
   isFailedDeliveryReason,
+  isReturnReason,
   isCancelledStatus,
   isReturnStatus,
   isFailedDeliveryStatus,
   isSaleEligibleStatus,
+  isSuccessfullyReturnedToMerchant,
   shouldCountAsSale,
   classifyOrderStatus,
   classifyOrderItem,
