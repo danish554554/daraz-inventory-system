@@ -225,9 +225,22 @@ async function getInventoryRows({ search = '', lowStockOnly = false, storeId = '
     if (groupItems.length > 0) mergedRows.push(makeMergedInventoryRow(group, groupItems));
   }
 
-  const singleRows = items
-    .filter((item) => !groupedInventoryIds.has(String(item._id)))
-    .map((item) => makeInventoryRow(item));
+  const seenSkus = new Set();
+  for (const row of mergedRows) {
+    if (row.master_sku) seenSkus.add(String(row.master_sku).toLowerCase().trim());
+    if (row.seller_sku) seenSkus.add(String(row.seller_sku).toLowerCase().trim());
+  }
+
+  const singleRows = [];
+  for (const item of items) {
+    if (groupedInventoryIds.has(String(item._id))) continue;
+    const skuKey = String(item.seller_sku || '').toLowerCase().trim();
+    if (skuKey && seenSkus.has(skuKey)) {
+      continue;
+    }
+    if (skuKey) seenSkus.add(skuKey);
+    singleRows.push(makeInventoryRow(item));
+  }
 
   let rows = [...mergedRows, ...singleRows].filter((row) => rowMatchesSearch(row, search));
   if (lowStockOnly) rows = rows.filter((item) => item.stock <= item.low_stock_limit);

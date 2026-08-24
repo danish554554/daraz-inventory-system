@@ -320,18 +320,44 @@ async function importProductsForStore(storeId, options = {}) {
       seenKeys.add(rowKey);
 
       try {
-        const existing = await CentralInventory.findOne({
-          store_id: store._id,
-          seller_sku: sellerSku
+        const skuRegex = new RegExp(`^${sellerSku.trim().replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}$`, 'i');
+
+        // Check if SKU is already present in active central inventory across any store
+        const alreadyInInventory = await CentralInventory.findOne({
+          seller_sku: { $regex: skuRegex },
+          is_archived: { $ne: true },
+          is_deleted: { $ne: true },
+          status: { $ne: 'archived' }
         });
 
-        if (existing?.is_archived || existing?.is_deleted || existing?.status === 'archived') {
+        if (alreadyInInventory) {
+          // Product with this SKU is already imported and present in stock list - ignore to prevent duplicate SKUs
+          skipped += 1;
+          continue;
+        }
+
+        // Check if SKU is in an active merge group
+        const InventoryMergeGroup = require('../models/InventoryMergeGroup');
+        const alreadyInMergeGroup = await InventoryMergeGroup.findOne({
+          master_sku: { $regex: skuRegex }
+        });
+        if (alreadyInMergeGroup) {
+          skipped += 1;
+          continue;
+        }
+
+        // Check if SKU was removed / archived
+        const archivedItem = await CentralInventory.findOne({
+          seller_sku: { $regex: skuRegex },
+          $or: [{ is_archived: true }, { is_deleted: true }, { status: 'archived' }]
+        });
+        if (archivedItem) {
           skipped += 1;
           continue;
         }
 
         const Product = require('../models/Product');
-        const existingProduct = await Product.findOne({ sku: sellerSku }).lean();
+        const existingProduct = await Product.findOne({ sku: { $regex: skuRegex } }).lean();
         if (existingProduct?.is_active === false || existingProduct?.status === 'archived') {
           skipped += 1;
           continue;
@@ -355,33 +381,19 @@ async function importProductsForStore(storeId, options = {}) {
           last_product_import_at: new Date()
         };
 
-        await CentralInventory.findOneAndUpdate(
-          { store_id: store._id, seller_sku: sellerSku },
-          {
-            $set: update,
-            $setOnInsert: {
-              stock: initialStock,
-              purchase_price: initialCost,
-              cost_price: initialCost,
-              reserved_stock: 0,
-              low_stock_limit: existingProduct?.low_stock_limit || 5,
-              is_archived: false,
-              is_deleted: false,
-              status: 'active'
-            }
-          },
-          {
-            upsert: true,
-            returnDocument: 'after',
-            setDefaultsOnInsert: true
-          }
-        );
+        await CentralInventory.create({
+          ...update,
+          stock: initialStock,
+          purchase_price: initialCost,
+          cost_price: initialCost,
+          reserved_stock: 0,
+          low_stock_limit: existingProduct?.low_stock_limit || 5,
+          is_archived: false,
+          is_deleted: false,
+          status: 'active'
+        });
 
-        if (existing) {
-          updated += 1;
-        } else {
-          imported += 1;
-        }
+        imported += 1;
       } catch (error) {
         errors += 1;
         error_details.push({
