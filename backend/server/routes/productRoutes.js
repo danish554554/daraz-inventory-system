@@ -190,7 +190,10 @@ router.post("/add-product", async (req, res) => {
 // Get all products
 router.get("/", async (req, res) => {
   try {
-    const products = await Product.find().sort({ created_at: -1 });
+    const products = await Product.find({
+      is_active: { $ne: false },
+      status: { $nin: ['archived', 'inactive', 'deleted', 'suspended', 'draft', 'offline', 'disabled', 'rejected', 'deactivated'] }
+    }).sort({ created_at: -1 });
     const enriched = await attachExtraSkusToProducts(products);
     res.json(enriched);
   } catch (error) {

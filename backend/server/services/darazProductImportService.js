@@ -194,6 +194,28 @@ function getSkuPrice(source = {}) {
   );
 }
 
+function getProductStatus(product = {}, sku = {}) {
+  const val =
+    pickFirstString(sku, ["status", "Status", "sub_status", "SubStatus", "state", "State"]) ||
+    pickFirstString(product, ["status", "Status", "sub_status", "SubStatus", "state", "State"]);
+  return val ? val.toLowerCase().trim() : "active";
+}
+
+function isInactiveStatus(status = "") {
+  const s = String(status || "").toLowerCase().trim();
+  return (
+    s === "inactive" ||
+    s === "deleted" ||
+    s === "suspended" ||
+    s === "draft" ||
+    s === "offline" ||
+    s === "deactivated" ||
+    s === "unapproved" ||
+    s === "rejected" ||
+    s === "disabled"
+  );
+}
+
 function normalizeProductPayloads(products = []) {
   const rows = [];
 
@@ -219,6 +241,7 @@ function normalizeProductPayloads(products = []) {
         const sellerSku = getSellerSku(sku);
         const originalTitle = getProductName(product, sku) || productName;
         const englishTitle = pickEnglishTitle(product, sku);
+        const status = getProductStatus(product, sku);
 
         rows.push({
           seller_sku: sellerSku,
@@ -232,7 +255,8 @@ function normalizeProductPayloads(products = []) {
           daraz_item_id:
             pickFirstString(sku, ["item_id", "ItemId", "itemId"]) || productId,
           daraz_sku_id: getSkuId(sku),
-          variation_name: getVariationName(product, sku)
+          variation_name: getVariationName(product, sku),
+          status
         });
       }
       continue;
@@ -240,6 +264,7 @@ function normalizeProductPayloads(products = []) {
 
     const sellerSku = getSellerSku(product);
     const englishTitle = pickEnglishTitle(product, {});
+    const status = getProductStatus(product, {});
 
     rows.push({
       seller_sku: sellerSku,
@@ -252,7 +277,8 @@ function normalizeProductPayloads(products = []) {
       daraz_product_id: productId,
       daraz_item_id: productId,
       daraz_sku_id: getSkuId(product),
-      variation_name: getVariationName(product, {})
+      variation_name: getVariationName(product, {}),
+      status
     });
   }
 
@@ -279,7 +305,7 @@ async function importProductsForStore(storeId, options = {}) {
 
   const limit = Math.min(Math.max(toNumber(options.limit, 50), 1), 100);
   const maxPages = Math.min(Math.max(toNumber(options.maxPages, 20), 1), 100);
-  const filter = safeString(options.filter) || "live";
+  const filter = safeString(options.filter) || "all";
 
   let offset = toNumber(options.offset, 0);
   let page = 0;
@@ -322,12 +348,28 @@ async function importProductsForStore(storeId, options = {}) {
       try {
         const skuRegex = new RegExp(`^${sellerSku.trim().replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}$`, 'i');
 
+        if (isInactiveStatus(row.status)) {
+          // If this product was made inactive from store listing in Daraz,
+          // automatically mark it inactive and archived so it disappears from the stock list!
+          await CentralInventory.updateMany(
+            { seller_sku: { $regex: skuRegex } },
+            { $set: { is_archived: true, is_deleted: true, status: 'inactive' } }
+          );
+          const Product = require('../models/Product');
+          await Product.updateMany(
+            { sku: { $regex: skuRegex } },
+            { $set: { is_active: false, status: 'inactive' } }
+          );
+          skipped += 1;
+          continue;
+        }
+
         // Check if SKU is already present in active central inventory across any store
         const alreadyInInventory = await CentralInventory.findOne({
           seller_sku: { $regex: skuRegex },
           is_archived: { $ne: true },
           is_deleted: { $ne: true },
-          status: { $ne: 'archived' }
+          status: { $nin: ['archived', 'inactive', 'deleted', 'suspended', 'draft', 'offline', 'disabled', 'rejected'] }
         });
 
         if (alreadyInInventory) {

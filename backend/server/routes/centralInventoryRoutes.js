@@ -190,7 +190,7 @@ async function getInventoryRows({ search = '', lowStockOnly = false, storeId = '
   const query = {
     is_archived: { $ne: true },
     is_deleted: { $ne: true },
-    status: { $ne: 'archived' }
+    status: { $nin: ['archived', 'inactive', 'deleted', 'suspended', 'draft', 'offline', 'disabled', 'rejected', 'deactivated'] }
   };
   if (storeId) query.store_id = storeId;
   if (search?.trim()) {
