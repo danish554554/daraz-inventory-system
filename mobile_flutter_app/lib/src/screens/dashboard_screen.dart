@@ -224,20 +224,6 @@ class _DashboardScreenState extends State<DashboardScreen> {
                       _metricsGrid(context),
                       const SizedBox(height: 18),
                       _sectionTitle(
-                        'Low stock radar',
-                        action: _lowStockItems.isEmpty ? null : 'View all',
-                      ),
-                      const SizedBox(height: 10),
-                      if (_lowStockItems.isEmpty)
-                        const EmptyState(
-                          title: 'Stock is healthy',
-                          message: 'No products are below their reorder limit.',
-                          icon: Icons.check_circle_outline,
-                        )
-                      else
-                        ..._lowStockItems.take(4).map(_lowStockCard),
-                      const SizedBox(height: 18),
-                      _sectionTitle(
                         'Recent Live Orders',
                         action: _orders.isEmpty ? null : '${_orders.length} orders',
                       ),
@@ -813,64 +799,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
     );
   }
 
-  Widget _lowStockCard(InventoryItem item) {
-    final critical = item.isCritical;
 
-    return Padding(
-      padding: const EdgeInsets.only(bottom: 10),
-      child: AppCard(
-        padding: const EdgeInsets.all(12),
-        child: Row(
-          children: <Widget>[
-            MiniIcon(
-              icon: Icons.inventory_outlined,
-              color: critical ? AppTheme.danger : AppTheme.warning,
-              background:
-                  critical ? AppTheme.dangerSoft : AppTheme.warningSoft,
-              size: 36,
-            ),
-            const SizedBox(width: 12),
-            Expanded(
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: <Widget>[
-                  Text(
-                    item.title,
-                    maxLines: 1,
-                    overflow: TextOverflow.ellipsis,
-                    style: const TextStyle(
-                      fontSize: 13,
-                      fontWeight: FontWeight.w900,
-                    ),
-                  ),
-                  const SizedBox(height: 3),
-                  Text(
-                    '${item.sellerSku} · ${item.storeCode}',
-                    maxLines: 1,
-                    overflow: TextOverflow.ellipsis,
-                    style: const TextStyle(
-                      fontSize: 11,
-                      color: AppTheme.textMuted,
-                      fontWeight: FontWeight.w700,
-                    ),
-                  ),
-                ],
-              ),
-            ),
-            const SizedBox(width: 8),
-            Text(
-              '${item.stock} left',
-              style: TextStyle(
-                color: critical ? AppTheme.danger : AppTheme.warning,
-                fontSize: 12,
-                fontWeight: FontWeight.w900,
-              ),
-            ),
-          ],
-        ),
-      ),
-    );
-  }
 
   Widget _dashboardOrderCard(CentralOrder order) {
     final isCancelled = order.status.toLowerCase().contains('cancel');
