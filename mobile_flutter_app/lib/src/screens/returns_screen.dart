@@ -164,22 +164,27 @@ class _ReturnsAndFailedDeliveryScreenState extends State<ReturnsAndFailedDeliver
     final hub = item.hubName.toLowerCase();
     final reason = item.returnReason.toLowerCase();
     final remarks = item.errorMessage.toLowerCase();
-    final combined = '$status $category $hub $reason $remarks';
-    return combined.contains('successfully returned') ||
-        combined.contains('successfully_returned') ||
-        combined.contains('your parcel has been successfully returned') ||
-        combined.contains('package returned') ||
-        combined.contains('package_returned') ||
-        combined.contains('delivered_to_merchant') ||
-        combined.contains('returned_to_merchant') ||
-        combined.contains('return_delivered') ||
-        combined.contains('merchant_collected') ||
-        combined.contains('collected_by_seller') ||
-        combined.contains('handed_over_to_seller') ||
-        combined.contains('package_collected') ||
-        combined.contains('delivered_to_shipper') ||
-        combined.contains('returned to seller') ||
-        combined.contains('returned_to_seller');
+    final orderStatus = item.orderStatus.toLowerCase();
+    final collectionStatus = item.collectionStatus.toLowerCase();
+    final title = item.title.toLowerCase();
+    final raw = '$status $category $hub $reason $remarks $orderStatus $collectionStatus $title';
+    final normalized = raw.replaceAll(RegExp(r'[\s\-_\[\]!.,/]+'), ' ');
+
+    return normalized.contains('successfully returned') ||
+        normalized.contains('package returned') ||
+        normalized.contains('your parcel has been successfully returned') ||
+        normalized.contains('delivered to merchant') ||
+        normalized.contains('returned to merchant') ||
+        normalized.contains('return delivered') ||
+        normalized.contains('merchant collected') ||
+        normalized.contains('collected by seller') ||
+        normalized.contains('handed over to seller') ||
+        normalized.contains('delivered to shipper') ||
+        normalized.contains('returned to seller') ||
+        normalized.contains('delivered to origin') ||
+        normalized.contains('package collected') ||
+        normalized.contains('collected') ||
+        normalized.contains('received');
   }
 
   bool _isDay5OrScrapRisk(CentralOrderItem item) {
@@ -226,8 +231,11 @@ class _ReturnsAndFailedDeliveryScreenState extends State<ReturnsAndFailedDeliver
       // 1. Separate by Primary Section
       if (_primarySection == 'failed_delivery') {
         if (!isFailed) return false;
+        // Never show collected/package returned in active failed delivery tab
+        if (_subFilter != 'collected' && isCompleted) return false;
       } else if (_primarySection == 'returns') {
         if (!isReturn) return false;
+        if (_subFilter != 'collected' && isCompleted) return false;
       } else if (_primarySection == 'at_risk') {
         if (isCompleted || !isScrapRisk) return false;
       }

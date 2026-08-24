@@ -132,14 +132,22 @@ function failedDeliveryQuery() {
     $and: [
       notCancelledQuery(),
       {
+        collection_status: { $nin: ["collected", "received"] }
+      },
+      {
+        status_category: { $nin: ["cancelled", "collected", "scrapped"] }
+      },
+      {
         $or: [
           { parcel_type: "failed_delivery" },
           { status_category: "failed_delivery" },
-          { status_category: "collected", parcel_type: "failed_delivery" },
           { status: { $regex: "failed_delivery|delivery_failed|undelivered|unable_to_deliver|failed_to_deliver|returned_to_shipper|return_to_seller|package_scrapped", $options: "i" } },
           { hub_arrived_at: { $ne: null }, parcel_type: { $ne: "return" } },
           { logistic_facility_at: { $ne: null }, parcel_type: { $ne: "return" } }
         ]
+      },
+      {
+        status: { $not: /successfully_returned|successfully returned|package_returned|package returned|delivered_to_merchant/i }
       },
       { return_reason: { $in: [null, ""] } },
       { claim_date: { $in: [null] } }
@@ -201,10 +209,13 @@ function itemPayload(item) {
   const hubArrivedAt = item.hub_arrived_at || item.logistic_facility_at || null;
   const storedDeadline = item.collection_deadline_at || null;
   const deadline = storedDeadline || (hubArrivedAt ? new Date(new Date(hubArrivedAt).getTime() + orderRules.DEFAULT_COLLECTION_DEADLINE_DAYS * 24 * 60 * 60 * 1000) : null);
-  const collectionStatus = item.collection_status || "pending";
-  const collected = ["collected", "received"].includes(normalizeStatus(collectionStatus)) || !!item.collected_at;
+  const rawInspectionText = `${item.status || ''} ${item.return_reason || ''} ${item.hub_name || ''} ${item.collection_notes || ''}`;
+  const isAutoReturned = orderRules.isSuccessfullyReturnedToMerchant(rawInspectionText, item.raw_payload || {});
+  const baseCollectionStatus = item.collection_status || "pending";
+  const collectionStatus = isAutoReturned ? "collected" : baseCollectionStatus;
+  const collected = isAutoReturned || ["collected", "received"].includes(normalizeStatus(collectionStatus)) || !!item.collected_at;
   const daysLeft = collected ? 0 : (deadline ? Math.ceil((new Date(deadline).getTime() - Date.now()) / (24 * 60 * 60 * 1000)) : null);
-  const notificationLevel = orderRules.collectionNotificationLevel({
+  const notificationLevel = collected ? "collected" : orderRules.collectionNotificationLevel({
     collectionStatus,
     deadline,
     hubArrivedAt

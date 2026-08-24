@@ -246,23 +246,42 @@ function getParcelType(statusCategory) {
   return 'none';
 }
 
+function extractAllStrings(obj, visited = new Set()) {
+  if (!obj) return '';
+  if (typeof obj === 'string') return obj;
+  if (typeof obj === 'number' || typeof obj === 'boolean') return String(obj);
+  if (typeof obj !== 'object' || visited.has(obj)) return '';
+  visited.add(obj);
+  const parts = [];
+  if (Array.isArray(obj)) {
+    for (const item of obj) {
+      parts.push(extractAllStrings(item, visited));
+    }
+  } else {
+    for (const key of Object.keys(obj)) {
+      parts.push(extractAllStrings(obj[key], visited));
+    }
+  }
+  return parts.join(' ');
+}
+
 function isSuccessfullyReturnedToMerchant(status = '', payload = {}) {
-  const statusNorm = normalizeStatus(status);
-  const text = `${statusNorm} ${payloadText(payload)}`.toLowerCase().replace(/[\s-]+/g, '_');
+  const statusNorm = safeString(status).toLowerCase();
+  const allText = `${statusNorm} ${extractAllStrings(payload)}`.toLowerCase().replace(/[\s\-_\[\]!.,]+/g, ' ');
   return (
-    text.includes('successfully_returned') ||
-    text.includes('your_parcel_has_been_successfully_returned') ||
-    text.includes('package_returned') ||
-    text.includes('delivered_to_merchant') ||
-    text.includes('returned_to_merchant') ||
-    text.includes('return_delivered') ||
-    text.includes('merchant_collected') ||
-    text.includes('collected_by_seller') ||
-    text.includes('handed_over_to_seller') ||
-    text.includes('delivered_to_shipper') ||
-    text.includes('delivered_to_origin') ||
-    text.includes('package_collected') ||
-    text.includes('item_received_back')
+    allText.includes('successfully returned') ||
+    allText.includes('package returned') ||
+    allText.includes('your parcel has been successfully returned') ||
+    allText.includes('delivered to merchant') ||
+    allText.includes('returned to merchant') ||
+    allText.includes('return delivered') ||
+    allText.includes('merchant collected') ||
+    allText.includes('collected by seller') ||
+    allText.includes('handed over to seller') ||
+    allText.includes('delivered to shipper') ||
+    allText.includes('delivered to origin') ||
+    allText.includes('package collected') ||
+    allText.includes('item received back')
   );
 }
 
