@@ -276,6 +276,20 @@ router.put("/:id", async (req, res) => {
       });
     }
 
+    const CentralInventory = require("../models/CentralInventory");
+    await CentralInventory.updateMany(
+      { seller_sku: normalizedPrimarySku },
+      {
+        $set: {
+          stock: Number(stock) || 0,
+          purchase_price: Number(purchase_price) || 0,
+          cost_price: Number(purchase_price) || 0,
+          selling_price: Number(selling_price) || 0,
+          low_stock_limit: Number(low_stock_limit) || 5
+        }
+      }
+    );
+
     await ProductSkuMap.deleteMany({ product_id: product._id });
 
     if (normalizedExtraSkus.length) {
@@ -305,13 +319,23 @@ router.put("/:id", async (req, res) => {
 // Delete product
 router.delete("/:id", async (req, res) => {
   try {
-    const deletedProduct = await Product.findByIdAndDelete(req.params.id);
+    const product = await Product.findById(req.params.id);
 
-    if (!deletedProduct) {
+    if (!product) {
       return res.status(404).json({
         message: "Product not found"
       });
     }
+
+    product.is_active = false;
+    product.status = 'archived';
+    await product.save();
+
+    const CentralInventory = require("../models/CentralInventory");
+    await CentralInventory.updateMany(
+      { seller_sku: product.sku },
+      { $set: { is_archived: true, is_deleted: true, status: 'archived' } }
+    );
 
     await ProductSkuMap.deleteMany({ product_id: req.params.id });
 

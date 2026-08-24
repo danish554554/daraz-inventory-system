@@ -47,6 +47,12 @@ exports.adjustStock = async (req, res) => {
 
     await product.save();
 
+    const CentralInventory = require("../models/CentralInventory");
+    await CentralInventory.updateMany(
+      { seller_sku: product.sku },
+      { $set: { stock: product.stock } }
+    );
+
     const adjustment = await StockAdjustment.create({
       product_id,
       quantity: qty,

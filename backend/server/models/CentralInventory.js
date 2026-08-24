@@ -87,6 +87,21 @@ const centralInventorySchema = new mongoose.Schema(
     profit_margin: {
       type: Number,
       default: 0
+    },
+    is_archived: {
+      type: Boolean,
+      default: false,
+      index: true
+    },
+    is_deleted: {
+      type: Boolean,
+      default: false,
+      index: true
+    },
+    status: {
+      type: String,
+      default: "active",
+      index: true
     }
   },
   { timestamps: true }

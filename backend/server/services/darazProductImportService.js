@@ -325,6 +325,21 @@ async function importProductsForStore(storeId, options = {}) {
           seller_sku: sellerSku
         });
 
+        if (existing?.is_archived || existing?.is_deleted || existing?.status === 'archived') {
+          skipped += 1;
+          continue;
+        }
+
+        const Product = require('../models/Product');
+        const existingProduct = await Product.findOne({ sku: sellerSku }).lean();
+        if (existingProduct?.is_active === false || existingProduct?.status === 'archived') {
+          skipped += 1;
+          continue;
+        }
+
+        const initialStock = existingProduct?.stock > 0 ? existingProduct.stock : 0;
+        const initialCost = existingProduct?.purchase_price > 0 ? existingProduct.purchase_price : 0;
+
         const update = {
           store_id: store._id,
           seller_sku: sellerSku,
@@ -345,9 +360,14 @@ async function importProductsForStore(storeId, options = {}) {
           {
             $set: update,
             $setOnInsert: {
-              stock: 0,
+              stock: initialStock,
+              purchase_price: initialCost,
+              cost_price: initialCost,
               reserved_stock: 0,
-              low_stock_limit: 5
+              low_stock_limit: existingProduct?.low_stock_limit || 5,
+              is_archived: false,
+              is_deleted: false,
+              status: 'active'
             }
           },
           {

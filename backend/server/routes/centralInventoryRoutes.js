@@ -187,7 +187,11 @@ function makeMergedInventoryRow(group, items) {
 }
 
 async function getInventoryRows({ search = '', lowStockOnly = false, storeId = '' } = {}) {
-  const query = {};
+  const query = {
+    is_archived: { $ne: true },
+    is_deleted: { $ne: true },
+    status: { $ne: 'archived' }
+  };
   if (storeId) query.store_id = storeId;
   if (search?.trim()) {
     query.$or = [
@@ -928,12 +932,19 @@ router.delete('/:id', async (req, res, next) => {
       { $pull: { inventory_ids: item._id } }
     );
 
-    await CentralInventory.findByIdAndDelete(req.params.id);
+    item.is_archived = true;
+    item.is_deleted = true;
+    item.status = 'archived';
+    await item.save();
 
     if (item.seller_sku) {
       await Product.updateMany(
         { sku: item.seller_sku },
         { $set: { is_active: false, status: 'archived' } }
+      );
+      await CentralInventory.updateMany(
+        { seller_sku: item.seller_sku },
+        { $set: { is_archived: true, is_deleted: true, status: 'archived' } }
       );
     }
 
@@ -959,19 +970,26 @@ router.post('/batch-delete', async (req, res, next) => {
       { $pull: { inventory_ids: { $in: inventory_ids } } }
     );
 
-    const deleteRes = await CentralInventory.deleteMany({ _id: { $in: inventory_ids } });
+    const updateRes = await CentralInventory.updateMany(
+      { _id: { $in: inventory_ids } },
+      { $set: { is_archived: true, is_deleted: true, status: 'archived' } }
+    );
 
     if (skus.length > 0) {
       await Product.updateMany(
         { sku: { $in: skus } },
         { $set: { is_active: false, status: 'archived' } }
       );
+      await CentralInventory.updateMany(
+        { seller_sku: { $in: skus } },
+        { $set: { is_archived: true, is_deleted: true, status: 'archived' } }
+      );
     }
 
     res.json({
       success: true,
-      message: `${deleteRes.deletedCount || 0} product(s) removed successfully.`,
-      deleted_count: deleteRes.deletedCount || 0
+      message: `${updateRes.modifiedCount || updateRes.matchedCount || 0} product(s) removed successfully.`,
+      deleted_count: updateRes.modifiedCount || updateRes.matchedCount || 0
     });
   } catch (error) { next(error); }
 });

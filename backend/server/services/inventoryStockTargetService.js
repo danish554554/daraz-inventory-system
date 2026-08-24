@@ -57,14 +57,30 @@ async function findOrCreateInventoryBySku({ store_id, seller_sku, product_name =
   if (cleanTitle) update.display_title = cleanTitle;
   if (safeString(image_url)) update.image_url = safeString(image_url);
 
-  if (!allowCreate) {
-    const existing = await CentralInventory.findOne({ store_id, seller_sku: sku }).populate('store_id', 'name code');
-    if (existing && Object.keys(update).length) {
+  const existing = await CentralInventory.findOne({ store_id, seller_sku: sku }).populate('store_id', 'name code');
+  if (existing) {
+    if (existing.is_archived || existing.is_deleted || existing.status === 'archived') {
+      if (!allowCreate) return null;
+    }
+    if (Object.keys(update).length) {
       await CentralInventory.updateOne({ _id: existing._id }, { $set: update });
       Object.assign(existing, update);
     }
     return existing;
   }
+
+  if (!allowCreate) {
+    return null;
+  }
+
+  const Product = require('../models/Product');
+  const existingProd = await Product.findOne({ sku }).lean();
+  if (existingProd?.is_active === false || existingProd?.status === 'archived') {
+    return null;
+  }
+
+  const initialStock = existingProd?.stock > 0 ? existingProd.stock : 0;
+  const initialCost = existingProd?.purchase_price > 0 ? existingProd.purchase_price : 0;
 
   return CentralInventory.findOneAndUpdate(
     { store_id, seller_sku: sku },
@@ -76,9 +92,14 @@ async function findOrCreateInventoryBySku({ store_id, seller_sku, product_name =
         original_product_name: cleanName,
         display_title: cleanTitle,
         image_url: safeString(image_url),
-        stock: 0,
+        stock: initialStock,
+        purchase_price: initialCost,
+        cost_price: initialCost,
         reserved_stock: 0,
-        low_stock_limit: 5
+        low_stock_limit: existingProd?.low_stock_limit || 5,
+        is_archived: false,
+        is_deleted: false,
+        status: 'active'
       },
       $set: update
     },
@@ -209,6 +230,24 @@ async function updateTargetStock(target, { type, quantity, product_name, low_sto
 
   const stockBefore = toNumber(before.stock, 0);
   const stockAfter = stockBefore + inc;
+
+  const Product = require('../models/Product');
+  if (target.seller_sku) {
+    await Product.updateMany(
+      { sku: target.seller_sku },
+      { $set: { stock: stockAfter } }
+    );
+  }
+  if (target.kind === 'merge' && Array.isArray(target.linked_items)) {
+    const skus = target.linked_items.map((i) => i.seller_sku).filter(Boolean);
+    if (skus.length > 0) {
+      await Product.updateMany(
+        { sku: { $in: skus } },
+        { $set: { stock: stockAfter } }
+      );
+    }
+  }
+
   return {
     ok: true,
     stock_before: stockBefore,
