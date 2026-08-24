@@ -398,24 +398,6 @@ class _DashboardScreenState extends State<DashboardScreen> {
       _orderItems.fold<double>(0, (sum, item) => sum + item.amount),
     );
 
-    final totalCost = JsonReaders.number(
-      _historySummary,
-      'total_cost',
-      _orderItems.fold<double>(0, (sum, item) => sum + item.totalCost),
-    );
-
-    final profit = JsonReaders.number(
-      _historySummary,
-      'profit',
-      revenue - totalCost,
-    );
-
-    final profitMargin = JsonReaders.number(
-      _historySummary,
-      'profit_margin',
-      revenue > 0 ? (((revenue - totalCost) / revenue) * 100) : 0,
-    );
-
     final totalOrders = JsonReaders.integer(
       _historySummary,
       'total_orders',
@@ -454,20 +436,20 @@ class _DashboardScreenState extends State<DashboardScreen> {
                   Container(
                     padding: const EdgeInsets.all(6),
                     decoration: BoxDecoration(
-                      color: AppTheme.success.withValues(alpha: 0.18),
+                      color: AppTheme.primary.withValues(alpha: 0.2),
                       borderRadius: BorderRadius.circular(10),
                     ),
                     child: const Icon(
-                      Icons.trending_up_rounded,
-                      color: AppTheme.success,
+                      Icons.account_balance_wallet_rounded,
+                      color: AppTheme.accent,
                       size: 16,
                     ),
                   ),
                   const SizedBox(width: 8),
                   Text(
-                    'TRUE NET PROFIT (${_historyPeriod.toUpperCase()})',
+                    'GROSS REVENUE (${_historyPeriod.toUpperCase()})',
                     style: TextStyle(
-                      color: Colors.white.withValues(alpha: 0.75),
+                      color: Colors.white.withValues(alpha: 0.8),
                       fontSize: 11,
                       fontWeight: FontWeight.w800,
                       letterSpacing: 0.5,
@@ -478,18 +460,12 @@ class _DashboardScreenState extends State<DashboardScreen> {
               Container(
                 padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
                 decoration: BoxDecoration(
-                  gradient: AppTheme.profitGradient,
+                  color: Colors.white.withValues(alpha: 0.12),
                   borderRadius: BorderRadius.circular(20),
-                  boxShadow: <BoxShadow>[
-                    BoxShadow(
-                      color: AppTheme.success.withValues(alpha: 0.3),
-                      blurRadius: 8,
-                      offset: const Offset(0, 2),
-                    ),
-                  ],
+                  border: Border.all(color: Colors.white.withValues(alpha: 0.2)),
                 ),
                 child: Text(
-                  profitMargin > 0 ? '+${profitMargin.toStringAsFixed(1)}% Margin' : 'Margin --',
+                  '$totalOrders Orders',
                   style: const TextStyle(
                     color: Colors.white,
                     fontSize: 11,
@@ -501,7 +477,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
           ),
           const SizedBox(height: 12),
           Text(
-            profit > 0 ? 'PKR ${Formatters.money(profit)}' : 'PKR 0',
+            revenue > 0 ? 'PKR ${Formatters.money(revenue)}' : 'PKR 0',
             style: const TextStyle(
               color: Colors.white,
               fontSize: 30,
@@ -520,9 +496,9 @@ class _DashboardScreenState extends State<DashboardScreen> {
             child: Row(
               mainAxisAlignment: MainAxisAlignment.spaceAround,
               children: <Widget>[
-                _heroSubMetric('Gross Revenue', 'PKR ${Formatters.money(revenue)}'),
+                _heroSubMetric('Total Products', '${_inventory.length} SKUs'),
                 Container(height: 24, width: 1, color: Colors.white.withValues(alpha: 0.15)),
-                _heroSubMetric('Orders', Formatters.quantity(totalOrders)),
+                _heroSubMetric('Total Stock', '$_totalStock Units'),
                 Container(height: 24, width: 1, color: Colors.white.withValues(alpha: 0.15)),
                 InkWell(
                   onTap: () async {
@@ -754,9 +730,6 @@ class _DashboardScreenState extends State<DashboardScreen> {
     final width = MediaQuery.of(context).size.width;
     final itemWidth = width < 360 ? width - 32 : (width - 44) / 2;
 
-    final profit = JsonReaders.number(_historySummary, 'profit');
-    final profitMargin = JsonReaders.number(_historySummary, 'profit_margin');
-    final profitAvailable = JsonReaders.boolean(_historySummary, 'profit_available', profit > 0);
 
     return Wrap(
       spacing: 12,
@@ -805,9 +778,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
               ),
             ),
             icon: Icons.shopping_bag_outlined,
-            caption: profitAvailable
-                ? 'Rs. ${Formatters.money(profit)} profit (${profitMargin.toStringAsFixed(0)}% margin)'
-                : '${Formatters.quantity(_orders.length)} valid orders',
+            caption: '${Formatters.quantity(_orders.length)} valid orders',
             tint: AppTheme.successSoft,
             iconColor: AppTheme.success,
           ),
@@ -902,7 +873,6 @@ class _DashboardScreenState extends State<DashboardScreen> {
   }
 
   Widget _dashboardOrderCard(CentralOrder order) {
-    final hasProfit = order.profit != null && order.profit! > 0;
     final isCancelled = order.status.toLowerCase().contains('cancel');
     final isReturned = order.status.toLowerCase().contains('return');
     final isFailed = order.status.toLowerCase().contains('failed');
@@ -1001,29 +971,19 @@ class _DashboardScreenState extends State<DashboardScreen> {
                 mainAxisAlignment: MainAxisAlignment.spaceBetween,
                 children: <Widget>[
                   Text(
-                    order.amount > 0 ? 'Sale: PKR ${Formatters.money(order.amount)}' : 'Sale: PKR --',
+                    order.amount > 0 ? 'Amount: PKR ${Formatters.money(order.amount)}' : 'Amount: PKR --',
                     style: const TextStyle(
                       fontSize: 11,
                       fontWeight: FontWeight.w800,
                       color: AppTheme.textPrimary,
                     ),
                   ),
-                  Container(
-                    padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
-                    decoration: BoxDecoration(
-                      color: hasProfit ? AppTheme.successSoft : AppTheme.softGrey,
-                      borderRadius: BorderRadius.circular(8),
-                      border: Border.all(
-                        color: hasProfit ? AppTheme.success.withValues(alpha: 0.3) : AppTheme.border,
-                      ),
-                    ),
-                    child: Text(
-                      hasProfit ? 'Profit: +PKR ${Formatters.money(order.profit!)}' : 'Profit: Calc on COGS',
-                      style: TextStyle(
-                        fontSize: 10,
-                        fontWeight: FontWeight.w900,
-                        color: hasProfit ? AppTheme.success : AppTheme.textMuted,
-                      ),
+                  Text(
+                    '${order.itemCount} item${order.itemCount > 1 ? 's' : ''}',
+                    style: const TextStyle(
+                      fontSize: 11,
+                      fontWeight: FontWeight.w800,
+                      color: AppTheme.textMuted,
                     ),
                   ),
                 ],
