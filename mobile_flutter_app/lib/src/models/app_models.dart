@@ -1258,3 +1258,260 @@ class SyncStatus {
     );
   }
 }
+
+class StatementPeriodModel {
+  StatementPeriodModel({
+    required this.statementPeriod,
+    required this.hasData,
+    required this.isCurrent,
+  });
+
+  final String statementPeriod;
+  final bool hasData;
+  final bool isCurrent;
+
+  factory StatementPeriodModel.fromJson(Map<String, dynamic> json) {
+    return StatementPeriodModel(
+      statementPeriod: JsonReaders.string(json, 'statement_period'),
+      hasData: JsonReaders.boolean(json, 'has_data'),
+      isCurrent: JsonReaders.boolean(json, 'is_current'),
+    );
+  }
+}
+
+class FinanceSummary {
+  FinanceSummary({
+    required this.totalOrders,
+    required this.totalAdjustments,
+    required this.grossAmount,
+    required this.totalFees,
+    required this.totalTaxes,
+    required this.totalDeductions,
+    required this.totalCost,
+    required this.netSettlement,
+    required this.netProfit,
+    required this.adjustmentImpact,
+    required this.finalProfitAfterAdjustments,
+    required this.marginPercent,
+    required this.profitReadyOrders,
+    required this.pendingCostOrders,
+  });
+
+  final int totalOrders;
+  final int totalAdjustments;
+  final double grossAmount;
+  final double totalFees;
+  final double totalTaxes;
+  final double totalDeductions;
+  final double totalCost;
+  final double netSettlement;
+  final double netProfit;
+  final double adjustmentImpact;
+  final double finalProfitAfterAdjustments;
+  final double marginPercent;
+  final int profitReadyOrders;
+  final int pendingCostOrders;
+
+  factory FinanceSummary.fromJson(Map<String, dynamic> json) {
+    return FinanceSummary(
+      totalOrders: JsonReaders.integer(json, 'total_orders'),
+      totalAdjustments: JsonReaders.integer(json, 'total_adjustments'),
+      grossAmount: JsonReaders.number(json, 'gross_amount'),
+      totalFees: JsonReaders.number(json, 'total_fees'),
+      totalTaxes: JsonReaders.number(json, 'total_taxes'),
+      totalDeductions: JsonReaders.number(json, 'total_deductions'),
+      totalCost: JsonReaders.number(json, 'total_cost'),
+      netSettlement: JsonReaders.number(json, 'net_settlement'),
+      netProfit: JsonReaders.number(json, 'net_profit'),
+      adjustmentImpact: JsonReaders.number(json, 'adjustment_impact'),
+      finalProfitAfterAdjustments: JsonReaders.number(json, 'final_profit_after_adjustments'),
+      marginPercent: JsonReaders.number(json, 'margin_percent'),
+      profitReadyOrders: JsonReaders.integer(json, 'profit_ready_orders'),
+      pendingCostOrders: JsonReaders.integer(json, 'pending_cost_orders'),
+    );
+  }
+
+  static FinanceSummary empty() => FinanceSummary(
+        totalOrders: 0,
+        totalAdjustments: 0,
+        grossAmount: 0,
+        totalFees: 0,
+        totalTaxes: 0,
+        totalDeductions: 0,
+        totalCost: 0,
+        netSettlement: 0,
+        netProfit: 0,
+        adjustmentImpact: 0,
+        finalProfitAfterAdjustments: 0,
+        marginPercent: 0,
+        profitReadyOrders: 0,
+        pendingCostOrders: 0,
+      );
+}
+
+class FinanceEntry {
+  FinanceEntry({
+    required this.id,
+    required this.storeId,
+    required this.storeName,
+    required this.storeCode,
+    required this.statementPeriod,
+    required this.statementNumber,
+    required this.shortCode,
+    required this.transactionDate,
+    required this.orderCreationDate,
+    required this.releaseStatus,
+    required this.releaseDate,
+    required this.orderNumber,
+    required this.orderLineId,
+    required this.sellerSku,
+    required this.lazadaSku,
+    required this.productName,
+    required this.orderStatus,
+    required this.entryType,
+    required this.adjustmentReason,
+    required this.productPrice,
+    required this.shippingPaidByBuyer,
+    required this.shippingFeeDiscount,
+    required this.commissionFee,
+    required this.paymentFee,
+    required this.shippingFee,
+    required this.handlingFee,
+    required this.freeShippingMaxFee,
+    required this.cofundedVoucherFee,
+    required this.coinsDiscountFee,
+    required this.penalties,
+    required this.incomeTaxWithholding,
+    required this.salesTaxWithholding,
+    required this.whtAmount,
+    required this.vatTotal,
+    required this.grossAmount,
+    required this.totalFees,
+    required this.totalTaxes,
+    required this.totalDeductions,
+    required this.netSettlement,
+    required this.costPrice,
+    required this.quantity,
+    required this.totalCost,
+    required this.netProfit,
+    required this.matchedProductId,
+    required this.matchedProductName,
+    required this.matchedBy,
+    required this.profitReady,
+    required this.feeBreakdown,
+    required this.importedAt,
+  });
+
+  final String id;
+  final String storeId;
+  final String storeName;
+  final String storeCode;
+  final String statementPeriod;
+  final String statementNumber;
+  final String shortCode;
+  final String transactionDate;
+  final String orderCreationDate;
+  final String releaseStatus;
+  final String releaseDate;
+  final String orderNumber;
+  final String orderLineId;
+  final String sellerSku;
+  final String lazadaSku;
+  final String productName;
+  final String orderStatus;
+  final String entryType;
+  final String adjustmentReason;
+  final double productPrice;
+  final double shippingPaidByBuyer;
+  final double shippingFeeDiscount;
+  final double commissionFee;
+  final double paymentFee;
+  final double shippingFee;
+  final double handlingFee;
+  final double freeShippingMaxFee;
+  final double cofundedVoucherFee;
+  final double coinsDiscountFee;
+  final double penalties;
+  final double incomeTaxWithholding;
+  final double salesTaxWithholding;
+  final double whtAmount;
+  final double vatTotal;
+  final double grossAmount;
+  final double totalFees;
+  final double totalTaxes;
+  final double totalDeductions;
+  final double netSettlement;
+  final double costPrice;
+  final int quantity;
+  final double totalCost;
+  final double? netProfit;
+  final String matchedProductId;
+  final String matchedProductName;
+  final String matchedBy;
+  final bool profitReady;
+  final Map<String, dynamic> feeBreakdown;
+  final DateTime? importedAt;
+
+  bool get isOrder => entryType == 'order';
+  bool get isAdjustment => entryType == 'adjustment';
+  bool get isProfitReady => profitReady && netProfit != null;
+
+  double get profitMargin {
+    if (grossAmount <= 0 || netProfit == null) return 0;
+    return (netProfit! / grossAmount) * 100;
+  }
+
+  factory FinanceEntry.fromJson(Map<String, dynamic> json) {
+    return FinanceEntry(
+      id: JsonReaders.string(json, '_id'),
+      storeId: json['store_id'] is Map ? JsonReaders.string(json['store_id'], '_id') : JsonReaders.string(json, 'store_id'),
+      storeName: json['store_id'] is Map ? JsonReaders.string(json['store_id'], 'name') : JsonReaders.string(json, 'store_name'),
+      storeCode: json['store_id'] is Map ? JsonReaders.string(json['store_id'], 'code') : JsonReaders.string(json, 'store_code'),
+      statementPeriod: JsonReaders.string(json, 'statement_period'),
+      statementNumber: JsonReaders.string(json, 'statement_number'),
+      shortCode: JsonReaders.string(json, 'short_code'),
+      transactionDate: JsonReaders.string(json, 'transaction_date'),
+      orderCreationDate: JsonReaders.string(json, 'order_creation_date'),
+      releaseStatus: JsonReaders.string(json, 'release_status'),
+      releaseDate: JsonReaders.string(json, 'release_date'),
+      orderNumber: JsonReaders.string(json, 'order_number'),
+      orderLineId: JsonReaders.string(json, 'order_line_id'),
+      sellerSku: JsonReaders.string(json, 'seller_sku'),
+      lazadaSku: JsonReaders.string(json, 'lazada_sku'),
+      productName: JsonReaders.string(json, 'product_name'),
+      orderStatus: JsonReaders.string(json, 'order_status'),
+      entryType: JsonReaders.string(json, 'entry_type', 'order'),
+      adjustmentReason: JsonReaders.string(json, 'adjustment_reason'),
+      productPrice: JsonReaders.number(json, 'product_price'),
+      shippingPaidByBuyer: JsonReaders.number(json, 'shipping_paid_by_buyer'),
+      shippingFeeDiscount: JsonReaders.number(json, 'shipping_fee_discount'),
+      commissionFee: JsonReaders.number(json, 'commission_fee'),
+      paymentFee: JsonReaders.number(json, 'payment_fee'),
+      shippingFee: JsonReaders.number(json, 'shipping_fee'),
+      handlingFee: JsonReaders.number(json, 'handling_fee'),
+      freeShippingMaxFee: JsonReaders.number(json, 'free_shipping_max_fee'),
+      cofundedVoucherFee: JsonReaders.number(json, 'cofunded_voucher_fee'),
+      coinsDiscountFee: JsonReaders.number(json, 'coins_discount_fee'),
+      penalties: JsonReaders.number(json, 'penalties'),
+      incomeTaxWithholding: JsonReaders.number(json, 'income_tax_withholding'),
+      salesTaxWithholding: JsonReaders.number(json, 'sales_tax_withholding'),
+      whtAmount: JsonReaders.number(json, 'wht_amount'),
+      vatTotal: JsonReaders.number(json, 'vat_total'),
+      grossAmount: JsonReaders.number(json, 'gross_amount'),
+      totalFees: JsonReaders.number(json, 'total_fees'),
+      totalTaxes: JsonReaders.number(json, 'total_taxes'),
+      totalDeductions: JsonReaders.number(json, 'total_deductions'),
+      netSettlement: JsonReaders.number(json, 'net_settlement'),
+      costPrice: JsonReaders.number(json, 'cost_price'),
+      quantity: JsonReaders.integer(json, 'quantity', 1),
+      totalCost: JsonReaders.number(json, 'total_cost'),
+      netProfit: json['net_profit'] == null ? null : JsonReaders.number(json, 'net_profit'),
+      matchedProductId: JsonReaders.string(json, 'matched_product_id'),
+      matchedProductName: JsonReaders.string(json, 'matched_product_name'),
+      matchedBy: JsonReaders.string(json, 'matched_by'),
+      profitReady: JsonReaders.boolean(json, 'profit_ready'),
+      feeBreakdown: JsonReaders.map(json['fee_breakdown']),
+      importedAt: JsonReaders.date(json, 'imported_at'),
+    );
+  }
+}

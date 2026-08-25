@@ -1,9 +1,17 @@
 const mongoose = require("mongoose");
 
 const financeEntrySchema = new mongoose.Schema(
-  {
-    statement_period: { type: String, default: "" },
-    statement_number: { type: String, default: "" },
+    store_id: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: "Store",
+      default: null,
+      index: true
+    },
+    store_name: { type: String, default: "" },
+    store_code: { type: String, default: "" },
+
+    statement_period: { type: String, default: "", index: true },
+    statement_number: { type: String, default: "", index: true },
     short_code: { type: String, default: "" },
 
     transaction_date: { type: String, default: "" },

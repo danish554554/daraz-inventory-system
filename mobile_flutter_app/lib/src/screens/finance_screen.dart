@@ -15,14 +15,19 @@ class FinanceScreen extends StatefulWidget {
   State<FinanceScreen> createState() => _FinanceScreenState();
 }
 
-class _FinanceScreenState extends State<FinanceScreen> with SingleTickerProviderStateMixin {
+class _FinanceScreenState extends State<FinanceScreen> {
   bool _loading = true;
   String? _error;
   String _search = '';
   String _activeTab = 'all'; // all, orders, adjustments, pending_cost
 
-  Map<String, dynamic> _summary = <String, dynamic>{};
-  List<Map<String, dynamic>> _entries = <Map<String, dynamic>>[];
+  String _selectedPeriod = 'all';
+  String _selectedStoreId = 'all';
+
+  List<StatementPeriodModel> _periods = <StatementPeriodModel>[];
+  List<StoreModel> _stores = <StoreModel>[];
+  FinanceSummary _summary = FinanceSummary.empty();
+  List<FinanceEntry> _entries = <FinanceEntry>[];
   List<InventoryItem> _inventory = <InventoryItem>[];
 
   @override
@@ -40,20 +45,44 @@ class _FinanceScreenState extends State<FinanceScreen> with SingleTickerProvider
     }
 
     try {
+      final periodParam = _selectedPeriod == 'all' ? '' : _selectedPeriod;
+      final storeParam = _selectedStoreId == 'all' ? '' : _selectedStoreId;
+
       final results = await Future.wait<dynamic>(<Future<dynamic>>[
-        ApiClient.instance.get('/finance/summary', bypassCache: true),
-        ApiClient.instance.get('/finance', bypassCache: true),
+        ApiClient.instance.get(
+          '/finance/summary',
+          queryParameters: <String, dynamic>{
+            if (periodParam.isNotEmpty) 'statement_period': periodParam,
+            if (storeParam.isNotEmpty) 'store_id': storeParam,
+          },
+          bypassCache: true,
+        ),
+        ApiClient.instance.get(
+          '/finance',
+          queryParameters: <String, dynamic>{
+            if (periodParam.isNotEmpty) 'statement_period': periodParam,
+            if (storeParam.isNotEmpty) 'store_id': storeParam,
+          },
+          bypassCache: true,
+        ),
+        ApiClient.instance.get('/finance/periods', bypassCache: true),
+        ApiClient.instance.get('/stores', bypassCache: true),
         ApiClient.instance.get('/central-inventory', bypassCache: true),
       ]);
 
       final summaryMap = JsonReaders.map(results[0]);
-      final entriesList = JsonReaders.list(results[1]).map((e) => JsonReaders.map(e)).toList();
-      final invList = JsonReaders.list(results[2]).map((e) => InventoryItem.fromJson(JsonReaders.map(e))).toList();
+      final entriesList = JsonReaders.list(results[1]).map((e) => FinanceEntry.fromJson(JsonReaders.map(e))).toList();
+      final periodsData = JsonReaders.map(results[2]);
+      final periodsList = JsonReaders.list(periodsData['periods']).map((p) => StatementPeriodModel.fromJson(JsonReaders.map(p))).toList();
+      final storesList = JsonReaders.list(results[3]).map((s) => StoreModel.fromJson(JsonReaders.map(s))).toList();
+      final invList = JsonReaders.list(results[4]).map((e) => InventoryItem.fromJson(JsonReaders.map(e))).toList();
 
       if (mounted) {
         setState(() {
-          _summary = summaryMap;
+          _summary = FinanceSummary.fromJson(summaryMap);
           _entries = entriesList;
+          _periods = periodsList;
+          _stores = storesList;
           _inventory = invList;
         });
       }
@@ -66,35 +95,188 @@ class _FinanceScreenState extends State<FinanceScreen> with SingleTickerProvider
     }
   }
 
-  List<Map<String, dynamic>> get _filteredEntries {
+  List<FinanceEntry> get _filteredEntries {
     final query = _search.trim().toLowerCase();
     return _entries.where((item) {
-      final type = (item['entry_type'] ?? 'order').toString();
-      final orderNum = (item['order_number'] ?? '').toString().toLowerCase();
-      final sku = (item['seller_sku'] ?? '').toString().toLowerCase();
-      final prodName = (item['product_name'] ?? '').toString().toLowerCase();
-      final reason = (item['adjustment_reason'] ?? '').toString().toLowerCase();
-      final isProfitReady = item['profit_ready'] == true;
-      final price = (double.tryParse((item['product_price'] ?? 0).toString()) ?? 0);
-
       // Filter by tab
-      if (_activeTab == 'orders' && type != 'order') return false;
-      if (_activeTab == 'adjustments' && type != 'adjustment') return false;
+      if (_activeTab == 'orders' && !item.isOrder) return false;
+      if (_activeTab == 'adjustments' && !item.isAdjustment) return false;
       if (_activeTab == 'pending_cost') {
-        if (type != 'order' || isProfitReady || price == 0) return false;
+        if (!item.isOrder || item.isProfitReady || item.productPrice == 0) return false;
       }
 
       // Filter by search
       if (query.isNotEmpty) {
-        final matches = orderNum.contains(query) ||
-            sku.contains(query) ||
-            prodName.contains(query) ||
-            reason.contains(query);
+        final matches = item.orderNumber.toLowerCase().contains(query) ||
+            item.orderLineId.toLowerCase().contains(query) ||
+            item.sellerSku.toLowerCase().contains(query) ||
+            item.productName.toLowerCase().contains(query) ||
+            item.adjustmentReason.toLowerCase().contains(query) ||
+            item.storeName.toLowerCase().contains(query);
         if (!matches) return false;
       }
 
       return true;
     }).toList();
+  }
+
+  void _openPeriodPickerSheet() {
+    showModalBottomSheet<void>(
+      context: context,
+      isScrollControlled: true,
+      backgroundColor: AppTheme.cardColor(context),
+      shape: const RoundedRectangleBorder(borderRadius: BorderRadius.vertical(top: Radius.circular(24))),
+      builder: (context) {
+        return StatefulBuilder(
+          builder: (context, setModalState) {
+            return Container(
+              constraints: BoxConstraints(maxHeight: MediaQuery.of(context).size.height * 0.75),
+              padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 16),
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: <Widget>[
+                  Row(
+                    mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                    children: <Widget>[
+                      Text(
+                        'Statement Period',
+                        style: TextStyle(
+                          fontSize: 18,
+                          fontWeight: FontWeight.w900,
+                          color: AppTheme.textPrimaryColor(context),
+                        ),
+                      ),
+                      IconButton(
+                        icon: const Icon(Icons.close_rounded),
+                        onPressed: () => Navigator.pop(context),
+                      ),
+                    ],
+                  ),
+                  Text(
+                    'Select a weekly payout cycle (Monday - Sunday) to filter statements & profit',
+                    style: TextStyle(color: AppTheme.textMutedColor(context), fontSize: 12, fontWeight: FontWeight.w600),
+                  ),
+                  const SizedBox(height: 12),
+                  const Divider(height: 1),
+                  const SizedBox(height: 8),
+                  Expanded(
+                    child: ListView(
+                      children: <Widget>[
+                        _periodTile(
+                          title: 'All Statement Cycles (Consolidated)',
+                          isSelected: _selectedPeriod == 'all',
+                          hasData: true,
+                          onTap: () {
+                            setState(() => _selectedPeriod = 'all');
+                            Navigator.pop(context);
+                            _load();
+                          },
+                        ),
+                        const Divider(height: 12),
+                        ..._periods.map((p) {
+                          final isSel = _selectedPeriod == p.statementPeriod;
+                          return _periodTile(
+                            title: p.statementPeriod,
+                            isCurrent: p.isCurrent,
+                            hasData: p.hasData,
+                            isSelected: isSel,
+                            onTap: () {
+                              setState(() => _selectedPeriod = p.statementPeriod);
+                              Navigator.pop(context);
+                              _load();
+                            },
+                          );
+                        }),
+                      ],
+                    ),
+                  ),
+                ],
+              ),
+            );
+          },
+        );
+      },
+    );
+  }
+
+  Widget _periodTile({
+    required String title,
+    required bool isSelected,
+    required VoidCallback onTap,
+    bool isCurrent = false,
+    bool hasData = false,
+  }) {
+    return InkWell(
+      onTap: onTap,
+      borderRadius: BorderRadius.circular(14),
+      child: Container(
+        padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
+        margin: const EdgeInsets.only(bottom: 6),
+        decoration: BoxDecoration(
+          color: isSelected
+              ? AppTheme.primary.withValues(alpha: 0.12)
+              : hasData
+                  ? AppTheme.softGreyColor(context)
+                  : Colors.transparent,
+          borderRadius: BorderRadius.circular(14),
+          border: Border.all(
+            color: isSelected
+                ? AppTheme.primary
+                : hasData
+                    ? AppTheme.borderColor(context)
+                    : Colors.transparent,
+            width: isSelected ? 1.5 : 1,
+          ),
+        ),
+        child: Row(
+          children: <Widget>[
+            Icon(
+              isSelected ? Icons.radio_button_checked_rounded : Icons.calendar_today_outlined,
+              size: 18,
+              color: isSelected ? AppTheme.primary : AppTheme.textMutedColor(context),
+            ),
+            const SizedBox(width: 12),
+            Expanded(
+              child: Text(
+                title,
+                style: TextStyle(
+                  fontWeight: isSelected ? FontWeight.w900 : FontWeight.w700,
+                  fontSize: 13,
+                  color: isSelected ? AppTheme.primary : AppTheme.textPrimaryColor(context),
+                ),
+              ),
+            ),
+            if (isCurrent)
+              Container(
+                margin: const EdgeInsets.only(left: 6),
+                padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+                decoration: BoxDecoration(
+                  color: AppTheme.infoSoft,
+                  borderRadius: BorderRadius.circular(8),
+                ),
+                child: const Text(
+                  'CURRENT',
+                  style: TextStyle(color: AppTheme.info, fontSize: 10, fontWeight: FontWeight.w900),
+                ),
+              ),
+            if (hasData && !isCurrent)
+              Container(
+                margin: const EdgeInsets.only(left: 6),
+                padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+                decoration: BoxDecoration(
+                  color: AppTheme.successSoft,
+                  borderRadius: BorderRadius.circular(8),
+                ),
+                child: const Text(
+                  'DATA',
+                  style: TextStyle(color: AppTheme.success, fontSize: 10, fontWeight: FontWeight.w900),
+                ),
+              ),
+          ],
+        ),
+      ),
+    );
   }
 
   Future<void> _openImportSheet() async {
@@ -103,17 +285,18 @@ class _FinanceScreenState extends State<FinanceScreen> with SingleTickerProvider
       isScrollControlled: true,
       useSafeArea: true,
       backgroundColor: AppTheme.cardColor(context),
-      builder: (context) => const FinanceCsvImportSheet(),
+      shape: const RoundedRectangleBorder(borderRadius: BorderRadius.vertical(top: Radius.circular(24))),
+      builder: (context) => FinanceCsvImportSheet(stores: _stores),
     );
     if (imported == true) {
       await _load();
-      if (mounted) showAppSnackBar(context, 'Finance statement imported successfully.');
+      if (mounted) showAppSnackBar(context, 'Weekly finance statement imported and profits calculated.');
     }
   }
 
-  Future<void> _openSetCostDialog(Map<String, dynamic> entry) async {
-    final sku = (entry['seller_sku'] ?? '').toString();
-    final name = (entry['product_name'] ?? sku).toString();
+  Future<void> _openSetCostDialog(FinanceEntry entry) async {
+    final sku = entry.sellerSku.trim();
+    final name = entry.productName.isNotEmpty ? entry.productName : sku;
     final costController = TextEditingController();
 
     // Look for matching inventory item
@@ -121,15 +304,28 @@ class _FinanceScreenState extends State<FinanceScreen> with SingleTickerProvider
     if (matched != null && (matched.costPrice > 0 || matched.purchasePrice > 0)) {
       final c = matched.costPrice > 0 ? matched.costPrice : matched.purchasePrice;
       costController.text = c.toStringAsFixed(c.truncateToDouble() == c ? 0 : 2);
+    } else if (entry.costPrice > 0) {
+      costController.text = entry.costPrice.toStringAsFixed(entry.costPrice.truncateToDouble() == entry.costPrice ? 0 : 2);
     }
 
     final confirmed = await showDialog<bool>(
       context: context,
       builder: (context) => AlertDialog(
         backgroundColor: AppTheme.cardColor(context),
-        title: Text(
-          'Set Purchase Cost Price',
-          style: TextStyle(color: AppTheme.textPrimaryColor(context), fontWeight: FontWeight.w900),
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
+        title: Row(
+          children: <Widget>[
+            Container(
+              padding: const EdgeInsets.all(6),
+              decoration: BoxDecoration(color: AppTheme.primarySoft, borderRadius: BorderRadius.circular(10)),
+              child: const Icon(Icons.price_change_outlined, color: AppTheme.primary, size: 20),
+            ),
+            const SizedBox(width: 10),
+            Text(
+              'Set Purchase Cost Price',
+              style: TextStyle(color: AppTheme.textPrimaryColor(context), fontWeight: FontWeight.w900, fontSize: 16),
+            ),
+          ],
         ),
         content: Column(
           mainAxisSize: MainAxisSize.min,
@@ -149,13 +345,13 @@ class _FinanceScreenState extends State<FinanceScreen> with SingleTickerProvider
             const SizedBox(height: 14),
             AppTextField(
               controller: costController,
-              labelText: 'Purchase Price per piece (PKR)',
+              labelText: 'Purchase / Restock Cost per item (PKR)',
               hintText: 'e.g. 350',
               keyboardType: const TextInputType.numberWithOptions(decimal: true),
             ),
-            const SizedBox(height: 6),
+            const SizedBox(height: 8),
             Text(
-              'This will instantly recalculate profit across all orders for this product.',
+              'Saving will update your Central Inventory and instantly recalculate net profit across all statements.',
               style: TextStyle(color: AppTheme.textMutedColor(context), fontSize: 11, fontWeight: FontWeight.w600),
             ),
           ],
@@ -165,7 +361,7 @@ class _FinanceScreenState extends State<FinanceScreen> with SingleTickerProvider
           FilledButton(
             style: FilledButton.styleFrom(backgroundColor: AppTheme.primary),
             onPressed: () => Navigator.pop(context, true),
-            child: const Text('Save & Calculate Profit'),
+            child: const Text('Save & Recalculate Profit'),
           ),
         ],
       ),
@@ -179,17 +375,244 @@ class _FinanceScreenState extends State<FinanceScreen> with SingleTickerProvider
       }
 
       try {
-        if (matched != null) {
-          final id = matched.inventoryId.isNotEmpty ? matched.inventoryId : matched.id;
-          await ApiClient.instance.put(
-            '/central-inventory/$id/prices',
-            body: <String, dynamic>{'purchase_price': cost, 'cost_price': cost},
-          );
-        }
+        await ApiClient.instance.post(
+          '/finance/set-cost',
+          body: <String, dynamic>{
+            'seller_sku': sku,
+            'cost_price': cost,
+          },
+        );
         await _load(silent: true);
-        if (mounted) showAppSnackBar(context, 'Cost price saved and profits recalculated.');
+        if (mounted) showAppSnackBar(context, 'Cost price saved! Profits recalculated for SKU $sku.');
       } catch (e) {
         if (mounted) showAppSnackBar(context, 'Error updating cost: $e', error: true);
+      }
+    }
+  }
+
+  void _openFeeBreakdownModal(FinanceEntry item) {
+    showModalBottomSheet<void>(
+      context: context,
+      isScrollControlled: true,
+      backgroundColor: AppTheme.cardColor(context),
+      shape: const RoundedRectangleBorder(borderRadius: BorderRadius.vertical(top: Radius.circular(24))),
+      builder: (context) {
+        return Container(
+          constraints: BoxConstraints(maxHeight: MediaQuery.of(context).size.height * 0.85),
+          padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 18),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: <Widget>[
+              Row(
+                mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                children: <Widget>[
+                  Expanded(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: <Widget>[
+                        Text(
+                          item.isAdjustment ? 'Adjustment Details' : 'Financial Breakdown',
+                          style: TextStyle(fontWeight: FontWeight.w900, fontSize: 18, color: AppTheme.textPrimaryColor(context)),
+                        ),
+                        const SizedBox(height: 2),
+                        Text(
+                          item.isAdjustment ? 'Statement #${item.statementNumber}' : 'Order #${item.orderNumber} (Line ${item.orderLineId})',
+                          style: TextStyle(color: AppTheme.textMutedColor(context), fontSize: 12, fontWeight: FontWeight.w700),
+                        ),
+                      ],
+                    ),
+                  ),
+                  IconButton(onPressed: () => Navigator.pop(context), icon: const Icon(Icons.close_rounded)),
+                ],
+              ),
+              const SizedBox(height: 12),
+              const Divider(height: 1),
+              const SizedBox(height: 12),
+              Expanded(
+                child: ListView(
+                  children: <Widget>[
+                    _breakdownHeader(item),
+                    const SizedBox(height: 16),
+                    _breakdownSectionTitle('Revenue & Buyer Payments'),
+                    _breakdownRow('Product Price Paid by Buyer', '+PKR ${Formatters.money(item.productPrice)}', color: AppTheme.success),
+                    if (item.shippingPaidByBuyer > 0)
+                      _breakdownRow('Shipping Paid by Buyer', '+PKR ${Formatters.money(item.shippingPaidByBuyer)}', color: AppTheme.success),
+                    if (item.shippingFeeDiscount > 0)
+                      _breakdownRow('Shipping Fee Discount', '+PKR ${Formatters.money(item.shippingFeeDiscount)}', color: AppTheme.success),
+                    _breakdownRow('Gross Sales Amount', 'PKR ${Formatters.money(item.grossAmount)}', isBold: true),
+                    const SizedBox(height: 14),
+                    _breakdownSectionTitle('Daraz Marketplace Fees'),
+                    if (item.commissionFee > 0) _breakdownRow('Commission Fee', '-PKR ${Formatters.money(item.commissionFee)}', color: AppTheme.danger),
+                    if (item.paymentFee > 0) _breakdownRow('Payment Fee', '-PKR ${Formatters.money(item.paymentFee)}', color: AppTheme.danger),
+                    if (item.shippingFee > 0) _breakdownRow('Shipping Fee', '-PKR ${Formatters.money(item.shippingFee)}', color: AppTheme.danger),
+                    if (item.handlingFee > 0) _breakdownRow('Handling Fee', '-PKR ${Formatters.money(item.handlingFee)}', color: AppTheme.danger),
+                    if (item.freeShippingMaxFee > 0) _breakdownRow('Free Shipping Max Fee', '-PKR ${Formatters.money(item.freeShippingMaxFee)}', color: AppTheme.danger),
+                    if (item.cofundedVoucherFee > 0) _breakdownRow('Co-funded Voucher Fee', '-PKR ${Formatters.money(item.cofundedVoucherFee)}', color: AppTheme.danger),
+                    if (item.coinsDiscountFee > 0) _breakdownRow('Coins Discount Fee', '-PKR ${Formatters.money(item.coinsDiscountFee)}', color: AppTheme.danger),
+                    if (item.penalties > 0) _breakdownRow('Fulfillment Penalties', '-PKR ${Formatters.money(item.penalties)}', color: AppTheme.danger),
+                    _breakdownRow('Total Daraz Fees', '-PKR ${Formatters.money(item.totalFees)}', isBold: true, color: AppTheme.danger),
+                    const SizedBox(height: 14),
+                    _breakdownSectionTitle('Taxes & Withholdings'),
+                    if (item.whtAmount > 0) _breakdownRow('WHT Amount', '-PKR ${Formatters.money(item.whtAmount)}', color: AppTheme.warning),
+                    if (item.incomeTaxWithholding > 0) _breakdownRow('Income Tax Withholding', '-PKR ${Formatters.money(item.incomeTaxWithholding)}', color: AppTheme.warning),
+                    if (item.salesTaxWithholding > 0) _breakdownRow('Sales Tax Withholding', '-PKR ${Formatters.money(item.salesTaxWithholding)}', color: AppTheme.warning),
+                    if (item.vatTotal > 0) _breakdownRow('VAT Total', '-PKR ${Formatters.money(item.vatTotal)}', color: AppTheme.warning),
+                    _breakdownRow('Total Taxes', '-PKR ${Formatters.money(item.totalTaxes)}', isBold: true, color: AppTheme.warning),
+                    const SizedBox(height: 14),
+                    _breakdownSectionTitle('Settlement & Profit Analysis'),
+                    _breakdownRow('Net Settlement Payout', 'PKR ${Formatters.money(item.netSettlement)}', isBold: true, color: AppTheme.primary),
+                    if (item.isOrder) ...<Widget>[
+                      _breakdownRow('Unit Cost Price', 'PKR ${Formatters.money(item.costPrice)} (${item.quantity} pcs)'),
+                      _breakdownRow('Total Cost of Goods (COGS)', '-PKR ${Formatters.money(item.totalCost)}', color: AppTheme.danger),
+                      _breakdownRow(
+                        'Net True Profit',
+                        item.isProfitReady ? 'PKR ${Formatters.money(item.netProfit ?? 0)}' : 'Pending Cost Price',
+                        isBold: true,
+                        color: (item.netProfit ?? 0) >= 0 ? AppTheme.success : AppTheme.danger,
+                      ),
+                      if (item.isProfitReady)
+                        _breakdownRow('Profit Margin', '${item.profitMargin.toStringAsFixed(1)}%', isBold: true, color: item.profitMargin >= 0 ? AppTheme.success : AppTheme.danger),
+                    ],
+                    if (item.adjustmentReason.isNotEmpty) ...<Widget>[
+                      const SizedBox(height: 14),
+                      _breakdownSectionTitle('Adjustment Reason / Comments'),
+                      Container(
+                        padding: const EdgeInsets.all(12),
+                        decoration: BoxDecoration(
+                          color: AppTheme.warningSoft,
+                          borderRadius: BorderRadius.circular(12),
+                        ),
+                        child: Text(
+                          item.adjustmentReason,
+                          style: const TextStyle(fontSize: 12, fontWeight: FontWeight.w700, color: AppTheme.warning),
+                        ),
+                      ),
+                    ],
+                  ],
+                ),
+              ),
+            ],
+          ),
+        );
+      },
+    );
+  }
+
+  Widget _breakdownHeader(FinanceEntry item) {
+    return Container(
+      padding: const EdgeInsets.all(14),
+      decoration: BoxDecoration(
+        color: AppTheme.softGreyColor(context),
+        borderRadius: BorderRadius.circular(16),
+        border: Border.all(color: AppTheme.borderColor(context)),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: <Widget>[
+          if (item.productName.isNotEmpty) ...<Widget>[
+            Text(
+              item.productName,
+              style: TextStyle(fontWeight: FontWeight.w900, fontSize: 13, color: AppTheme.textPrimaryColor(context)),
+            ),
+            const SizedBox(height: 4),
+          ],
+          Row(
+            mainAxisAlignment: MainAxisAlignment.spaceBetween,
+            children: <Widget>[
+              Text('SKU: ${item.sellerSku}', style: TextStyle(color: AppTheme.textMutedColor(context), fontSize: 11, fontWeight: FontWeight.w700)),
+              if (item.storeName.isNotEmpty)
+                Container(
+                  padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+                  decoration: BoxDecoration(color: AppTheme.primarySoft, borderRadius: BorderRadius.circular(6)),
+                  child: Text(
+                    '🏬 ${item.storeName}',
+                    style: const TextStyle(color: AppTheme.primary, fontSize: 10, fontWeight: FontWeight.w800),
+                  ),
+                ),
+            ],
+          ),
+          if (item.statementPeriod.isNotEmpty) ...<Widget>[
+            const SizedBox(height: 4),
+            Text('Period: ${item.statementPeriod}', style: TextStyle(color: AppTheme.textMutedColor(context), fontSize: 11, fontWeight: FontWeight.w600)),
+          ],
+        ],
+      ),
+    );
+  }
+
+  Widget _breakdownSectionTitle(String title) {
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 6),
+      child: Text(
+        title.toUpperCase(),
+        style: TextStyle(fontSize: 11, fontWeight: FontWeight.w900, color: AppTheme.textMutedColor(context), letterSpacing: 0.5),
+      ),
+    );
+  }
+
+  Widget _breakdownRow(String label, String value, {bool isBold = false, Color? color}) {
+    return Padding(
+      padding: const EdgeInsets.symmetric(vertical: 4),
+      child: Row(
+        mainAxisAlignment: MainAxisAlignment.spaceBetween,
+        children: <Widget>[
+          Text(
+            label,
+            style: TextStyle(
+              fontSize: 12,
+              fontWeight: isBold ? FontWeight.w800 : FontWeight.w600,
+              color: isBold ? AppTheme.textPrimaryColor(context) : AppTheme.textMutedColor(context),
+            ),
+          ),
+          Text(
+            value,
+            style: TextStyle(
+              fontSize: 12,
+              fontWeight: isBold ? FontWeight.w900 : FontWeight.w700,
+              color: color ?? (isBold ? AppTheme.textPrimaryColor(context) : AppTheme.textPrimaryColor(context)),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Future<void> _confirmClearData() async {
+    final isPeriodSelected = _selectedPeriod != 'all';
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (context) => AlertDialog(
+        backgroundColor: AppTheme.cardColor(context),
+        title: Text(
+          isPeriodSelected ? 'Clear "$_selectedPeriod" Data?' : 'Clear All Finance Statements?',
+          style: TextStyle(color: AppTheme.textPrimaryColor(context), fontWeight: FontWeight.w900),
+        ),
+        content: Text(
+          isPeriodSelected
+              ? 'This will remove all imported finance records for this weekly statement cycle.'
+              : 'This will permanently remove all imported finance statements and profit calculations.',
+          style: TextStyle(color: AppTheme.textMutedColor(context)),
+        ),
+        actions: <Widget>[
+          TextButton(onPressed: () => Navigator.pop(context, false), child: const Text('Cancel')),
+          FilledButton(
+            style: FilledButton.styleFrom(backgroundColor: AppTheme.danger),
+            onPressed: () => Navigator.pop(context, true),
+            child: const Text('Yes, Clear'),
+          ),
+        ],
+      ),
+    );
+
+    if (confirmed == true) {
+      try {
+        final queryParam = isPeriodSelected ? <String, dynamic>{'statement_period': _selectedPeriod} : null;
+        await ApiClient.instance.delete('/finance/clear', queryParameters: queryParam);
+        await _load(silent: true);
+        if (mounted) showAppSnackBar(context, 'Finance data cleared successfully.');
+      } catch (e) {
+        if (mounted) showAppSnackBar(context, 'Failed to clear finance data: $e', error: true);
       }
     }
   }
@@ -198,7 +621,7 @@ class _FinanceScreenState extends State<FinanceScreen> with SingleTickerProvider
   Widget build(BuildContext context) {
     return Scaffold(
       body: _loading
-          ? const AppLoader(label: 'Loading financial statements...')
+          ? const AppLoader(label: 'Loading weekly financial statements...')
           : _error != null
               ? SafeArea(
                   child: Padding(
@@ -216,8 +639,8 @@ class _FinanceScreenState extends State<FinanceScreen> with SingleTickerProvider
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: <Widget>[
                       SectionHeader(
-                        title: 'Finance',
-                        subtitle: 'Daraz fee deductions, settlement payouts & profit records',
+                        title: 'Finance & Profit',
+                        subtitle: 'Daraz weekly settlement cycles, fee itemization & true profit',
                         action: Row(
                           mainAxisSize: MainAxisSize.min,
                           children: <Widget>[
@@ -229,15 +652,28 @@ class _FinanceScreenState extends State<FinanceScreen> with SingleTickerProvider
                             ),
                             const SizedBox(width: 8),
                             CircleIconButton(
+                              icon: Icons.delete_sweep_rounded,
+                              onPressed: _confirmClearData,
+                              background: AppTheme.dangerSoft,
+                              foreground: AppTheme.danger,
+                            ),
+                            const SizedBox(width: 8),
+                            CircleIconButton(
                               icon: Icons.share_rounded,
                               onPressed: () {
                                 ReportGeneratorService.shareDailySummary(
-                                  historySummary: _summary,
+                                  historySummary: <String, dynamic>{
+                                    'total_orders': _summary.totalOrders,
+                                    'gross_amount': _summary.grossAmount,
+                                    'net_settlement': _summary.netSettlement,
+                                    'net_profit': _summary.netProfit,
+                                    'final_profit_after_adjustments': _summary.finalProfitAfterAdjustments,
+                                  },
                                   orders: const <CentralOrder>[],
                                   lowStockItems: const <InventoryItem>[],
-                                  period: 'statement',
-                                  connectedStoresCount: 1,
-                                  totalStoresCount: 1,
+                                  period: _selectedPeriod == 'all' ? 'All Cycles' : _selectedPeriod,
+                                  connectedStoresCount: _stores.length,
+                                  totalStoresCount: _stores.length,
                                 );
                               },
                               background: AppTheme.success,
@@ -247,6 +683,12 @@ class _FinanceScreenState extends State<FinanceScreen> with SingleTickerProvider
                         ),
                       ),
                       const SizedBox(height: 14),
+                      _periodSelectorBar(),
+                      const SizedBox(height: 12),
+                      if (_stores.length > 1) ...<Widget>[
+                        _storeSelectorBar(),
+                        const SizedBox(height: 12),
+                      ],
                       _heroFinanceCard(),
                       const SizedBox(height: 14),
                       _feeBreakdownGrid(context),
@@ -254,19 +696,23 @@ class _FinanceScreenState extends State<FinanceScreen> with SingleTickerProvider
                       _filterTabs(),
                       const SizedBox(height: 12),
                       TextField(
-                        decoration: const InputDecoration(
-                          hintText: 'Search order #, SKU, or item',
-                          prefixIcon: Icon(Icons.search_rounded),
+                        decoration: InputDecoration(
+                          hintText: 'Search order #, line ID, SKU, product, or reason...',
+                          prefixIcon: const Icon(Icons.search_rounded),
                           isDense: true,
+                          filled: true,
+                          fillColor: AppTheme.cardColor(context),
+                          border: OutlineInputBorder(borderRadius: BorderRadius.circular(14), borderSide: BorderSide(color: AppTheme.borderColor(context))),
+                          enabledBorder: OutlineInputBorder(borderRadius: BorderRadius.circular(14), borderSide: BorderSide(color: AppTheme.borderColor(context))),
                         ),
                         onChanged: (val) => setState(() => _search = val),
                       ),
                       const SizedBox(height: 14),
                       if (_filteredEntries.isEmpty)
                         EmptyState(
-                          title: _entries.isEmpty ? 'No finance statements yet' : 'No matching entries',
+                          title: _entries.isEmpty ? 'No statement records found' : 'No matching entries',
                           message: _entries.isEmpty
-                              ? 'Import your weekly Daraz payment statement CSV or sync orders to see detailed fee breakdowns and true profit.'
+                              ? 'Import your weekly Daraz payment statement CSV or select another period to see fee breakdowns and profit calculations.'
                               : 'Try changing your search keywords or filter tab.',
                           icon: Icons.receipt_long_outlined,
                         )
@@ -278,16 +724,115 @@ class _FinanceScreenState extends State<FinanceScreen> with SingleTickerProvider
     );
   }
 
-  Widget _heroFinanceCard() {
-    final netSettlement = JsonReaders.number(_summary, 'net_settlement');
-    final netProfit = JsonReaders.number(_summary, 'net_profit');
-    final finalProfit = JsonReaders.number(_summary, 'final_profit_after_adjustments', netProfit);
-    final grossAmount = JsonReaders.number(_summary, 'gross_amount');
-    final totalDeductions = JsonReaders.number(_summary, 'total_deductions');
-    final totalOrders = JsonReaders.integer(_summary, 'total_orders');
-    final pendingCost = JsonReaders.integer(_summary, 'pending_cost_orders');
+  Widget _periodSelectorBar() {
+    final isPeriodActive = _selectedPeriod != 'all';
+    return InkWell(
+      onTap: _openPeriodPickerSheet,
+      borderRadius: BorderRadius.circular(16),
+      child: Container(
+        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+        decoration: BoxDecoration(
+          color: isPeriodActive ? AppTheme.primary.withValues(alpha: 0.1) : AppTheme.cardColor(context),
+          borderRadius: BorderRadius.circular(16),
+          border: Border.all(
+            color: isPeriodActive ? AppTheme.primary : AppTheme.borderColor(context),
+            width: isPeriodActive ? 1.5 : 1,
+          ),
+        ),
+        child: Row(
+          children: <Widget>[
+            Container(
+              padding: const EdgeInsets.all(6),
+              decoration: BoxDecoration(
+                color: isPeriodActive ? AppTheme.primary : AppTheme.softGreyColor(context),
+                borderRadius: BorderRadius.circular(10),
+              ),
+              child: Icon(
+                Icons.calendar_month_rounded,
+                size: 18,
+                color: isPeriodActive ? Colors.white : AppTheme.textPrimaryColor(context),
+              ),
+            ),
+            const SizedBox(width: 12),
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: <Widget>[
+                  Text(
+                    'STATEMENT PERIOD',
+                    style: TextStyle(
+                      fontSize: 10,
+                      fontWeight: FontWeight.w800,
+                      color: isPeriodActive ? AppTheme.primary : AppTheme.textMutedColor(context),
+                      letterSpacing: 0.5,
+                    ),
+                  ),
+                  const SizedBox(height: 2),
+                  Text(
+                    isPeriodActive ? _selectedPeriod : 'All Weekly Cycles (Consolidated)',
+                    style: TextStyle(
+                      fontSize: 13,
+                      fontWeight: FontWeight.w900,
+                      color: isPeriodActive ? AppTheme.primary : AppTheme.textPrimaryColor(context),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+            Icon(
+              Icons.keyboard_arrow_down_rounded,
+              color: isPeriodActive ? AppTheme.primary : AppTheme.textMutedColor(context),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
 
-    final profitMargin = grossAmount > 0 ? ((finalProfit / grossAmount) * 100) : 0.0;
+  Widget _storeSelectorBar() {
+    return SingleChildScrollView(
+      scrollDirection: Axis.horizontal,
+      child: Row(
+        children: <Widget>[
+          _storeChip('all', '🏬 All Stores'),
+          ..._stores.map((s) => _storeChip(s.id, '🏬 ${s.name}')),
+        ],
+      ),
+    );
+  }
+
+  Widget _storeChip(String storeId, String label) {
+    final selected = _selectedStoreId == storeId;
+    return Padding(
+      padding: const EdgeInsets.only(right: 8),
+      child: ChoiceChip(
+        selected: selected,
+        label: Text(label),
+        onSelected: (_) {
+          setState(() => _selectedStoreId = storeId);
+          _load();
+        },
+        selectedColor: AppTheme.primary,
+        backgroundColor: AppTheme.cardColor(context),
+        labelStyle: TextStyle(
+          color: selected ? Colors.white : AppTheme.textPrimaryColor(context),
+          fontSize: 11,
+          fontWeight: FontWeight.w800,
+        ),
+        side: BorderSide(color: selected ? AppTheme.primary : AppTheme.borderColor(context)),
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
+      ),
+    );
+  }
+
+  Widget _heroFinanceCard() {
+    final netSettlement = _summary.netSettlement;
+    final finalProfit = _summary.finalProfitAfterAdjustments;
+    final grossAmount = _summary.grossAmount;
+    final totalDeductions = _summary.totalDeductions;
+    final totalOrders = _summary.totalOrders;
+    final pendingCost = _summary.pendingCostOrders;
+    final margin = _summary.marginPercent;
 
     return Container(
       width: double.infinity,
@@ -339,7 +884,7 @@ class _FinanceScreenState extends State<FinanceScreen> with SingleTickerProvider
                   borderRadius: BorderRadius.circular(20),
                 ),
                 child: Text(
-                  profitMargin > 0 ? '+${profitMargin.toStringAsFixed(1)}% Margin' : 'Margin --',
+                  margin != 0 ? '${margin > 0 ? '+' : ''}${margin.toStringAsFixed(1)}% Margin' : 'Margin --',
                   style: const TextStyle(color: Colors.white, fontSize: 11, fontWeight: FontWeight.w900),
                 ),
               ),
@@ -398,9 +943,6 @@ class _FinanceScreenState extends State<FinanceScreen> with SingleTickerProvider
   }
 
   Widget _feeBreakdownGrid(BuildContext context) {
-    final totalFees = JsonReaders.number(_summary, 'total_fees');
-    final totalTaxes = JsonReaders.number(_summary, 'total_taxes');
-    final adjImpact = JsonReaders.number(_summary, 'adjustment_impact');
     final width = MediaQuery.of(context).size.width;
     final itemWidth = (width - 44) / 2;
 
@@ -412,7 +954,7 @@ class _FinanceScreenState extends State<FinanceScreen> with SingleTickerProvider
           width: itemWidth,
           child: MetricCard(
             label: 'Daraz Fees',
-            value: 'PKR ${Formatters.money(totalFees)}',
+            value: 'PKR ${Formatters.money(_summary.totalFees)}',
             icon: Icons.receipt_outlined,
             tint: AppTheme.dangerSoft,
             iconColor: AppTheme.danger,
@@ -422,7 +964,7 @@ class _FinanceScreenState extends State<FinanceScreen> with SingleTickerProvider
           width: itemWidth,
           child: MetricCard(
             label: 'Taxes (WHT / VAT)',
-            value: 'PKR ${Formatters.money(totalTaxes)}',
+            value: 'PKR ${Formatters.money(_summary.totalTaxes)}',
             icon: Icons.account_balance_outlined,
             tint: AppTheme.warningSoft,
             iconColor: AppTheme.warning,
@@ -431,9 +973,9 @@ class _FinanceScreenState extends State<FinanceScreen> with SingleTickerProvider
         SizedBox(
           width: itemWidth,
           child: MetricCard(
-            label: 'Adjustments / Claims',
-            value: 'PKR ${Formatters.money(adjImpact)}',
-            icon: Icons.sync_alt_rounded,
+            label: 'Product Costs (COGS)',
+            value: 'PKR ${Formatters.money(_summary.totalCost)}',
+            icon: Icons.inventory_2_outlined,
             tint: AppTheme.infoSoft,
             iconColor: AppTheme.info,
           ),
@@ -441,8 +983,8 @@ class _FinanceScreenState extends State<FinanceScreen> with SingleTickerProvider
         SizedBox(
           width: itemWidth,
           child: MetricCard(
-            label: 'Net Profit Realized',
-            value: 'PKR ${Formatters.money(JsonReaders.number(_summary, 'net_profit'))}',
+            label: 'True Profit Realized',
+            value: 'PKR ${Formatters.money(_summary.finalProfitAfterAdjustments)}',
             icon: Icons.trending_up_rounded,
             tint: AppTheme.successSoft,
             iconColor: AppTheme.success,
@@ -453,16 +995,16 @@ class _FinanceScreenState extends State<FinanceScreen> with SingleTickerProvider
   }
 
   Widget _filterTabs() {
-    final pendingCount = JsonReaders.integer(_summary, 'pending_cost_orders');
+    final pendingCount = _summary.pendingCostOrders;
     return SingleChildScrollView(
       scrollDirection: Axis.horizontal,
       child: Row(
         children: <Widget>[
           _tabChip('all', 'All Entries (${_entries.length})'),
           const SizedBox(width: 8),
-          _tabChip('orders', 'Orders'),
+          _tabChip('orders', 'Orders (${_summary.totalOrders})'),
           const SizedBox(width: 8),
-          _tabChip('adjustments', 'Adjustments & Penalties'),
+          _tabChip('adjustments', 'Adjustments (${_summary.totalAdjustments})'),
           if (pendingCount > 0) ...<Widget>[
             const SizedBox(width: 8),
             _tabChip('pending_cost', '⚠️ Needs Cost ($pendingCount)'),
@@ -474,15 +1016,14 @@ class _FinanceScreenState extends State<FinanceScreen> with SingleTickerProvider
 
   Widget _tabChip(String key, String label) {
     final selected = _activeTab == key;
-    final isDark = AppTheme.isDark(context);
     return ChoiceChip(
       selected: selected,
       label: Text(label),
       onSelected: (_) => setState(() => _activeTab = key),
       selectedColor: AppTheme.primary,
-      backgroundColor: isDark ? const Color(0xFF1E293B) : Colors.white,
+      backgroundColor: AppTheme.cardColor(context),
       labelStyle: TextStyle(
-        color: selected ? Colors.white : (isDark ? Colors.white70 : AppTheme.textPrimary),
+        color: selected ? Colors.white : AppTheme.textPrimaryColor(context),
         fontSize: 12,
         fontWeight: FontWeight.w900,
       ),
@@ -491,25 +1032,22 @@ class _FinanceScreenState extends State<FinanceScreen> with SingleTickerProvider
     );
   }
 
-  Widget _buildFinanceRow(Map<String, dynamic> item) {
-    final isAdjustment = (item['entry_type'] ?? '') == 'adjustment';
-    final orderNum = (item['order_number'] ?? '').toString();
-    final sku = (item['seller_sku'] ?? '').toString();
-    final prodName = (item['product_name'] ?? sku).toString();
-    final netSettlement = JsonReaders.number(item, 'net_settlement');
-    final netProfit = item['net_profit'];
-    final isProfitReady = item['profit_ready'] == true;
-    final deductions = JsonReaders.number(item, 'total_deductions');
+  Widget _buildFinanceRow(FinanceEntry item) {
+    final isAdjustment = item.isAdjustment;
+    final orderNum = item.orderNumber;
+    final sku = item.sellerSku;
+    final prodName = item.productName.isNotEmpty ? item.productName : sku;
+    final netSettlement = item.netSettlement;
+    final netProfit = item.netProfit;
+    final isProfitReady = item.isProfitReady;
+    final deductions = item.totalDeductions;
+    final margin = item.profitMargin;
 
     return Padding(
       padding: const EdgeInsets.only(bottom: 10),
       child: AppCard(
-        padding: const EdgeInsets.all(13),
-        onTap: () {
-          if (!isProfitReady && !isAdjustment) {
-            _openSetCostDialog(item);
-          }
-        },
+        padding: const EdgeInsets.all(14),
+        onTap: () => _openFeeBreakdownModal(item),
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: <Widget>[
@@ -546,20 +1084,32 @@ class _FinanceScreenState extends State<FinanceScreen> with SingleTickerProvider
                     children: <Widget>[
                       Text(
                         isAdjustment
-                            ? (item['adjustment_reason'] ?? 'Financial Adjustment')
+                            ? (item.adjustmentReason.isNotEmpty ? item.adjustmentReason : 'Financial Adjustment')
                             : (prodName.isNotEmpty ? prodName : 'Order #$orderNum'),
                         maxLines: 1,
                         overflow: TextOverflow.ellipsis,
                         style: TextStyle(fontWeight: FontWeight.w900, fontSize: 13, color: AppTheme.textPrimaryColor(context)),
                       ),
                       const SizedBox(height: 2),
-                      Text(
-                        isAdjustment
-                            ? 'Statement ${item['statement_number'] ?? '-'}'
-                            : 'Order #$orderNum · SKU: $sku',
-                        maxLines: 1,
-                        overflow: TextOverflow.ellipsis,
-                        style: TextStyle(color: AppTheme.textMutedColor(context), fontSize: 11, fontWeight: FontWeight.w700),
+                      Row(
+                        children: <Widget>[
+                          if (item.storeName.isNotEmpty) ...<Widget>[
+                            Text(
+                              '🏬 ${item.storeName} · ',
+                              style: const TextStyle(color: AppTheme.primary, fontSize: 11, fontWeight: FontWeight.w800),
+                            ),
+                          ],
+                          Expanded(
+                            child: Text(
+                              isAdjustment
+                                  ? 'Statement ${item.statementNumber.isNotEmpty ? item.statementNumber : '-'}'
+                                  : 'Order #$orderNum · SKU: $sku',
+                              maxLines: 1,
+                              overflow: TextOverflow.ellipsis,
+                              style: TextStyle(color: AppTheme.textMutedColor(context), fontSize: 11, fontWeight: FontWeight.w700),
+                            ),
+                          ),
+                        ],
                       ),
                     ],
                   ),
@@ -602,16 +1152,41 @@ class _FinanceScreenState extends State<FinanceScreen> with SingleTickerProvider
                   if (isAdjustment)
                     const StatusChip(label: 'Adjustment', color: AppTheme.warning, softColor: AppTheme.warningSoft)
                   else if (isProfitReady && netProfit != null)
-                    Text(
-                      'Profit: PKR ${Formatters.money(double.tryParse(netProfit.toString()) ?? 0)}',
-                      style: const TextStyle(fontSize: 11, color: AppTheme.success, fontWeight: FontWeight.w900),
+                    Row(
+                      mainAxisSize: MainAxisSize.min,
+                      children: <Widget>[
+                        Text(
+                          'Profit: PKR ${Formatters.money(netProfit)}',
+                          style: TextStyle(
+                            fontSize: 11,
+                            color: netProfit >= 0 ? AppTheme.success : AppTheme.danger,
+                            fontWeight: FontWeight.w900,
+                          ),
+                        ),
+                        const SizedBox(width: 6),
+                        Container(
+                          padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                          decoration: BoxDecoration(
+                            color: (margin >= 0 ? AppTheme.success : AppTheme.danger).withValues(alpha: 0.15),
+                            borderRadius: BorderRadius.circular(6),
+                          ),
+                          child: Text(
+                            '${margin >= 0 ? '+' : ''}${margin.toStringAsFixed(0)}%',
+                            style: TextStyle(
+                              fontSize: 10,
+                              fontWeight: FontWeight.w900,
+                              color: margin >= 0 ? AppTheme.success : AppTheme.danger,
+                            ),
+                          ),
+                        ),
+                      ],
                     )
                   else
                     InkWell(
                       onTap: () => _openSetCostDialog(item),
                       child: const Row(
                         children: <Widget>[
-                          Icon(Icons.edit_note_rounded, size: 14, color: AppTheme.warning),
+                          Icon(Icons.edit_note_rounded, size: 15, color: AppTheme.warning),
                           SizedBox(width: 3),
                           Text(
                             'Set Unit Cost',
@@ -631,7 +1206,9 @@ class _FinanceScreenState extends State<FinanceScreen> with SingleTickerProvider
 }
 
 class FinanceCsvImportSheet extends StatefulWidget {
-  const FinanceCsvImportSheet({super.key});
+  const FinanceCsvImportSheet({super.key, this.stores = const <StoreModel>[]});
+
+  final List<StoreModel> stores;
 
   @override
   State<FinanceCsvImportSheet> createState() => _FinanceCsvImportSheetState();
@@ -639,12 +1216,27 @@ class FinanceCsvImportSheet extends StatefulWidget {
 
 class _FinanceCsvImportSheetState extends State<FinanceCsvImportSheet> {
   final _csvController = TextEditingController();
+  String? _selectedStoreId;
   bool _importing = false;
+  int _parsedRowsCount = 0;
+
+  @override
+  void initState() {
+    super.initState();
+    if (widget.stores.isNotEmpty) {
+      _selectedStoreId = widget.stores.first.id;
+    }
+  }
 
   @override
   void dispose() {
     _csvController.dispose();
     super.dispose();
+  }
+
+  void _onTextChange(String val) {
+    final rows = _parseCsv(val);
+    setState(() => _parsedRowsCount = rows.length);
   }
 
   List<Map<String, String>> _parseCsv(String text) {
@@ -702,13 +1294,16 @@ class _FinanceCsvImportSheetState extends State<FinanceCsvImportSheet> {
     try {
       await ApiClient.instance.post(
         '/finance/import-csv',
-        body: <String, dynamic>{'rows': rows},
+        body: <String, dynamic>{
+          'rows': rows,
+          if (_selectedStoreId != null) 'store_id': _selectedStoreId,
+        },
       );
       if (mounted) Navigator.pop(context, true);
     } on ApiException catch (e) {
       if (mounted) showAppSnackBar(context, e.message, error: true);
     } catch (_) {
-      if (mounted) showAppSnackBar(context, 'Failed to import CSV.', error: true);
+      if (mounted) showAppSnackBar(context, 'Failed to import statement CSV.', error: true);
     } finally {
       if (mounted) setState(() => _importing = false);
     }
@@ -733,17 +1328,47 @@ class _FinanceCsvImportSheetState extends State<FinanceCsvImportSheet> {
               subtitle: 'Paste your Daraz Seller Center Finance CSV export to calculate true profit.',
               action: IconButton(onPressed: () => Navigator.pop(context), icon: const Icon(Icons.close)),
             ),
-            const SizedBox(height: 16),
+            if (widget.stores.isNotEmpty) ...<Widget>[
+              const SizedBox(height: 14),
+              DropdownButtonFormField<String>(
+                initialValue: _selectedStoreId,
+                decoration: InputDecoration(
+                  labelText: 'Assign to Store',
+                  filled: true,
+                  fillColor: AppTheme.softGreyColor(context),
+                  border: OutlineInputBorder(borderRadius: BorderRadius.circular(12), borderSide: BorderSide(color: AppTheme.borderColor(context))),
+                ),
+                items: widget.stores.map((s) {
+                  return DropdownMenuItem<String>(
+                    value: s.id,
+                    child: Text('🏬 ${s.name} (${s.code})'),
+                  );
+                }).toList(),
+                onChanged: (val) => setState(() => _selectedStoreId = val),
+              ),
+            ],
+            const SizedBox(height: 14),
             AppTextField(
               controller: _csvController,
-              labelText: 'Paste Daraz Finance Statement CSV content',
-              hintText: 'Order Number,Order Line ID,Seller SKU,Fee Name,Amount(Include Tax)...',
+              labelText: 'Paste Daraz Statement CSV content',
+              hintText: 'Statement Period,Statement Number,Order Number,Order Line ID,Seller SKU,Fee Name,Amount(Include Tax)...',
               maxLines: 8,
+              onChanged: _onTextChange,
             ),
             const SizedBox(height: 8),
-            Text(
-              '💡 In Daraz Seller Center ➔ Finance ➔ Account Statements ➔ Export CSV. Paste the full CSV rows here.',
-              style: TextStyle(color: AppTheme.textMutedColor(context), fontSize: 11, fontWeight: FontWeight.w700),
+            Row(
+              mainAxisAlignment: MainAxisAlignment.spaceBetween,
+              children: <Widget>[
+                Text(
+                  '💡 Daraz Seller Center ➔ Finance ➔ Export CSV',
+                  style: TextStyle(color: AppTheme.textMutedColor(context), fontSize: 11, fontWeight: FontWeight.w700),
+                ),
+                if (_parsedRowsCount > 0)
+                  Text(
+                    '$_parsedRowsCount rows detected',
+                    style: const TextStyle(color: AppTheme.success, fontSize: 11, fontWeight: FontWeight.w900),
+                  ),
+              ],
             ),
             const SizedBox(height: 18),
             PrimaryButton(
