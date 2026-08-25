@@ -1040,11 +1040,142 @@ class CentralOrderItem {
   final String reviewReason;
 
   String get title => displayTitle.isNotEmpty ? displayTitle : (productName.isEmpty ? sellerSku : productName);
-  bool get isReturn => parcelType == 'return' || statusCategory == 'return' || returnStatus.isNotEmpty || returnReason.isNotEmpty;
-  bool get isFailedDelivery => parcelType == 'failed_delivery' || statusCategory == 'failed_delivery' || status.toLowerCase().contains('failed_delivery') || status.toLowerCase().contains('undelivered');
-  bool get isCollected => collectionStatus == 'collected' || collectionStatus == 'received' || collectedAt != null;
+  bool get isFailedDelivery {
+    final s = status.toLowerCase();
+    final cat = statusCategory.toLowerCase();
+    return parcelType == 'failed_delivery' ||
+        cat == 'failed_delivery' ||
+        s == 'failed' ||
+        s.contains('failed_delivery') ||
+        s.contains('undelivered') ||
+        s.contains('delivery_failed') ||
+        s.contains('unable_to_deliver') ||
+        s.contains('return_to_seller') ||
+        s.contains('returned_to_shipper');
+  }
+
+  bool get isReturn {
+    if (isFailedDelivery) return false;
+    final s = status.toLowerCase();
+    final cat = statusCategory.toLowerCase();
+    return parcelType == 'return' ||
+        cat == 'return' ||
+        s == 'returned' ||
+        s == 'customer_return' ||
+        s == 'buyer_return' ||
+        s == 'return_requested' ||
+        s == 'returning' ||
+        s == 'refund' ||
+        s == 'refunded' ||
+        returnStatus.isNotEmpty ||
+        claimDate != null;
+  }
+
+  bool get isCollected => collectionStatus == 'collected' || collectionStatus == 'received' || statusCategory == 'collected' || collectedAt != null;
   bool get isScrapRisk => !isCollected && daysLeftToCollect != null && daysLeftToCollect! <= 2;
   bool get isUnknownReviewNeeded => needsReview || mappingConfidence == 'unknown_review_needed';
+
+  CentralOrderItem copyWith({
+    String? id,
+    String? storeId,
+    String? storeName,
+    String? storeCode,
+    String? orderId,
+    String? orderNumber,
+    String? orderStatus,
+    String? externalOrderItemId,
+    String? sellerSku,
+    String? productName,
+    String? displayTitle,
+    String? imageUrl,
+    int? quantity,
+    double? unitPrice,
+    double? costPrice,
+    double? amount,
+    double? totalCost,
+    double? profit,
+    double? profitMargin,
+    bool? profitReady,
+    String? status,
+    String? statusCategory,
+    String? parcelType,
+    bool? revenueCountable,
+    String? returnStatus,
+    String? returnReason,
+    DateTime? claimDate,
+    DateTime? logisticFacilityAt,
+    String? hubName,
+    DateTime? hubArrivedAt,
+    DateTime? collectionDeadlineAt,
+    int? daysLeftToCollect,
+    String? collectionStatus,
+    bool? collectionActionRequired,
+    String? collectionNotificationLevel,
+    DateTime? collectedAt,
+    String? processingStatus,
+    bool? stockDeducted,
+    bool? stockRestored,
+    String? errorMessage,
+    DateTime? createdAt,
+    String? originalDarazStatus,
+    String? originalDarazReason,
+    String? reasonCode,
+    String? reasonLabel,
+    String? mappingConfidence,
+    bool? needsReview,
+    String? reviewReason,
+  }) {
+    return CentralOrderItem(
+      id: id ?? this.id,
+      storeId: storeId ?? this.storeId,
+      storeName: storeName ?? this.storeName,
+      storeCode: storeCode ?? this.storeCode,
+      orderId: orderId ?? this.orderId,
+      orderNumber: orderNumber ?? this.orderNumber,
+      orderStatus: orderStatus ?? this.orderStatus,
+      externalOrderItemId: externalOrderItemId ?? this.externalOrderItemId,
+      sellerSku: sellerSku ?? this.sellerSku,
+      productName: productName ?? this.productName,
+      displayTitle: displayTitle ?? this.displayTitle,
+      imageUrl: imageUrl ?? this.imageUrl,
+      quantity: quantity ?? this.quantity,
+      unitPrice: unitPrice ?? this.unitPrice,
+      costPrice: costPrice ?? this.costPrice,
+      amount: amount ?? this.amount,
+      totalCost: totalCost ?? this.totalCost,
+      profit: profit ?? this.profit,
+      profitMargin: profitMargin ?? this.profitMargin,
+      profitReady: profitReady ?? this.profitReady,
+      status: status ?? this.status,
+      statusCategory: statusCategory ?? this.statusCategory,
+      parcelType: parcelType ?? this.parcelType,
+      revenueCountable: revenueCountable ?? this.revenueCountable,
+      returnStatus: returnStatus ?? this.returnStatus,
+      returnReason: returnReason ?? this.returnReason,
+      claimDate: claimDate ?? this.claimDate,
+      logisticFacilityAt: logisticFacilityAt ?? this.logisticFacilityAt,
+      hubName: hubName ?? this.hubName,
+      hubArrivedAt: hubArrivedAt ?? this.hubArrivedAt,
+      collectionDeadlineAt: collectionDeadlineAt ?? this.collectionDeadlineAt,
+      daysLeftToCollect: daysLeftToCollect ?? this.daysLeftToCollect,
+      collectionStatus: collectionStatus ?? this.collectionStatus,
+      collectionActionRequired: collectionActionRequired ?? this.collectionActionRequired,
+      collectionNotificationLevel: collectionNotificationLevel ?? this.collectionNotificationLevel,
+      collectedAt: collectedAt ?? this.collectedAt,
+      processingStatus: processingStatus ?? this.processingStatus,
+      stockDeducted: stockDeducted ?? this.stockDeducted,
+      stockRestored: stockRestored ?? this.stockRestored,
+      errorMessage: errorMessage ?? this.errorMessage,
+      createdAt: createdAt ?? this.createdAt,
+      originalDarazStatus: originalDarazStatus ?? this.originalDarazStatus,
+      originalDarazReason: originalDarazReason ?? this.originalDarazReason,
+      reasonCode: reasonCode ?? this.reasonCode,
+      reasonLabel: reasonLabel ?? this.reasonLabel,
+      mappingConfidence: mappingConfidence ?? this.mappingConfidence,
+      needsReview: needsReview ?? this.needsReview,
+      reviewReason: reviewReason ?? this.reviewReason,
+    );
+  }
 
   factory CentralOrderItem.fromJson(Map<String, dynamic> json) {
     final storeRaw = json['store_id'];

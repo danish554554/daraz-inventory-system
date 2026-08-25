@@ -18,6 +18,7 @@ class ReturnsAndFailedDeliveryScreen extends StatefulWidget {
 class _ReturnsAndFailedDeliveryScreenState extends State<ReturnsAndFailedDeliveryScreen> {
   bool _loading = true;
   bool _syncing = false;
+  bool _batchActionLoading = false;
   String? _error;
   String _search = '';
   
@@ -27,6 +28,8 @@ class _ReturnsAndFailedDeliveryScreenState extends State<ReturnsAndFailedDeliver
   String _subFilter = 'active';
 
   List<CentralOrderItem> _items = <CentralOrderItem>[];
+  List<StoreModel> _stores = <StoreModel>[];
+  final Set<String> _selectedItemIds = <String>{};
 
   @override
   void initState() {
@@ -43,17 +46,29 @@ class _ReturnsAndFailedDeliveryScreenState extends State<ReturnsAndFailedDeliver
     }
 
     try {
+      // Load stores to ensure accurate store name resolution
+      try {
+        final storesRes = await ApiClient.instance.get('/stores', bypassCache: true);
+        final storesMap = JsonReaders.map(storesRes);
+        final rawStores = JsonReaders.list(storesMap['stores']);
+        if (rawStores.isNotEmpty) {
+          _stores = rawStores.map((e) => StoreModel.fromJson(JsonReaders.map(e))).toList();
+        }
+      } catch (_) {
+        // Ignore store lookup errors and use fallback
+      }
+
       dynamic res;
       try {
         res = await ApiClient.instance.get(
           '/daraz-sync/order-items',
-          queryParameters: <String, dynamic>{'limit': 200},
+          queryParameters: <String, dynamic>{'limit': 300},
           bypassCache: true,
         );
       } catch (_) {
         res = await ApiClient.instance.get(
           '/daraz-sync/collection-watch',
-          queryParameters: <String, dynamic>{'limit': 200, 'include_collected': 'true'},
+          queryParameters: <String, dynamic>{'limit': 300, 'include_collected': 'true'},
           bypassCache: true,
         );
       }
@@ -68,6 +83,11 @@ class _ReturnsAndFailedDeliveryScreenState extends State<ReturnsAndFailedDeliver
       if (mounted) {
         setState(() {
           _items = parsed;
+          // Prune selected IDs that are no longer present or already collected
+          _selectedItemIds.removeWhere((id) {
+            final match = _items.where((item) => item.id == id).firstOrNull;
+            return match == null || _isItemAlreadyReturned(match);
+          });
         });
       }
     } on ApiException catch (e) {
@@ -83,16 +103,69 @@ class _ReturnsAndFailedDeliveryScreenState extends State<ReturnsAndFailedDeliver
     setState(() => _syncing = true);
     try {
       await Future.wait<dynamic>(<Future<dynamic>>[
-        ApiClient.instance.post('/daraz-sync/scan-returns', body: <String, dynamic>{'history_days': 60}),
-        ApiClient.instance.post('/daraz-sync/scan-failed-delivery', body: <String, dynamic>{'history_days': 60}),
+        ApiClient.instance.post('/daraz-sync/scan-returns', body: <String, dynamic>{'history_days': 40}),
+        ApiClient.instance.post('/daraz-sync/scan-failed-delivery', body: <String, dynamic>{'history_days': 40}),
       ]);
       await _load(silent: true);
-      if (mounted) showAppSnackBar(context, 'Synced latest return & failed delivery records from Daraz.');
+      if (mounted) showAppSnackBar(context, 'Synced latest return & failed delivery records from Daraz (Last 40 days).');
     } catch (_) {
       if (mounted) showAppSnackBar(context, 'Sync completed with cached records.');
     } finally {
       if (mounted) setState(() => _syncing = false);
     }
+  }
+
+  String _getStoreDisplayName(CentralOrderItem item) {
+    if (item.storeName.isNotEmpty && item.storeName != '-' && item.storeName != 'null') {
+      return item.storeName;
+    }
+    if (item.storeId.isNotEmpty) {
+      final match = _stores.where((s) => s.id == item.storeId || s.code == item.storeCode).firstOrNull;
+      if (match != null && match.name.isNotEmpty && match.name != '-') {
+        return match.name;
+      }
+    }
+    if (item.storeCode.isNotEmpty && item.storeCode != '-') {
+      final match = _stores.where((s) => s.code == item.storeCode).firstOrNull;
+      if (match != null && match.name.isNotEmpty) {
+        return match.name;
+      }
+      return item.storeCode;
+    }
+    return 'Daraz Store';
+  }
+
+  DateTime? _getReturnEventDate(CentralOrderItem item) {
+    return item.claimDate ?? item.hubArrivedAt ?? item.logisticFacilityAt ?? item.createdAt;
+  }
+
+  bool _isWithinLast40Days(CentralOrderItem item) {
+    final eventDate = _getReturnEventDate(item);
+    if (eventDate == null) return true;
+    final daysAgo = DateTime.now().difference(eventDate).inDays;
+    return daysAgo <= 40;
+  }
+
+  bool _isRealCustomerReturnReason(String text) {
+    final norm = text.toLowerCase().replaceAll(RegExp(r'[\s_\-]+'), ' ').trim();
+    if (norm.isEmpty) return false;
+    return norm.contains('defective') ||
+        norm.contains('not working') ||
+        norm.contains('wrong item') ||
+        norm.contains('damaged') ||
+        norm.contains('broken') ||
+        norm.contains('missing parts') ||
+        norm.contains('missing items') ||
+        norm.contains('counterfeit') ||
+        norm.contains('poor quality') ||
+        norm.contains('quality not as expected') ||
+        norm.contains('different from description') ||
+        norm.contains('change of mind') ||
+        norm.contains('rma') ||
+        norm.contains('customer return') ||
+        norm.contains('buyer return') ||
+        norm.contains('return request') ||
+        norm.contains('refund request');
   }
 
   bool _isCancelledOrder(CentralOrderItem item) {
@@ -115,11 +188,12 @@ class _ReturnsAndFailedDeliveryScreenState extends State<ReturnsAndFailedDeliver
   }
 
   bool _isFailedDeliveryReason(String text) {
-    final norm = text.toLowerCase();
+    final norm = text.toLowerCase().replaceAll(RegExp(r'[\s_\-]+'), ' ').trim();
+    if (norm.isEmpty) return false;
     return norm.contains('rejected at doorstep') ||
-        norm.contains('rejected_at_doorstep') ||
-        norm.contains('customer rescheduled outside of delivery sla') ||
-        norm.contains('others_missing_mapping') ||
+        norm.contains('customer rescheduled outside') ||
+        norm.contains('delivery sla') ||
+        norm.contains('others missing mapping') ||
         norm.contains('delivery address is wrong') ||
         norm.contains('delivery address wrong') ||
         norm.contains('address is wrong') ||
@@ -129,17 +203,12 @@ class _ReturnsAndFailedDeliveryScreenState extends State<ReturnsAndFailedDeliver
         norm.contains('invalid address') ||
         norm.contains('incomplete address') ||
         norm.contains('fake address') ||
-        norm.contains('rescheduled outside') ||
-        norm.contains('outside of delivery sla') ||
-        norm.contains('delivery sla') ||
-        norm.contains('doorstep') ||
         norm.contains('refused to accept') ||
         norm.contains('refused delivery') ||
         norm.contains('refused') ||
         norm.contains('consignee not available') ||
         norm.contains('customer not available') ||
         norm.contains('customer unreachable') ||
-        norm.contains('unreachable') ||
         norm.contains('phone switched off') ||
         norm.contains('no answer') ||
         norm.contains('premises closed') ||
@@ -148,53 +217,127 @@ class _ReturnsAndFailedDeliveryScreenState extends State<ReturnsAndFailedDeliver
         norm.contains('delivery failed') ||
         norm.contains('delivery attempt failed') ||
         norm.contains('unable to deliver') ||
-        norm.contains('undelivered');
+        norm.contains('undelivered') ||
+        norm.contains('return to seller') ||
+        norm.contains('returned to shipper');
   }
 
   bool _isFailedDeliveryOrder(CentralOrderItem item) {
     if (_isCancelledOrder(item)) return false;
-    return item.isFailedDelivery ||
-        _isFailedDeliveryReason(item.returnReason) ||
-        _isFailedDeliveryReason(item.status) ||
-        _isFailedDeliveryReason(item.hubName) ||
-        (!_isCustomerReturnOrder(item) && (item.hubArrivedAt != null || item.logisticFacilityAt != null));
+
+    // Explicit Failed Delivery signals
+    if (item.isFailedDelivery) return true;
+    if (_isFailedDeliveryReason(item.returnReason)) return true;
+    if (_isFailedDeliveryReason(item.status)) return true;
+    if (_isFailedDeliveryReason(item.reasonLabel)) return true;
+    if (_isFailedDeliveryReason(item.hubName)) return true;
+
+    // Center/hub arrived parcel that is NOT a customer return
+    if ((item.hubArrivedAt != null || item.logisticFacilityAt != null) && !_isCustomerReturnOrder(item)) {
+      return true;
+    }
+    return false;
   }
 
   bool _isCustomerReturnOrder(CentralOrderItem item) {
     if (_isCancelledOrder(item)) return false;
+    // Failed delivery orders are NEVER customer returns
+    if (item.isFailedDelivery) return false;
     if (_isFailedDeliveryReason(item.returnReason)) return false;
     if (_isFailedDeliveryReason(item.status)) return false;
-    return item.isReturn || item.claimDate != null;
+    if (_isFailedDeliveryReason(item.reasonLabel)) return false;
+    if (_isFailedDeliveryReason(item.hubName)) return false;
+    if (item.parcelType == 'failed_delivery' || item.statusCategory == 'failed_delivery') return false;
+
+    // Genuine Customer Returns (parcel delivered/received by customer and then returned)
+    final s = item.status.toLowerCase().trim();
+    final cat = item.statusCategory.toLowerCase().trim();
+    final isExplicitReturnStatus = s == 'returned' ||
+        s == 'customer_return' ||
+        s == 'buyer_return' ||
+        s == 'return_requested' ||
+        s == 'returning' ||
+        s == 'refund' ||
+        s == 'refunded' ||
+        cat == 'return' ||
+        item.parcelType == 'return';
+
+    return isExplicitReturnStatus ||
+        item.claimDate != null ||
+        _isRealCustomerReturnReason(item.returnReason) ||
+        _isRealCustomerReturnReason(item.reasonLabel);
+  }
+
+  String? _getDisplayableReason(CentralOrderItem item) {
+    bool isGenericOrStatus(String text) {
+      final norm = text.toLowerCase().replaceAll(RegExp(r'[\s_\-]+'), ' ').trim();
+      return norm.isEmpty ||
+          norm == 'active sale' ||
+          norm == 'failed delivery' ||
+          norm == 'failed delivery generic' ||
+          norm == 'failed' ||
+          norm == 'customer return claim' ||
+          norm == 'customer return' ||
+          norm == 'rma generic return' ||
+          norm == 'return' ||
+          norm == 'returned' ||
+          norm == 'order cancelled' ||
+          norm == 'cancelled' ||
+          norm == 'canceled' ||
+          norm == 'unmapped daraz status' ||
+          norm == 'pending' ||
+          norm == 'shipped' ||
+          norm == 'ready to ship' ||
+          norm == 'delivered' ||
+          norm == 'rts' ||
+          norm == 'in transit' ||
+          norm == 'none' ||
+          norm == '-' ||
+          norm == 'null';
+    }
+
+    final label = item.reasonLabel.trim();
+    if (label.isNotEmpty && !isGenericOrStatus(label)) {
+      return label.replaceAll('_', ' ');
+    }
+
+    final reason = item.returnReason.trim();
+    if (reason.isNotEmpty && !isGenericOrStatus(reason)) {
+      return reason.replaceAll('_', ' ');
+    }
+
+    final origReason = item.originalDarazReason.trim();
+    if (origReason.isNotEmpty && !isGenericOrStatus(origReason)) {
+      return origReason.replaceAll('_', ' ');
+    }
+
+    return null;
   }
 
   bool _isItemAlreadyReturned(CentralOrderItem item) {
     if (item.isCollected) return true;
-    final status = item.status.toLowerCase();
     final category = item.statusCategory.toLowerCase();
-    final hub = item.hubName.toLowerCase();
-    final reason = item.returnReason.toLowerCase();
-    final remarks = item.errorMessage.toLowerCase();
-    final orderStatus = item.orderStatus.toLowerCase();
     final collectionStatus = item.collectionStatus.toLowerCase();
-    final title = item.title.toLowerCase();
-    final raw = '$status $category $hub $reason $remarks $orderStatus $collectionStatus $title';
-    final normalized = raw.replaceAll(RegExp(r'[\s\-_\[\]!.,/]+'), ' ');
+    if (collectionStatus == 'collected' || collectionStatus == 'received' || category == 'collected') {
+      return true;
+    }
 
-    return normalized.contains('successfully returned') ||
-        normalized.contains('package returned') ||
-        normalized.contains('your parcel has been successfully returned') ||
-        normalized.contains('delivered to merchant') ||
-        normalized.contains('returned to merchant') ||
-        normalized.contains('return delivered') ||
-        normalized.contains('merchant collected') ||
-        normalized.contains('collected by seller') ||
-        normalized.contains('handed over to seller') ||
-        normalized.contains('delivered to shipper') ||
-        normalized.contains('returned to seller') ||
-        normalized.contains('delivered to origin') ||
-        normalized.contains('package collected') ||
-        normalized.contains('collected') ||
-        normalized.contains('received');
+    final inspection = '${item.status} ${item.orderStatus} ${item.returnReason} ${item.errorMessage}'.toLowerCase();
+    final norm = inspection.replaceAll(RegExp(r'[\s\-_\[\]!.,/]+'), ' ');
+
+    return norm.contains('successfully returned') ||
+        norm.contains('package returned') ||
+        norm.contains('your parcel has been successfully returned') ||
+        norm.contains('delivered to merchant') ||
+        norm.contains('returned to merchant') ||
+        norm.contains('return delivered') ||
+        norm.contains('merchant collected') ||
+        norm.contains('collected by seller') ||
+        norm.contains('handed over to seller') ||
+        norm.contains('delivered to shipper') ||
+        norm.contains('returned to seller') ||
+        norm.contains('delivered to origin') ||
+        norm.contains('package collected');
   }
 
   bool _isDay5OrScrapRisk(CentralOrderItem item) {
@@ -213,17 +356,100 @@ class _ReturnsAndFailedDeliveryScreenState extends State<ReturnsAndFailedDeliver
   }
 
   Future<void> _markItemCollected(CentralOrderItem item) async {
+    final id = item.id;
+    if (id.isEmpty) return;
+
+    // Optimistically update item to 'collected' so it is immediately removed from the active list
+    setState(() {
+      final index = _items.indexWhere((i) => i.id == id);
+      if (index != -1) {
+        _items[index] = _items[index].copyWith(
+          collectionStatus: 'collected',
+          statusCategory: 'collected',
+          collectedAt: DateTime.now(),
+          daysLeftToCollect: 0,
+          collectionActionRequired: false,
+          collectionNotificationLevel: 'collected',
+        );
+      }
+      _selectedItemIds.remove(id);
+    });
+
     try {
-      final id = item.id;
-      if (id.isEmpty) return;
+      ApiClient.instance.clearCache();
       await ApiClient.instance.post('/daraz-sync/order-items/$id/mark-received', body: <String, dynamic>{});
-      await _load(silent: true);
-      if (mounted) showAppSnackBar(context, 'Order #${item.orderNumber} marked as received/collected.');
+      if (mounted) showAppSnackBar(context, 'Order #${item.orderNumber} marked as collected and removed from active list.');
     } on ApiException catch (e) {
-      if (mounted) showAppSnackBar(context, e.message, error: true);
+      if (mounted) {
+        showAppSnackBar(context, e.message, error: true);
+        await _load(silent: true);
+      }
     } catch (_) {
-      if (mounted) showAppSnackBar(context, 'Failed to update collection status.', error: true);
+      if (mounted) {
+        showAppSnackBar(context, 'Failed to update collection status.', error: true);
+        await _load(silent: true);
+      }
     }
+  }
+
+  Future<void> _markSelectedItemsCollected() async {
+    if (_selectedItemIds.isEmpty) return;
+
+    final targetIds = Set<String>.from(_selectedItemIds);
+    final count = targetIds.length;
+
+    setState(() {
+      _batchActionLoading = true;
+      // Optimistically update all selected items to collected
+      for (var i = 0; i < _items.length; i++) {
+        if (targetIds.contains(_items[i].id)) {
+          _items[i] = _items[i].copyWith(
+            collectionStatus: 'collected',
+            statusCategory: 'collected',
+            collectedAt: DateTime.now(),
+            daysLeftToCollect: 0,
+            collectionActionRequired: false,
+            collectionNotificationLevel: 'collected',
+          );
+        }
+      }
+      _selectedItemIds.clear();
+    });
+
+    try {
+      ApiClient.instance.clearCache();
+      await Future.wait<dynamic>(
+        targetIds.map((id) => ApiClient.instance.post('/daraz-sync/order-items/$id/mark-received', body: <String, dynamic>{})),
+      );
+      if (mounted) {
+        showAppSnackBar(context, '$count selected parcel${count > 1 ? 's' : ''} marked as collected and removed from active list.');
+      }
+    } catch (e) {
+      if (mounted) {
+        showAppSnackBar(context, 'Error updating some items. Refreshing...', error: true);
+        await _load(silent: true);
+      }
+    } finally {
+      if (mounted) setState(() => _batchActionLoading = false);
+    }
+  }
+
+  void _toggleSelectAll(List<CentralOrderItem> currentActiveItems) {
+    setState(() {
+      final uncollectedItems = currentActiveItems.where((item) => !_isItemAlreadyReturned(item)).toList();
+      final allSelected = uncollectedItems.isNotEmpty && uncollectedItems.every((item) => _selectedItemIds.contains(item.id));
+      if (allSelected) {
+        for (final item in uncollectedItems) {
+          _selectedItemIds.remove(item.id);
+        }
+      } else {
+        for (final item in uncollectedItems) {
+          if (item.id.isNotEmpty) {
+            _selectedItemIds.add(item.id);
+          }
+        }
+      }
+    });
   }
 
   List<CentralOrderItem> get _filteredItems {
@@ -245,6 +471,8 @@ class _ReturnsAndFailedDeliveryScreenState extends State<ReturnsAndFailedDeliver
         if (_subFilter != 'collected' && isCompleted) return false;
       } else if (_primarySection == 'returns') {
         if (!isReturn) return false;
+        // ONLY show customer returns from the last 40 days
+        if (!_isWithinLast40Days(item)) return false;
         if (_subFilter != 'collected' && isCompleted) return false;
       } else if (_primarySection == 'at_risk') {
         if (isCompleted || !isScrapRisk) return false;
@@ -253,7 +481,7 @@ class _ReturnsAndFailedDeliveryScreenState extends State<ReturnsAndFailedDeliver
       // 2. Sub-filter: Active (auto-hide completed), Scrap Risk, or Collected Archive
       if (_primarySection != 'at_risk') {
         if (_subFilter == 'active') {
-          // Automatically exclude / remove orders that have been successfully returned
+          // Automatically exclude / remove orders that have been successfully collected/returned
           if (isCompleted) return false;
         } else if (_subFilter == 'scrap_risk') {
           if (isCompleted || !isScrapRisk) return false;
@@ -264,11 +492,13 @@ class _ReturnsAndFailedDeliveryScreenState extends State<ReturnsAndFailedDeliver
 
       // 3. Search query match
       if (query.isNotEmpty) {
+        final storeDisplay = _getStoreDisplayName(item).toLowerCase();
         final matches = item.title.toLowerCase().contains(query) ||
             item.orderNumber.toLowerCase().contains(query) ||
             item.sellerSku.toLowerCase().contains(query) ||
             item.hubName.toLowerCase().contains(query) ||
             item.storeName.toLowerCase().contains(query) ||
+            storeDisplay.contains(query) ||
             item.returnReason.toLowerCase().contains(query);
         if (!matches) return false;
       }
@@ -279,11 +509,16 @@ class _ReturnsAndFailedDeliveryScreenState extends State<ReturnsAndFailedDeliver
 
   @override
   Widget build(BuildContext context) {
-    // Calculate counts for active non-cancelled items
+    final isDark = AppTheme.isDark(context);
+
+    // Calculate counts for active non-cancelled items (Returns limited to last 40 days)
     final nonCancelledItems = _items.where((i) => !_isCancelledOrder(i)).toList();
     final activeFailedCount = nonCancelledItems.where((i) => _isFailedDeliveryOrder(i) && !_isItemAlreadyReturned(i)).length;
-    final activeReturnsCount = nonCancelledItems.where((i) => _isCustomerReturnOrder(i) && !_isItemAlreadyReturned(i)).length;
+    final activeReturnsCount = nonCancelledItems.where((i) => _isCustomerReturnOrder(i) && !_isItemAlreadyReturned(i) && _isWithinLast40Days(i)).length;
     final urgentScrapRiskCount = nonCancelledItems.where((i) => !_isItemAlreadyReturned(i) && _isDay5OrScrapRisk(i)).length;
+
+    final filteredList = _filteredItems;
+    final activeUncollectedInView = filteredList.where((item) => !_isItemAlreadyReturned(item)).toList();
 
     return Scaffold(
       body: _loading
@@ -306,7 +541,9 @@ class _ReturnsAndFailedDeliveryScreenState extends State<ReturnsAndFailedDeliver
                     children: <Widget>[
                       SectionHeader(
                         title: 'Returns & Failed Delivery',
-                        subtitle: 'Separate tracking for Hub Failed Delivery and Customer Return Claims',
+                        subtitle: _primarySection == 'returns'
+                            ? 'Customer return claims from the last 40 days'
+                            : 'Separate tracking for Hub Failed Delivery and Customer Return Claims',
                         action: Row(
                           mainAxisSize: MainAxisSize.min,
                           children: <Widget>[
@@ -344,32 +581,106 @@ class _ReturnsAndFailedDeliveryScreenState extends State<ReturnsAndFailedDeliver
                       TextField(
                         decoration: InputDecoration(
                           hintText: _primarySection == 'failed_delivery'
-                              ? 'Search failed delivery by title, order #, or hub...'
+                              ? 'Search failed delivery by store, title, order #, or hub...'
                               : (_primarySection == 'returns'
-                                  ? 'Search customer return claims by product or reason...'
+                                  ? 'Search returns (last 40 days) by store, product, or reason...'
                                   : 'Search at-risk parcels...'),
                           prefixIcon: const Icon(Icons.search_rounded),
                           isDense: true,
                         ),
                         onChanged: (val) => setState(() => _search = val),
                       ),
-                      const SizedBox(height: 14),
-                      if (_filteredItems.isEmpty)
+                      const SizedBox(height: 12),
+
+                      // Multi-Select Batch Action Bar
+                      if (_subFilter != 'collected' && activeUncollectedInView.isNotEmpty) ...<Widget>[
+                        Container(
+                          padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+                          decoration: BoxDecoration(
+                            color: isDark ? const Color(0xFF1E293B) : const Color(0xFFF8FAFC),
+                            borderRadius: BorderRadius.circular(12),
+                            border: Border.all(
+                              color: _selectedItemIds.isNotEmpty ? AppTheme.primary : AppTheme.borderColor(context),
+                            ),
+                          ),
+                          child: Row(
+                            children: <Widget>[
+                              Checkbox(
+                                value: activeUncollectedInView.isNotEmpty &&
+                                    activeUncollectedInView.every((i) => _selectedItemIds.contains(i.id)),
+                                onChanged: (_) => _toggleSelectAll(activeUncollectedInView),
+                                activeColor: AppTheme.primary,
+                                visualDensity: VisualDensity.compact,
+                              ),
+                              const SizedBox(width: 4),
+                              Expanded(
+                                child: Text(
+                                  _selectedItemIds.isEmpty
+                                      ? 'Select all to mark collected (${activeUncollectedInView.length})'
+                                      : '${_selectedItemIds.length} parcel${_selectedItemIds.length > 1 ? 's' : ''} selected',
+                                  style: TextStyle(
+                                    fontSize: 12,
+                                    fontWeight: FontWeight.w800,
+                                    color: _selectedItemIds.isNotEmpty ? AppTheme.primary : AppTheme.textMutedColor(context),
+                                  ),
+                                ),
+                              ),
+                              if (_selectedItemIds.isNotEmpty) ...<Widget>[
+                                TextButton(
+                                  onPressed: () => setState(() => _selectedItemIds.clear()),
+                                  style: TextButton.styleFrom(
+                                    visualDensity: VisualDensity.compact,
+                                    padding: const EdgeInsets.symmetric(horizontal: 8),
+                                  ),
+                                  child: const Text('Clear', style: TextStyle(fontSize: 11, fontWeight: FontWeight.w800)),
+                                ),
+                                const SizedBox(width: 6),
+                                FilledButton.icon(
+                                  style: FilledButton.styleFrom(
+                                    backgroundColor: _primarySection == 'returns' ? AppTheme.warning : AppTheme.primary,
+                                    foregroundColor: Colors.white,
+                                    visualDensity: VisualDensity.compact,
+                                    padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+                                    shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+                                  ),
+                                  onPressed: _batchActionLoading ? null : _markSelectedItemsCollected,
+                                  icon: _batchActionLoading
+                                      ? const SizedBox(
+                                          width: 13,
+                                          height: 13,
+                                          child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white),
+                                        )
+                                      : const Icon(Icons.check_circle_outline_rounded, size: 14),
+                                  label: Text(
+                                    'Mark Collected (${_selectedItemIds.length})',
+                                    style: const TextStyle(fontSize: 11, fontWeight: FontWeight.w900),
+                                  ),
+                                ),
+                              ],
+                            ],
+                          ),
+                        ),
+                        const SizedBox(height: 12),
+                      ],
+
+                      if (filteredList.isEmpty)
                         EmptyState(
                           title: _primarySection == 'failed_delivery'
                               ? (_subFilter == 'active' ? 'No Pending Failed Deliveries 🎉' : 'No records found')
                               : (_primarySection == 'returns'
-                                  ? (_subFilter == 'active' ? 'No Customer Returns Pending 🎉' : 'No return claims found')
+                                  ? (_subFilter == 'active' ? 'No Customer Returns in Last 40 Days 🎉' : 'No return claims found')
                                   : 'No Parcels at Scrap Risk 🎉'),
                           message: _primarySection == 'at_risk'
                               ? 'None of your packages have been at the center for 5+ days. All parcels are safe.'
                               : (_subFilter == 'active'
-                                  ? 'All packages have either been successfully returned to your warehouse or there are no new orders at the Daraz hub.'
+                                  ? (_primarySection == 'returns'
+                                      ? 'No pending return claims recorded in the last 40 days.'
+                                      : 'All packages have either been successfully returned to your warehouse or there are no new orders at the Daraz hub.')
                                   : 'Try adjusting your search query or switching tabs.'),
                           icon: Icons.check_circle_outline_rounded,
                         )
                       else
-                        ..._filteredItems.map(_buildSeparateParcelCard),
+                        ...filteredList.map(_buildSeparateParcelCard),
                     ],
                   ),
                 ),
@@ -393,6 +704,7 @@ class _ReturnsAndFailedDeliveryScreenState extends State<ReturnsAndFailedDeliver
           onTap: () => setState(() {
             _primarySection = key;
             _subFilter = 'active';
+            _selectedItemIds.clear();
           }),
           borderRadius: BorderRadius.circular(12),
           child: Container(
@@ -470,7 +782,7 @@ class _ReturnsAndFailedDeliveryScreenState extends State<ReturnsAndFailedDeliver
           ),
           buildTab(
             key: 'returns',
-            label: 'Returns',
+            label: 'Returns (40d)',
             icon: Icons.assignment_return_rounded,
             count: returnsCount,
             color: AppTheme.warning,
@@ -512,7 +824,10 @@ class _ReturnsAndFailedDeliveryScreenState extends State<ReturnsAndFailedDeliver
     return ChoiceChip(
       selected: selected,
       label: Text(label),
-      onSelected: (_) => setState(() => _subFilter = key),
+      onSelected: (_) => setState(() {
+        _subFilter = key;
+        _selectedItemIds.clear();
+      }),
       selectedColor: AppTheme.primary,
       backgroundColor: isDark ? const Color(0xFF1E293B) : Colors.white,
       labelStyle: TextStyle(
@@ -526,19 +841,27 @@ class _ReturnsAndFailedDeliveryScreenState extends State<ReturnsAndFailedDeliver
   }
 
   Widget _buildSeparateParcelCard(CentralOrderItem item) {
+    final isDark = AppTheme.isDark(context);
     final isReturn = item.isReturn;
     final isCompleted = _isItemAlreadyReturned(item);
+    final isSelected = _selectedItemIds.contains(item.id);
     final daysLeft = item.daysLeftToCollect;
     final hubName = item.hubName.isNotEmpty ? item.hubName : 'Daraz Logistics Center';
     final arrivalDate = item.hubArrivedAt ?? item.logisticFacilityAt;
     final deadlineDate = item.collectionDeadlineAt;
+    final storeName = _getStoreDisplayName(item);
+    final returnEventDate = _getReturnEventDate(item);
 
     // Calculate deadline & scrap urgency
     int daysElapsed = 0;
     if (arrivalDate != null) {
       daysElapsed = DateTime.now().difference(arrivalDate).inDays + 1;
     }
-    final isDay5Or6 = daysElapsed >= 5 || (daysLeft != null && daysLeft <= 1) || item.collectionNotificationLevel == 'deadline' || item.collectionNotificationLevel == 'one_day' || item.collectionNotificationLevel == 'overdue';
+    final isDay5Or6 = daysElapsed >= 5 ||
+        (daysLeft != null && daysLeft <= 1) ||
+        item.collectionNotificationLevel == 'deadline' ||
+        item.collectionNotificationLevel == 'one_day' ||
+        item.collectionNotificationLevel == 'overdue';
 
     Color countdownColor = AppTheme.info;
     Color countdownSoftColor = AppTheme.infoSoft;
@@ -574,9 +897,73 @@ class _ReturnsAndFailedDeliveryScreenState extends State<ReturnsAndFailedDeliver
       padding: const EdgeInsets.only(bottom: 12),
       child: AppCard(
         padding: const EdgeInsets.all(14),
+        borderColor: isSelected ? AppTheme.primary : (isDay5Or6 && !isCompleted ? AppTheme.danger.withValues(alpha: 0.5) : null),
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: <Widget>[
+            // Top Bar: Store Name Badge & Checkbox / Selection
+            Row(
+              children: <Widget>[
+                if (!isCompleted) ...<Widget>[
+                  InkWell(
+                    onTap: () {
+                      setState(() {
+                        if (isSelected) {
+                          _selectedItemIds.remove(item.id);
+                        } else if (item.id.isNotEmpty) {
+                          _selectedItemIds.add(item.id);
+                        }
+                      });
+                    },
+                    borderRadius: BorderRadius.circular(6),
+                    child: Padding(
+                      padding: const EdgeInsets.only(right: 8),
+                      child: Icon(
+                        isSelected ? Icons.check_box_rounded : Icons.check_box_outline_blank_rounded,
+                        color: isSelected ? AppTheme.primary : AppTheme.textMutedColor(context),
+                        size: 20,
+                      ),
+                    ),
+                  ),
+                ],
+                // Store Name Badge
+                Container(
+                  padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3.5),
+                  decoration: BoxDecoration(
+                    color: isDark ? const Color(0xFF1E293B) : const Color(0xFFEEF2F6),
+                    borderRadius: BorderRadius.circular(8),
+                    border: Border.all(color: AppTheme.primary.withValues(alpha: 0.35)),
+                  ),
+                  child: Row(
+                    mainAxisSize: MainAxisSize.min,
+                    children: <Widget>[
+                      const Icon(Icons.storefront_rounded, size: 13, color: AppTheme.primary),
+                      const SizedBox(width: 5),
+                      Text(
+                        storeName,
+                        style: const TextStyle(
+                          color: AppTheme.primary,
+                          fontSize: 11,
+                          fontWeight: FontWeight.w900,
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+                const Spacer(),
+                if (returnEventDate != null && isReturn)
+                  Text(
+                    'Return Date: ${Formatters.date(returnEventDate)}',
+                    style: TextStyle(
+                      color: AppTheme.textMutedColor(context),
+                      fontSize: 10,
+                      fontWeight: FontWeight.w700,
+                    ),
+                  ),
+              ],
+            ),
+            const SizedBox(height: 10),
+
             if (isDay5Or6 && !isCompleted) ...<Widget>[
               Container(
                 width: double.infinity,
@@ -601,6 +988,7 @@ class _ReturnsAndFailedDeliveryScreenState extends State<ReturnsAndFailedDeliver
               ),
               const SizedBox(height: 10),
             ],
+
             // Product Header Row: High-Res Image & Clear Title for Easy Comparison
             Row(
               crossAxisAlignment: CrossAxisAlignment.start,
@@ -650,7 +1038,7 @@ class _ReturnsAndFailedDeliveryScreenState extends State<ReturnsAndFailedDeliver
                       ),
                       const SizedBox(height: 4),
                       Text(
-                        'Order #${item.orderNumber.isNotEmpty ? item.orderNumber : item.externalOrderItemId} · ${item.storeName}',
+                        'Order #${item.orderNumber.isNotEmpty ? item.orderNumber : item.externalOrderItemId}',
                         maxLines: 1,
                         overflow: TextOverflow.ellipsis,
                         style: TextStyle(
@@ -719,6 +1107,20 @@ class _ReturnsAndFailedDeliveryScreenState extends State<ReturnsAndFailedDeliver
                         ),
                     ],
                   ),
+                  const SizedBox(height: 4),
+                  Row(
+                    mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                    children: <Widget>[
+                      Text(
+                        'Daraz Status: ${item.status.replaceAll('_', ' ').toUpperCase()}',
+                        style: TextStyle(
+                          color: AppTheme.textMutedColor(context),
+                          fontSize: 10,
+                          fontWeight: FontWeight.w800,
+                        ),
+                      ),
+                    ],
+                  ),
                   if (item.isUnknownReviewNeeded) ...<Widget>[
                     const SizedBox(height: 6),
                     Container(
@@ -742,7 +1144,7 @@ class _ReturnsAndFailedDeliveryScreenState extends State<ReturnsAndFailedDeliver
                         ],
                       ),
                     ),
-                  ] else if (item.reasonLabel.isNotEmpty || item.returnReason.isNotEmpty) ...<Widget>[
+                  ] else if (_getDisplayableReason(item) != null) ...<Widget>[
                     const SizedBox(height: 6),
                     Container(
                       padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
@@ -751,9 +1153,7 @@ class _ReturnsAndFailedDeliveryScreenState extends State<ReturnsAndFailedDeliver
                         borderRadius: BorderRadius.circular(6),
                       ),
                       child: Text(
-                        item.reasonLabel.isNotEmpty
-                            ? 'Reason: ${item.reasonLabel}${item.reasonCode.isNotEmpty ? ' (${item.reasonCode})' : ''}'
-                            : 'Reason: ${item.returnReason}',
+                        'Reason: ${_getDisplayableReason(item)!}',
                         style: TextStyle(
                           color: isReturn ? AppTheme.warning : AppTheme.info,
                           fontSize: 10,

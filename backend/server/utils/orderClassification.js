@@ -254,8 +254,8 @@ function classifyOrderItem({
       statusCategory: 'cancelled',
       parcelType: 'none',
       revenueCountable: false,
-      reasonCode: cancelReasonMatch?.code || 'ORDER_CANCELLED',
-      reasonLabel: cancelReasonMatch?.label || 'Order Cancelled',
+      reasonCode: cancelReasonMatch?.code || '',
+      reasonLabel: cancelReasonMatch?.label || '',
       mappingConfidence: cancelReasonMatch || DARAZ_OFFICIAL_STATUSES[normStatus] ? 'mapped' : 'heuristic',
       needsReview: false,
       reviewReason: '',
@@ -271,8 +271,8 @@ function classifyOrderItem({
       statusCategory: 'failed_delivery',
       parcelType: 'failed_delivery',
       revenueCountable: false,
-      reasonCode: failedReasonMatch?.code || 'FAILED_DELIVERY_GENERIC',
-      reasonLabel: failedReasonMatch?.label || 'Failed Delivery',
+      reasonCode: failedReasonMatch?.code || '',
+      reasonLabel: failedReasonMatch?.label || '',
       mappingConfidence: failedReasonMatch || DARAZ_OFFICIAL_STATUSES[normStatus] ? 'mapped' : 'heuristic',
       needsReview: false,
       reviewReason: '',
@@ -283,13 +283,13 @@ function classifyOrderItem({
 
   // 4. Check if Customer Return (RMA claim or returned status)
   const returnReasonMatch = matchControlledReason(originalReason || originalStatus, DARAZ_OFFICIAL_RETURN_REASONS);
-  if (returnReasonMatch || claimDate || normStatus === 'returned' || (originalReason && !isFailedDeliveryReason(originalReason) && !isCancellationReason(originalReason))) {
+  if (returnReasonMatch || claimDate || normStatus === 'returned') {
     return {
       statusCategory: 'return',
       parcelType: 'return',
       revenueCountable: false,
-      reasonCode: returnReasonMatch?.code || 'RMA_GENERIC_RETURN',
-      reasonLabel: returnReasonMatch?.label || 'Customer Return Claim',
+      reasonCode: returnReasonMatch?.code || '',
+      reasonLabel: returnReasonMatch?.label || '',
       mappingConfidence: returnReasonMatch || DARAZ_OFFICIAL_STATUSES[normStatus] || claimDate ? 'mapped' : 'heuristic',
       needsReview: false,
       reviewReason: '',
@@ -300,13 +300,12 @@ function classifyOrderItem({
 
   // 5. Active Sale (Confirmed, RTS, Shipped, Delivered)
   if (DARAZ_OFFICIAL_STATUSES[normStatus]?.category === 'active_sale' || DARAZ_OFFICIAL_STATUSES[normOrderStatus]?.category === 'active_sale') {
-    const statusMeta = DARAZ_OFFICIAL_STATUSES[normStatus] || DARAZ_OFFICIAL_STATUSES[normOrderStatus];
     return {
       statusCategory: 'active_sale',
       parcelType: 'none',
       revenueCountable: true,
-      reasonCode: 'ACTIVE_SALE',
-      reasonLabel: statusMeta?.label || 'Active Sale',
+      reasonCode: '',
+      reasonLabel: '',
       mappingConfidence: 'mapped',
       needsReview: false,
       reviewReason: '',
@@ -316,16 +315,16 @@ function classifyOrderItem({
   }
 
   // 6. Unknown / Unmapped Status or Reason -> Flag explicitly for review
-  const hasNovelText = originalReason.length > 0 || (originalStatus.length > 0 && !DARAZ_OFFICIAL_STATUSES[normStatus]);
+  const hasNovelText = originalReason.length > 0 && originalReason.toLowerCase() !== originalStatus.toLowerCase();
   return {
     statusCategory: 'pending',
     parcelType: 'none',
     revenueCountable: false,
-    reasonCode: 'UNMAPPED_DARAZ_STATUS',
-    reasonLabel: originalReason || originalStatus || 'Unmapped Daraz Status',
+    reasonCode: '',
+    reasonLabel: hasNovelText ? originalReason : '',
     mappingConfidence: hasNovelText ? 'unknown_review_needed' : 'mapped',
     needsReview: hasNovelText,
-    reviewReason: hasNovelText ? `Unmapped Daraz status or reason code: "${originalReason || originalStatus}"` : '',
+    reviewReason: hasNovelText ? `Unmapped Daraz reason: "${originalReason}"` : '',
     originalStatus,
     originalReason
   };

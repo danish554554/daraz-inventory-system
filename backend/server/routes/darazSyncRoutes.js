@@ -109,18 +109,25 @@ function returnOrClaimQuery() {
     $and: [
       notCancelledQuery(),
       {
+        parcel_type: { $ne: "failed_delivery" }
+      },
+      {
+        status_category: { $ne: "failed_delivery" }
+      },
+      {
+        status: { $not: /failed_delivery|delivery_failed|undelivered|returned_to_shipper|return_to_seller|failed_to_deliver|unable_to_deliver|rejected_at_doorstep|rejected at doorstep/i }
+      },
+      {
+        return_reason: { $not: /rejected at doorstep|rejected_at_doorstep|customer rescheduled|outside of delivery sla|others_missing_mapping|wrong address|delivery address|consignee not available|customer not available|customer unreachable|phone switched off|no answer|premises closed|out of delivery area|failed delivery|delivery failed|unable to deliver|undelivered/i }
+      },
+      {
         $or: [
           { parcel_type: "return" },
           { status_category: "return" },
           { status_category: "collected", parcel_type: "return" },
-          { return_reason: { $exists: true, $nin: [null, ""] } },
           { claim_date: { $ne: null } },
-          {
-            $and: [
-              { status: { $regex: "customer_return|buyer_return|return_requested|returning|refund|refunded|claim|claimed|^returned$", $options: "i" } },
-              { status: { $not: /failed_delivery|delivery_failed|undelivered|returned_to_shipper|return_to_seller|failed_to_deliver|unable_to_deliver/i } }
-            ]
-          }
+          { status: { $regex: "customer_return|buyer_return|return_requested|returning|refund|refunded|claim|claimed|^returned$", $options: "i" } },
+          { return_reason: { $regex: "defective|not_working|wrong_item|damaged|broken|missing_parts|missing_items|counterfeit|poor_quality|change_of_mind|customer_return|buyer_return|rma", $options: "i" } }
         ]
       }
     ]
@@ -192,8 +199,11 @@ function storePayload(value) {
 function itemPayload(item) {
   if (!item) return {};
   try {
-    const store = storePayload(item.store_id);
     const order = item.order_id && typeof item.order_id === "object" ? item.order_id : {};
+    let store = storePayload(item.store_id);
+    if ((!store.name || store.name === "-") && order.store_id) {
+      store = storePayload(order.store_id);
+    }
     const title = item.display_title || item.product_name || item.seller_sku || "Daraz Product";
     const unitPrice = toNumber(item.unit_price, 0);
     const quantity = toNumber(item.quantity, 1);
@@ -429,10 +439,10 @@ router.post("/scan-returns", async (req, res) => {
       return res.status(409).json({ success: false, message: "Sync is already running" });
     }
 
-    const result = await syncAllStores({ triggerSource: "return_scan", historyDays: Number(req.body?.history_days || 30) });
+    const result = await syncAllStores({ triggerSource: "return_scan", historyDays: Number(req.body?.history_days || 40) });
     const count = await CentralOrderItem.countDocuments(returnOrClaimQuery());
 
-    res.json({ success: true, message: "Return orders scanned from all connected stores.", count, result });
+    res.json({ success: true, message: "Return orders scanned from all connected stores (last 40 days).", count, result });
   } catch (error) {
     res.status(500).json({ success: false, message: "Error scanning return orders", error: error.message });
   }
@@ -445,7 +455,7 @@ router.post("/scan-failed-delivery", async (req, res) => {
       return res.status(409).json({ success: false, message: "Sync is already running" });
     }
 
-    const result = await syncAllStores({ triggerSource: "failed_delivery_scan", historyDays: Number(req.body?.history_days || 30) });
+    const result = await syncAllStores({ triggerSource: "failed_delivery_scan", historyDays: Number(req.body?.history_days || 40) });
     const count = await CentralOrderItem.countDocuments(failedDeliveryQuery());
 
     res.json({ success: true, message: "Failed delivery records scanned from all connected stores.", count, result });
