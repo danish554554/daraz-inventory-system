@@ -40,7 +40,13 @@ function extractSkuCandidates(sellerSku = "", lazadaSku = "") {
   const candidates = new Set();
   const add = (value) => {
     const cleaned = value?.toString().trim();
-    if (cleaned) candidates.add(cleaned);
+    if (cleaned) {
+      candidates.add(cleaned);
+      const collapsed = cleaned.replace(/\s+/g, " ");
+      if (collapsed) candidates.add(collapsed);
+      const noSpace = cleaned.replace(/\s+/g, "");
+      if (noSpace) candidates.add(noSpace);
+    }
   };
 
   add(sellerSku);
@@ -48,6 +54,13 @@ function extractSkuCandidates(sellerSku = "", lazadaSku = "") {
 
   if (sellerSku.includes("-")) {
     add(sellerSku.split("-")[0].trim());
+    add(sellerSku.split("-").slice(0, 2).join("-").trim());
+  }
+  if (sellerSku.includes("_")) {
+    add(sellerSku.split("_")[0].trim());
+  }
+  if (sellerSku.includes(" ")) {
+    add(sellerSku.split(" ")[0].trim());
   }
   if (lazadaSku.includes("_")) {
     add(lazadaSku.split("_")[0].trim());
@@ -78,11 +91,12 @@ function extractQuantity(first = {}) {
 function groupRowsByOrder(rows) {
   const grouped = {};
   for (const row of rows) {
-    const orderNumber = (row["Order Number"] || "").toString().trim();
-    const orderLineId = (row["Order Line ID"] || "").toString().trim();
-    if (!orderNumber || !orderLineId) continue;
+    const orderNumber = (row["Order Number"] || row["Order No"] || row["Order ID"] || "").toString().trim();
+    const orderLineId = (row["Order Line ID"] || row["Order Item ID"] || row["Item ID"] || "").toString().trim();
+    if (!orderNumber && !orderLineId) continue;
 
-    const key = `${orderNumber}__${orderLineId}`;
+    const lineKey = orderLineId || `${orderNumber}_${row["Seller SKU"] || Date.now()}`;
+    const key = `${orderNumber || "unknown"}__${lineKey}`;
     if (!grouped[key]) {
       grouped[key] = [];
     }
@@ -93,17 +107,22 @@ function groupRowsByOrder(rows) {
 
 function detectAdjustmentType(group) {
   const feeNames = group.map((row) =>
-    normalizeFeeName((row["Fee Name"] || "").toString())
+    normalizeFeeName((row["Fee Name"] || row["Transaction Type"] || "").toString())
   );
   const comments = group
-    .map((row) => (row["Comment"] || "").toString().trim().toLowerCase())
+    .map((row) => (row["Comment"] || row["Reason"] || "").toString().trim().toLowerCase())
     .filter(Boolean);
 
   const hasSalesComponent = feeNames.some((fee) =>
     [
       "product price paid by buyer",
+      "item price credit",
+      "product price",
+      "item price",
       "shipping fee paid by buyer",
-      "shipping fee discount"
+      "shipping fee (paid by buyer)",
+      "shipping fee discount",
+      "shipping fee discount (seller)"
     ].includes(fee)
   );
 
@@ -112,7 +131,9 @@ function detectAdjustmentType(group) {
       fee.includes("other credit") ||
       fee.includes("other debit") ||
       fee.includes("credit") ||
-      fee.includes("debit")
+      fee.includes("debit") ||
+      fee.includes("reversal") ||
+      fee.includes("claim")
   );
 
   const commentText = comments.join(" | ");
@@ -127,7 +148,8 @@ function detectAdjustmentType(group) {
     "overcharged",
     "refund for",
     "adjustment",
-    "compensation"
+    "compensation",
+    "claim"
   ];
 
   const hasReversalComment = reversalKeywords.some((keyword) =>
@@ -136,7 +158,7 @@ function detectAdjustmentType(group) {
 
   const standalonePenalty =
     feeNames.length > 0 &&
-    feeNames.every((fee) => fee === "penalties for fulfillment") &&
+    feeNames.every((fee) => fee.includes("penalties") || fee.includes("penalty")) &&
     !hasSalesComponent;
 
   if (hasOtherCreditOrDebit || hasReversalComment) {
@@ -156,7 +178,7 @@ function detectAdjustmentType(group) {
   if (!hasSalesComponent) {
     return {
       entryType: "adjustment",
-      reason: "Financial-only entry without buyer sale component"
+      reason: commentText || "Financial-only entry without buyer sale component"
     };
   }
 
@@ -168,13 +190,13 @@ function detectAdjustmentType(group) {
 
 async function findCostDetails(group, storeId = null) {
   const first = group[0] || {};
-  const sellerSku = (first["Seller SKU"] || "").trim();
-  const lazadaSku = (first["Lazada SKU"] || "").trim();
-  const productName = (first["Product Name"] || "").trim();
+  const sellerSku = (first["Seller SKU"] || first.seller_sku || "").trim();
+  const lazadaSku = (first["Lazada SKU"] || first.lazada_sku || "").trim();
+  const productName = (first["Product Name"] || first.product_name || "").trim();
 
   const skuCandidates = extractSkuCandidates(sellerSku, lazadaSku);
 
-  // 1. Check CentralInventory (Primary Source of Truth with Restock Costs)
+  // 1. Check CentralInventory (Stock Section - Primary Source with Restock Costs)
   for (const candidate of skuCandidates) {
     const invQuery = {
       seller_sku: { $regex: new RegExp(`^${escapeRegex(candidate)}$`, "i") },
@@ -195,7 +217,7 @@ async function findCostDetails(group, storeId = null) {
     }
   }
 
-  // 2. Check Product table
+  // 2. Check Product catalog
   for (const candidate of skuCandidates) {
     let product = await Product.findOne({ sku: { $regex: new RegExp(`^${escapeRegex(candidate)}$`, "i") } });
     if (product && product.purchase_price > 0) {
@@ -203,7 +225,7 @@ async function findCostDetails(group, storeId = null) {
         cost_price: Number(product.purchase_price),
         matched_product_id: product._id,
         matched_product_name: product.name,
-        matched_by: `product_sku:${candidate}`,
+        matched_by: `primary_sku:${candidate}`,
         profit_ready: true
       };
     }
@@ -216,19 +238,20 @@ async function findCostDetails(group, storeId = null) {
           cost_price: Number(product.purchase_price),
           matched_product_id: product._id,
           matched_product_name: product.name,
-          matched_by: `product_sku_map:${candidate}`,
+          matched_by: `mapped_sku:${candidate}`,
           profit_ready: true
         };
       }
     }
   }
 
-  // 3. Match by name exact
+  // 3. Match by exact product name
   if (productName) {
     const product = await Product.findOne({
-      name: { $regex: `^${escapeRegex(productName)}$`, $options: "i" }
+      name: { $regex: `^${escapeRegex(productName)}$`, $options: "i" },
+      purchase_price: { $gt: 0 }
     });
-    if (product && product.purchase_price > 0) {
+    if (product) {
       return {
         cost_price: Number(product.purchase_price),
         matched_product_id: product._id,
@@ -238,7 +261,7 @@ async function findCostDetails(group, storeId = null) {
       };
     }
 
-    // Partial name match fallback
+    // 4. Partial product name match
     const partialMatch = await Product.findOne({
       name: { $regex: escapeRegex(productName), $options: "i" },
       purchase_price: { $gt: 0 }
@@ -289,57 +312,86 @@ async function buildEntryFromGroup(group, defaultStore = null) {
   const feeBreakdown = {};
 
   for (const row of group) {
-    const feeName = (row["Fee Name"] || "").trim();
+    const feeName = (row["Fee Name"] || row["Transaction Type"] || "").trim();
     const feeNameKey = normalizeFeeName(feeName);
 
-    const amount = toNumber(row["Amount(Include Tax)"]);
-    const vat = absNumber(row["VAT Amount"]);
-    const wht = absNumber(row["WHT Amount"]);
+    const amount = toNumber(row["Amount(Include Tax)"] || row["Amount"] || 0);
+    const vat = absNumber(row["VAT Amount"] || row["VAT"] || 0);
+    const wht = absNumber(row["WHT Amount"] || row["WHT"] || 0);
 
     netSettlement += amount;
     vatTotal += vat;
     whtAmount += wht;
 
-    feeBreakdown[feeName] = (feeBreakdown[feeName] || 0) + amount;
+    feeBreakdown[feeName || "Uncategorized"] = (feeBreakdown[feeName || "Uncategorized"] || 0) + amount;
 
     switch (feeNameKey) {
       case "product price paid by buyer":
+      case "item price credit":
+      case "product price":
+      case "item price":
         productPrice += amount;
         break;
       case "shipping fee paid by buyer":
+      case "shipping fee (paid by buyer)":
         shippingPaidByBuyer += amount;
         break;
       case "shipping fee discount":
+      case "shipping fee discount (seller)":
+      case "promotional shipping fee discount":
         shippingFeeDiscount += amount;
         break;
       case "commission fee":
+      case "commission":
+      case "daraz commission":
         commissionFee += absNumber(amount);
         break;
       case "payment fee":
+      case "payment handling fee":
+      case "payment gateway fee":
         paymentFee += absNumber(amount);
         break;
       case "shipping fee":
+      case "shipping fee (charged by lazada)":
+      case "shipping fee (charged by daraz)":
+      case "shipping fee charged by daraz":
         shippingFee += absNumber(amount);
         break;
       case "handling fee":
+      case "order handling fee":
+      case "handling charge":
         handlingFee += absNumber(amount);
         break;
       case "free shipping max fee":
+      case "free shipping max":
+      case "free shipping max promotion fee":
         freeShippingMaxFee += absNumber(amount);
         break;
       case "co-funded voucher max":
+      case "co-funded voucher":
+      case "cofunded voucher":
+      case "voucher subsidy":
         cofundedVoucherFee += absNumber(amount);
         break;
       case "daraz coins discount participation fee":
+      case "coins discount fee":
+      case "coins fee":
         coinsDiscountFee += absNumber(amount);
         break;
       case "penalties for fulfillment":
+      case "penalty":
+      case "penalties":
+      case "fulfillment penalty":
         penalties += absNumber(amount);
         break;
       case "income tax withholding":
+      case "income tax":
+      case "withholding income tax":
         incomeTaxWithholding += absNumber(amount);
         break;
       case "sales tax withholding":
+      case "sales tax":
+      case "withholding sales tax":
         salesTaxWithholding += absNumber(amount);
         break;
       default:
@@ -384,6 +436,9 @@ async function buildEntryFromGroup(group, defaultStore = null) {
       ? Number((netSettlement - totalCost).toFixed(2))
       : null;
 
+  const orderNum = (first["Order Number"] || first["Order No"] || first["Order ID"] || "").toString().trim();
+  const rawLineId = (first["Order Line ID"] || first["Order Item ID"] || first["Item ID"] || "").toString().trim();
+  const orderLineId = rawLineId || `${orderNum}_${first["Seller SKU"] || Date.now()}`;
   const shortCode = first["Short Code"] || first["Seller Short Code"] || "";
 
   return {
@@ -400,8 +455,8 @@ async function buildEntryFromGroup(group, defaultStore = null) {
     release_status: first["Release Status"] || "",
     release_date: first["Release Date"] || "",
 
-    order_number: first["Order Number"] || "",
-    order_line_id: first["Order Line ID"] || "",
+    order_number: orderNum,
+    order_line_id: orderLineId,
 
     seller_sku: first["Seller SKU"] || "",
     lazada_sku: first["Lazada SKU"] || "",
@@ -467,7 +522,17 @@ function buildSummary(entries = []) {
   let totalAdjustments = 0;
   let adjustmentImpact = 0;
 
+  // Deduplicate entries by unique order_line_id to prevent any double counting
+  const seenLineIds = new Set();
+  const uniqueEntries = [];
   for (const item of entries) {
+    const key = item.order_line_id || `${item.order_number}_${item._id}`;
+    if (seenLineIds.has(key)) continue;
+    seenLineIds.add(key);
+    uniqueEntries.push(item);
+  }
+
+  for (const item of uniqueEntries) {
     grossAmount += Number(item.gross_amount) || 0;
     totalFees += Number(item.total_fees) || 0;
     totalTaxes += Number(item.total_taxes) || 0;
@@ -672,6 +737,24 @@ router.get("/", async (req, res) => {
   }
 });
 
+// Deduplication cleanup utility to remove duplicate order_line_id records if any exist
+async function cleanupDuplicateFinanceEntries() {
+  try {
+    const duplicates = await FinanceEntry.aggregate([
+      { $group: { _id: "$order_line_id", count: { $sum: 1 }, docs: { $push: "$_id" } } },
+      { $match: { count: { $gt: 1 } } }
+    ]);
+    for (const dup of duplicates) {
+      const [keepId, ...removeIds] = dup.docs;
+      if (removeIds.length > 0) {
+        await FinanceEntry.deleteMany({ _id: { $in: removeIds } });
+      }
+    }
+  } catch (e) {
+    // Non-critical background cleanup notice
+  }
+}
+
 // 4. Import Statement CSV / Excel Rows
 router.post("/import-csv", async (req, res) => {
   try {
@@ -696,10 +779,7 @@ router.post("/import-csv", async (req, res) => {
 
     for (const entry of preparedEntries) {
       await FinanceEntry.findOneAndUpdate(
-        {
-          statement_number: entry.statement_number,
-          order_line_id: entry.order_line_id
-        },
+        { order_line_id: entry.order_line_id },
         entry,
         {
           upsert: true,
@@ -708,6 +788,8 @@ router.post("/import-csv", async (req, res) => {
         }
       );
     }
+
+    await cleanupDuplicateFinanceEntries();
 
     const allEntries = await FinanceEntry.find().sort({ transaction_date: -1 }).lean();
     const totals = buildSummary(allEntries);
@@ -845,6 +927,13 @@ router.post("/sync", async (req, res) => {
     let totalImportedAdjustments = 0;
 
     for (const store of stores) {
+      // Clean previous fallback/auto-sync entries for this store and period to prevent duplicates
+      await FinanceEntry.deleteMany({
+        store_id: store._id,
+        statement_period: period,
+        matched_by: "daraz_api_sync"
+      });
+
       let storeToken = null;
       try {
         storeToken = await ensureStoreTokenReadyForSync(store._id);
@@ -899,10 +988,7 @@ router.post("/sync", async (req, res) => {
               const entry = await buildEntryFromGroup(group, store);
               entry.statement_period = period;
               await FinanceEntry.findOneAndUpdate(
-                {
-                  statement_number: entry.statement_number,
-                  order_line_id: entry.order_line_id
-                },
+                { order_line_id: entry.order_line_id },
                 entry,
                 { upsert: true, returnDocument: 'after', setDefaultsOnInsert: true }
               );
@@ -1006,7 +1092,7 @@ router.post("/sync", async (req, res) => {
             };
 
             await FinanceEntry.findOneAndUpdate(
-              { statement_number: statementNumber, order_line_id: lineId },
+              { order_line_id: lineId },
               entryData,
               { upsert: true, returnDocument: 'after', setDefaultsOnInsert: true }
             );
@@ -1016,6 +1102,8 @@ router.post("/sync", async (req, res) => {
         }
       }
     }
+
+    await cleanupDuplicateFinanceEntries();
 
     const allEntries = await FinanceEntry.find({ statement_period: period }).lean();
     const totals = buildSummary(allEntries);

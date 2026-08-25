@@ -85,9 +85,10 @@ const financeEntrySchema = new mongoose.Schema({
   { timestamps: true }
 );
 
-financeEntrySchema.index(
-  { statement_number: 1, order_line_id: 1 },
-  { unique: true }
-);
+financeEntrySchema.index({ order_line_id: 1 }, { unique: true });
+financeEntrySchema.index({ statement_period: 1 });
+financeEntrySchema.index({ statement_number: 1 });
+financeEntrySchema.index({ store_id: 1 });
+financeEntrySchema.index({ order_number: 1 });
 
 module.exports = mongoose.model("FinanceEntry", financeEntrySchema);

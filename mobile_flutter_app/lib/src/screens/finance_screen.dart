@@ -1016,6 +1016,16 @@ class _FinanceScreenState extends State<FinanceScreen> {
         SizedBox(
           width: itemWidth,
           child: MetricCard(
+            label: 'Gross Sales',
+            value: 'PKR ${Formatters.money(_summary.grossAmount)}',
+            icon: Icons.storefront_outlined,
+            tint: AppTheme.primarySoft,
+            iconColor: AppTheme.primary,
+          ),
+        ),
+        SizedBox(
+          width: itemWidth,
+          child: MetricCard(
             label: 'Daraz Fees',
             value: 'PKR ${Formatters.money(_summary.totalFees)}',
             icon: Icons.receipt_outlined,
@@ -1036,7 +1046,17 @@ class _FinanceScreenState extends State<FinanceScreen> {
         SizedBox(
           width: itemWidth,
           child: MetricCard(
-            label: 'Product Costs (COGS)',
+            label: 'Net Settlement (Payout)',
+            value: 'PKR ${Formatters.money(_summary.netSettlement)}',
+            icon: Icons.payments_outlined,
+            tint: AppTheme.successSoft,
+            iconColor: AppTheme.success,
+          ),
+        ),
+        SizedBox(
+          width: itemWidth,
+          child: MetricCard(
+            label: 'Stock Cost (COGS)',
             value: 'PKR ${Formatters.money(_summary.totalCost)}',
             icon: Icons.inventory_2_outlined,
             tint: AppTheme.infoSoft,
@@ -1049,8 +1069,8 @@ class _FinanceScreenState extends State<FinanceScreen> {
             label: 'True Profit Realized',
             value: 'PKR ${Formatters.money(_summary.finalProfitAfterAdjustments)}',
             icon: Icons.trending_up_rounded,
-            tint: AppTheme.successSoft,
-            iconColor: AppTheme.success,
+            tint: _summary.finalProfitAfterAdjustments >= 0 ? AppTheme.successSoft : AppTheme.dangerSoft,
+            iconColor: _summary.finalProfitAfterAdjustments >= 0 ? AppTheme.success : AppTheme.danger,
           ),
         ),
       ],
@@ -1103,7 +1123,7 @@ class _FinanceScreenState extends State<FinanceScreen> {
     final netSettlement = item.netSettlement;
     final netProfit = item.netProfit;
     final isProfitReady = item.isProfitReady;
-    final deductions = item.totalDeductions;
+    final totalCost = item.totalCost;
     final margin = item.profitMargin;
 
     return Padding(
@@ -1123,7 +1143,7 @@ class _FinanceScreenState extends State<FinanceScreen> {
                         ? AppTheme.warningSoft
                         : isProfitReady
                             ? AppTheme.successSoft
-                            : AppTheme.primarySoft,
+                            : AppTheme.dangerSoft,
                     borderRadius: BorderRadius.circular(12),
                   ),
                   child: Icon(
@@ -1137,7 +1157,7 @@ class _FinanceScreenState extends State<FinanceScreen> {
                         ? AppTheme.warning
                         : isProfitReady
                             ? AppTheme.success
-                            : AppTheme.primary,
+                            : AppTheme.danger,
                   ),
                 ),
                 const SizedBox(width: 10),
@@ -1165,7 +1185,7 @@ class _FinanceScreenState extends State<FinanceScreen> {
                           Expanded(
                             child: Text(
                               isAdjustment
-                                  ? 'Statement ${item.statementNumber.isNotEmpty ? item.statementNumber : '-'}'
+                                  ? 'Statement: ${item.statementNumber.isNotEmpty ? item.statementNumber : '-'}'
                                   : 'Order #$orderNum · SKU: $sku',
                               maxLines: 1,
                               overflow: TextOverflow.ellipsis,
@@ -1185,13 +1205,13 @@ class _FinanceScreenState extends State<FinanceScreen> {
                       'PKR ${Formatters.money(netSettlement)}',
                       style: TextStyle(
                         fontWeight: FontWeight.w900,
-                        fontSize: 13,
+                        fontSize: 14,
                         color: netSettlement >= 0 ? AppTheme.primary : AppTheme.danger,
                       ),
                     ),
                     const SizedBox(height: 2),
                     Text(
-                      'Payout',
+                      'Received Payment',
                       style: TextStyle(color: AppTheme.textMutedColor(context), fontSize: 10, fontWeight: FontWeight.w700),
                     ),
                   ],
@@ -1200,7 +1220,7 @@ class _FinanceScreenState extends State<FinanceScreen> {
             ),
             const SizedBox(height: 10),
             Container(
-              padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 7),
+              padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
               decoration: BoxDecoration(
                 color: AppTheme.softGreyColor(context),
                 borderRadius: BorderRadius.circular(10),
@@ -1208,12 +1228,50 @@ class _FinanceScreenState extends State<FinanceScreen> {
               child: Row(
                 mainAxisAlignment: MainAxisAlignment.spaceBetween,
                 children: <Widget>[
-                  Text(
-                    'Fees & Tax: -PKR ${Formatters.money(deductions)}',
-                    style: TextStyle(fontSize: 11, color: AppTheme.textMutedColor(context), fontWeight: FontWeight.w700),
-                  ),
                   if (isAdjustment)
-                    const StatusChip(label: 'Adjustment', color: AppTheme.warning, softColor: AppTheme.warningSoft)
+                    const StatusChip(label: 'Adjustment / Reversal', color: AppTheme.warning, softColor: AppTheme.warningSoft)
+                  else ...<Widget>[
+                    Row(
+                      mainAxisSize: MainAxisSize.min,
+                      children: <Widget>[
+                        Text(
+                          'Cost: ',
+                          style: TextStyle(fontSize: 11, color: AppTheme.textMutedColor(context), fontWeight: FontWeight.w700),
+                        ),
+                        Text(
+                          isProfitReady ? 'PKR ${Formatters.money(totalCost)}' : 'Not set',
+                          style: TextStyle(
+                            fontSize: 11,
+                            fontWeight: FontWeight.w900,
+                            color: isProfitReady ? AppTheme.textPrimaryColor(context) : AppTheme.danger,
+                          ),
+                        ),
+                        if (isProfitReady && item.matchedBy.isNotEmpty) ...<Widget>[
+                          const SizedBox(width: 4),
+                          Container(
+                            padding: const EdgeInsets.symmetric(horizontal: 5, vertical: 1),
+                            decoration: BoxDecoration(
+                              color: AppTheme.primary.withValues(alpha: 0.1),
+                              borderRadius: BorderRadius.circular(4),
+                            ),
+                            child: Text(
+                              item.matchedBy.contains(':') ? item.matchedBy.split(':')[0] : item.matchedBy,
+                              style: const TextStyle(fontSize: 9, fontWeight: FontWeight.w800, color: AppTheme.primary),
+                            ),
+                          ),
+                        ],
+                      ],
+                    ),
+                  ],
+                  if (isAdjustment)
+                    Text(
+                      'Impact: PKR ${Formatters.money(netSettlement)}',
+                      style: TextStyle(
+                        fontSize: 11,
+                        fontWeight: FontWeight.w900,
+                        color: netSettlement >= 0 ? AppTheme.success : AppTheme.danger,
+                      ),
+                    )
                   else if (isProfitReady && netProfit != null)
                     Row(
                       mainAxisSize: MainAxisSize.min,
@@ -1247,15 +1305,23 @@ class _FinanceScreenState extends State<FinanceScreen> {
                   else
                     InkWell(
                       onTap: () => _openSetCostDialog(item),
-                      child: const Row(
-                        children: <Widget>[
-                          Icon(Icons.edit_note_rounded, size: 15, color: AppTheme.warning),
-                          SizedBox(width: 3),
-                          Text(
-                            'Set Unit Cost',
-                            style: TextStyle(fontSize: 11, color: AppTheme.warning, fontWeight: FontWeight.w900),
-                          ),
-                        ],
+                      child: Container(
+                        padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+                        decoration: BoxDecoration(
+                          color: AppTheme.dangerSoft,
+                          borderRadius: BorderRadius.circular(6),
+                        ),
+                        child: const Row(
+                          mainAxisSize: MainAxisSize.min,
+                          children: <Widget>[
+                            Icon(Icons.edit_note_rounded, size: 14, color: AppTheme.danger),
+                            SizedBox(width: 3),
+                            Text(
+                              'Set Purchase Price',
+                              style: TextStyle(fontSize: 11, color: AppTheme.danger, fontWeight: FontWeight.w900),
+                            ),
+                          ],
+                        ),
                       ),
                     ),
                 ],
