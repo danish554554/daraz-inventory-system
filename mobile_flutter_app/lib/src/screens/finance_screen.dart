@@ -1,3 +1,6 @@
+import 'dart:io';
+
+import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
 
 import '../models/app_models.dart';
@@ -1234,9 +1237,35 @@ class _FinanceCsvImportSheetState extends State<FinanceCsvImportSheet> {
     super.dispose();
   }
 
+  String _pickedFileName = '';
+
   void _onTextChange(String val) {
     final rows = _parseCsv(val);
     setState(() => _parsedRowsCount = rows.length);
+  }
+
+  Future<void> _pickCsvFile() async {
+    try {
+      final result = await FilePicker.platform.pickFiles(
+        type: FileType.custom,
+        allowedExtensions: <String>['csv', 'txt'],
+        withData: false,
+      );
+      if (result == null || result.files.isEmpty) return;
+
+      final file = result.files.first;
+      final path = file.path;
+      if (path == null) return;
+
+      final content = await File(path).readAsString();
+      _csvController.text = content;
+      _onTextChange(content);
+      setState(() => _pickedFileName = file.name);
+    } catch (e) {
+      if (mounted) {
+        showAppSnackBar(context, 'Failed to read CSV file: $e', error: true);
+      }
+    }
   }
 
   List<Map<String, String>> _parseCsv(String text) {
@@ -1325,7 +1354,7 @@ class _FinanceCsvImportSheetState extends State<FinanceCsvImportSheet> {
           children: <Widget>[
             SectionHeader(
               title: 'Import Weekly Statement',
-              subtitle: 'Paste your Daraz Seller Center Finance CSV export to calculate true profit.',
+              subtitle: 'Pick a CSV file or paste CSV text from Daraz Seller Center Finance export.',
               action: IconButton(onPressed: () => Navigator.pop(context), icon: const Icon(Icons.close)),
             ),
             if (widget.stores.isNotEmpty) ...<Widget>[
@@ -1348,11 +1377,87 @@ class _FinanceCsvImportSheetState extends State<FinanceCsvImportSheet> {
               ),
             ],
             const SizedBox(height: 14),
+            InkWell(
+              onTap: _pickCsvFile,
+              borderRadius: BorderRadius.circular(14),
+              child: Container(
+                width: double.infinity,
+                padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 16),
+                decoration: BoxDecoration(
+                  color: _pickedFileName.isNotEmpty
+                      ? AppTheme.primary.withValues(alpha: 0.08)
+                      : AppTheme.softGreyColor(context),
+                  borderRadius: BorderRadius.circular(14),
+                  border: Border.all(
+                    color: _pickedFileName.isNotEmpty ? AppTheme.primary : AppTheme.borderColor(context),
+                    width: _pickedFileName.isNotEmpty ? 1.5 : 1,
+                  ),
+                ),
+                child: Row(
+                  children: <Widget>[
+                    Container(
+                      padding: const EdgeInsets.all(8),
+                      decoration: BoxDecoration(
+                        color: _pickedFileName.isNotEmpty ? AppTheme.primary : AppTheme.softGreyColor(context),
+                        borderRadius: BorderRadius.circular(10),
+                      ),
+                      child: Icon(
+                        Icons.file_open_rounded,
+                        size: 20,
+                        color: _pickedFileName.isNotEmpty ? Colors.white : AppTheme.textMutedColor(context),
+                      ),
+                    ),
+                    const SizedBox(width: 12),
+                    Expanded(
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: <Widget>[
+                          Text(
+                            _pickedFileName.isNotEmpty ? _pickedFileName : 'Pick CSV File from Device',
+                            style: TextStyle(
+                              fontSize: 13,
+                              fontWeight: FontWeight.w800,
+                              color: _pickedFileName.isNotEmpty ? AppTheme.primary : AppTheme.textPrimaryColor(context),
+                            ),
+                          ),
+                          const SizedBox(height: 2),
+                          Text(
+                            _pickedFileName.isNotEmpty ? 'Tap to change file' : 'Select .csv export from Downloads',
+                            style: TextStyle(
+                              fontSize: 11,
+                              fontWeight: FontWeight.w600,
+                              color: AppTheme.textMutedColor(context),
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                    Icon(
+                      _pickedFileName.isNotEmpty ? Icons.check_circle_rounded : Icons.arrow_forward_ios_rounded,
+                      size: 18,
+                      color: _pickedFileName.isNotEmpty ? AppTheme.success : AppTheme.textMutedColor(context),
+                    ),
+                  ],
+                ),
+              ),
+            ),
+            const SizedBox(height: 10),
+            Row(
+              children: <Widget>[
+                Expanded(child: Divider(color: AppTheme.borderColor(context))),
+                Padding(
+                  padding: const EdgeInsets.symmetric(horizontal: 12),
+                  child: Text('OR paste CSV text', style: TextStyle(fontSize: 11, fontWeight: FontWeight.w700, color: AppTheme.textMutedColor(context))),
+                ),
+                Expanded(child: Divider(color: AppTheme.borderColor(context))),
+              ],
+            ),
+            const SizedBox(height: 10),
             AppTextField(
               controller: _csvController,
               labelText: 'Paste Daraz Statement CSV content',
               hintText: 'Statement Period,Statement Number,Order Number,Order Line ID,Seller SKU,Fee Name,Amount(Include Tax)...',
-              maxLines: 8,
+              maxLines: 6,
               onChanged: _onTextChange,
             ),
             const SizedBox(height: 8),

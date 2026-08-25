@@ -232,6 +232,21 @@ async function findCostDetails(group, storeId = null) {
         profit_ready: true
       };
     }
+
+    // Partial name match fallback
+    const partialMatch = await Product.findOne({
+      name: { $regex: escapeRegex(productName), $options: "i" },
+      purchase_price: { $gt: 0 }
+    });
+    if (partialMatch) {
+      return {
+        cost_price: Number(partialMatch.purchase_price),
+        matched_product_id: partialMatch._id,
+        matched_product_name: partialMatch.name,
+        matched_by: "name_partial",
+        profit_ready: true
+      };
+    }
   }
 
   return {

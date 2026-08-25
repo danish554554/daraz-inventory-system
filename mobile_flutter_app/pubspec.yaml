@@ -19,6 +19,7 @@ dependencies:
   share_plus: ^10.1.2
   cached_network_image: ^3.4.1
   mobile_scanner: ^5.2.3
+  file_picker: ^8.1.2
 
 dev_dependencies:
   flutter_test:
