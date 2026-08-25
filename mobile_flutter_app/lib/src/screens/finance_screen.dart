@@ -20,6 +20,7 @@ class FinanceScreen extends StatefulWidget {
 
 class _FinanceScreenState extends State<FinanceScreen> {
   bool _loading = true;
+  bool _syncing = false;
   String? _error;
   String _search = '';
   String _activeTab = 'all'; // all, orders, adjustments, pending_cost
@@ -36,10 +37,10 @@ class _FinanceScreenState extends State<FinanceScreen> {
   @override
   void initState() {
     super.initState();
-    _load();
+    _load(autoSyncIfEmpty: true);
   }
 
-  Future<void> _load({bool silent = false}) async {
+  Future<void> _load({bool silent = false, bool autoSyncIfEmpty = false}) async {
     if (!silent) {
       setState(() {
         _loading = true;
@@ -88,6 +89,11 @@ class _FinanceScreenState extends State<FinanceScreen> {
           _stores = storesList;
           _inventory = invList;
         });
+
+        // Auto sync from Daraz API if specific cycle selected and no data exists yet
+        if (autoSyncIfEmpty && _selectedPeriod != 'all' && entriesList.isEmpty) {
+          _syncFromDaraz(period: _selectedPeriod, silent: true);
+        }
       }
     } on ApiException catch (e) {
       if (mounted) setState(() => _error = e.message);
@@ -95,6 +101,35 @@ class _FinanceScreenState extends State<FinanceScreen> {
       if (mounted) setState(() => _error = 'Failed to load finance records.');
     } finally {
       if (mounted) setState(() => _loading = false);
+    }
+  }
+
+  Future<void> _syncFromDaraz({String? period, bool silent = false}) async {
+    final targetPeriod = period ?? _selectedPeriod;
+    if (!silent && mounted) {
+      showAppSnackBar(context, 'Connecting to Daraz API & importing statement...');
+    }
+    setState(() => _syncing = true);
+    try {
+      final response = await ApiClient.instance.post(
+        '/finance/sync',
+        body: <String, dynamic>{
+          if (targetPeriod != 'all') 'statement_period': targetPeriod,
+          if (_selectedStoreId != 'all') 'store_id': _selectedStoreId,
+        },
+      );
+      final respMap = JsonReaders.map(response);
+      final msg = JsonReaders.string(respMap, 'message', 'Statements synchronized successfully.');
+      if (mounted) {
+        showAppSnackBar(context, msg);
+      }
+      await _load(silent: true);
+    } catch (e) {
+      if (mounted) {
+        showAppSnackBar(context, 'Failed to sync from Daraz API: $e', error: true);
+      }
+    } finally {
+      if (mounted) setState(() => _syncing = false);
     }
   }
 
@@ -184,10 +219,15 @@ class _FinanceScreenState extends State<FinanceScreen> {
                             isCurrent: p.isCurrent,
                             hasData: p.hasData,
                             isSelected: isSel,
-                            onTap: () {
-                              setState(() => _selectedPeriod = p.statementPeriod);
+                            onTap: () async {
+                              final targetPeriod = p.statementPeriod;
+                              setState(() => _selectedPeriod = targetPeriod);
                               Navigator.pop(context);
-                              _load();
+                              if (!p.hasData) {
+                                await _syncFromDaraz(period: targetPeriod);
+                              } else {
+                                _load();
+                              }
                             },
                           );
                         }),
@@ -648,10 +688,17 @@ class _FinanceScreenState extends State<FinanceScreen> {
                           mainAxisSize: MainAxisSize.min,
                           children: <Widget>[
                             CircleIconButton(
-                              icon: Icons.upload_file_rounded,
-                              onPressed: _openImportSheet,
+                              icon: Icons.sync_rounded,
+                              onPressed: _syncing ? null : () => _syncFromDaraz(),
                               background: AppTheme.primary,
                               foreground: Colors.white,
+                            ),
+                            const SizedBox(width: 8),
+                            CircleIconButton(
+                              icon: Icons.upload_file_rounded,
+                              onPressed: _openImportSheet,
+                              background: AppTheme.softGreyColor(context),
+                              foreground: AppTheme.textPrimaryColor(context),
                             ),
                             const SizedBox(width: 8),
                             CircleIconButton(
@@ -712,12 +759,25 @@ class _FinanceScreenState extends State<FinanceScreen> {
                       ),
                       const SizedBox(height: 14),
                       if (_filteredEntries.isEmpty)
-                        EmptyState(
-                          title: _entries.isEmpty ? 'No statement records found' : 'No matching entries',
-                          message: _entries.isEmpty
-                              ? 'Import your weekly Daraz payment statement CSV or select another period to see fee breakdowns and profit calculations.'
-                              : 'Try changing your search keywords or filter tab.',
-                          icon: Icons.receipt_long_outlined,
+                        Padding(
+                          padding: const EdgeInsets.only(top: 8, bottom: 20),
+                          child: EmptyState(
+                            title: _entries.isEmpty ? 'No statement records found' : 'No matching entries',
+                            message: _entries.isEmpty
+                                ? (_selectedPeriod != 'all'
+                                    ? 'No imported records for "$_selectedPeriod". Tap below to automatically sync this payout cycle directly from Daraz Seller Center.'
+                                    : 'Import statement records from Daraz API or select a weekly cycle above.')
+                                : 'Try changing your search keywords or filter tab.',
+                            icon: Icons.receipt_long_outlined,
+                            action: _entries.isEmpty
+                                ? PrimaryButton(
+                                    label: _syncing ? 'Syncing statement...' : 'Sync Statement via Daraz API',
+                                    icon: Icons.sync_rounded,
+                                    loading: _syncing,
+                                    onPressed: () => _syncFromDaraz(),
+                                  )
+                                : null,
+                          ),
                         )
                       else
                         ..._filteredEntries.map(_buildFinanceRow),

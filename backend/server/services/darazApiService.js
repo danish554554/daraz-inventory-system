@@ -450,7 +450,6 @@ async function getOrderItems({ storeToken, orderId }) {
   };
 }
 
-
 async function getProducts({
   storeToken,
   filter = "live",
@@ -476,9 +475,86 @@ async function getProducts({
   };
 }
 
+function extractTransactionsFromData(data) {
+  if (!data) return [];
+  if (Array.isArray(data)) return data;
+  if (Array.isArray(data.transactions)) return data.transactions;
+  if (Array.isArray(data.transaction_list)) return data.transaction_list;
+  if (Array.isArray(data.list)) return data.list;
+
+  const direct = deepFindFirstArray(data, (arr) => {
+    if (!arr.length) return false;
+    const first = arr[0];
+    return (
+      first &&
+      typeof first === "object" &&
+      (
+        "transaction_id" in first ||
+        "fee_name" in first ||
+        "order_number" in first ||
+        "order_line_id" in first ||
+        "amount" in first
+      )
+    );
+  });
+
+  if (direct) return direct;
+  return [];
+}
+
+async function getTransactionDetails({
+  storeToken,
+  startTime,
+  endTime,
+  transType,
+  offset = 0,
+  limit = 100
+}) {
+  const params = {
+    offset,
+    limit
+  };
+
+  if (startTime) {
+    params.start_time = typeof startTime === "string" ? startTime : toDarazIso(startTime);
+  }
+  if (endTime) {
+    params.end_time = typeof endTime === "string" ? endTime : toDarazIso(endTime);
+  }
+  if (transType) {
+    params.trans_type = transType;
+  }
+
+  const result = await darazRequest("/finance/transaction/details/get", storeToken, params);
+  const transactions = extractTransactionsFromData(result.data || result);
+
+  return {
+    raw: result,
+    transactions,
+    offset,
+    limit,
+    hasMore: transactions.length === limit
+  };
+}
+
+async function getPayoutStatus({ storeToken, createdAfter }) {
+  const params = {};
+  if (createdAfter) {
+    params.created_after = typeof createdAfter === "string" ? createdAfter : toDarazIso(createdAfter);
+  }
+
+  const result = await darazRequest("/finance/payout/status/get", storeToken, params);
+  return {
+    raw: result,
+    data: result.data || result
+  };
+}
+
 module.exports = {
   darazRequest,
   getOrders,
   getOrderItems,
-  getProducts
+  getProducts,
+  getTransactionDetails,
+  getPayoutStatus
 };

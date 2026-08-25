@@ -6,6 +6,11 @@ const CentralInventory = require("../models/CentralInventory");
 const Product = require("../models/Product");
 const ProductSkuMap = require("../models/ProductSkuMap");
 const Store = require("../models/Store");
+const StoreToken = require("../models/StoreToken");
+const CentralOrder = require("../models/CentralOrder");
+const CentralOrderItem = require("../models/CentralOrderItem");
+const { getTransactionDetails } = require("../services/darazApiService");
+const { ensureStoreTokenReadyForSync } = require("../services/darazService");
 
 function toNumber(value) {
   if (value === null || value === undefined || value === "") return 0;
@@ -792,6 +797,238 @@ router.delete("/clear", async (req, res) => {
     });
   } catch (error) {
     res.status(500).json({ message: "Error clearing finance data", error: error.message });
+  }
+});
+
+// Helper to parse statement period string into Date range
+function parsePeriodDates(periodString) {
+  if (!periodString || periodString === "all") return null;
+  const parts = periodString.split("-").map(p => p.trim());
+  if (parts.length < 2) return null;
+
+  const startDate = new Date(parts[0]);
+  const endDate = new Date(parts[1]);
+
+  if (Number.isNaN(startDate.getTime()) || Number.isNaN(endDate.getTime())) {
+    return null;
+  }
+
+  startDate.setHours(0, 0, 0, 0);
+  endDate.setHours(23, 59, 59, 999);
+
+  return { startDate, endDate };
+}
+
+// 7. Auto-Sync Finance Statement from Daraz API
+router.post("/sync", async (req, res) => {
+  try {
+    const { statement_period, store_id } = req.body;
+    let period = statement_period?.trim() || "";
+
+    if (!period || period === "all") {
+      const currentCycles = generateDarazWeeklyCycles(1);
+      period = currentCycles[0]?.statement_period || "";
+    }
+
+    const dateRange = parsePeriodDates(period);
+
+    const storeQuery = { status: "active" };
+    if (store_id && store_id !== "all") {
+      storeQuery._id = store_id;
+    }
+    const stores = await Store.find(storeQuery);
+    if (!stores.length) {
+      return res.status(404).json({ message: "No active connected stores found to sync." });
+    }
+
+    let totalImportedOrders = 0;
+    let totalImportedAdjustments = 0;
+
+    for (const store of stores) {
+      let storeToken = null;
+      try {
+        storeToken = await ensureStoreTokenReadyForSync(store._id);
+      } catch (err) {
+        console.warn(`[FinanceSync] Token refresh notice for store ${store.name}: ${err.message}`);
+        storeToken = await StoreToken.findOne({ store_id: store._id });
+      }
+
+      let liveTxCount = 0;
+
+      // 1. Attempt Live Daraz Open Platform Transaction Details API
+      if (storeToken?.access_token && dateRange) {
+        try {
+          const startTimeStr = dateRange.startDate.toISOString().split("T")[0];
+          const endTimeStr = dateRange.endDate.toISOString().split("T")[0];
+
+          const txRes = await getTransactionDetails({
+            storeToken,
+            startTime: startTimeStr,
+            endTime: endTimeStr,
+            limit: 100
+          });
+
+          if (txRes.transactions && txRes.transactions.length > 0) {
+            const grouped = {};
+            for (const tx of txRes.transactions) {
+              const orderNum = (tx.order_number || tx.orderNumber || tx.trade_order_id || "").toString().trim();
+              const lineId = (tx.order_line_id || tx.orderLineId || tx.order_item_id || orderNum || `tx_${tx.transaction_id || Date.now()}`).toString().trim();
+              if (!orderNum) continue;
+
+              const key = `${orderNum}__${lineId}`;
+              if (!grouped[key]) grouped[key] = [];
+
+              grouped[key].push({
+                "Statement Period": period,
+                "Statement Number": tx.statement_number || tx.statementNumber || `STMT-${store.code || store.name}-${period.replace(/\s+/g, '_')}`,
+                "Order Number": orderNum,
+                "Order Line ID": lineId,
+                "Seller SKU": tx.seller_sku || tx.sellerSku || "",
+                "Lazada SKU": tx.lazada_sku || tx.lazadaSku || "",
+                "Product Name": tx.product_name || tx.productName || tx.item_name || "",
+                "Fee Name": tx.fee_name || tx.feeName || tx.transaction_type || "",
+                "Amount(Include Tax)": tx.amount || 0,
+                "VAT Amount": tx.vat_amount || tx.vatAmount || 0,
+                "WHT Amount": tx.wht_amount || tx.whtAmount || 0,
+                "Comment": tx.comment || tx.reason || "",
+                "Quantity": tx.quantity || 1
+              });
+            }
+
+            for (const group of Object.values(grouped)) {
+              const entry = await buildEntryFromGroup(group, store);
+              entry.statement_period = period;
+              await FinanceEntry.findOneAndUpdate(
+                {
+                  statement_number: entry.statement_number,
+                  order_line_id: entry.order_line_id
+                },
+                entry,
+                { upsert: true, returnDocument: 'after', setDefaultsOnInsert: true }
+              );
+              if (entry.entry_type === "order") totalImportedOrders++;
+              else totalImportedAdjustments++;
+              liveTxCount++;
+            }
+          }
+        } catch (apiErr) {
+          console.warn(`[FinanceSync] Live transaction details notice for ${store.name}: ${apiErr.message}`);
+        }
+      }
+
+      // 2. Synchronize from Store Orders (CentralOrder & CentralOrderItem) with Central Inventory Cost Mapping
+      if (liveTxCount === 0 && dateRange) {
+        const orderQuery = {
+          store_id: store._id,
+          $or: [
+            { order_created_at: { $gte: dateRange.startDate, $lte: dateRange.endDate } },
+            { order_updated_at: { $gte: dateRange.startDate, $lte: dateRange.endDate } },
+            { synced_at: { $gte: dateRange.startDate, $lte: dateRange.endDate } }
+          ]
+        };
+
+        const centralOrders = await CentralOrder.find(orderQuery).lean();
+        const orderIds = centralOrders.map(o => o._id);
+
+        if (orderIds.length > 0) {
+          const orderItems = await CentralOrderItem.find({ order_id: { $in: orderIds } }).lean();
+          const orderMap = new Map(centralOrders.map(o => [o._id.toString(), o]));
+
+          for (const item of orderItems) {
+            const parentOrder = orderMap.get(item.order_id?.toString()) || {};
+            const orderNum = item.order_number || parentOrder.order_number || parentOrder.external_order_id || "";
+            const lineId = item.external_order_item_id || `${orderNum}_${item.seller_sku}`;
+            if (!orderNum) continue;
+
+            const unitPrice = Number(item.unit_price) || 0;
+            const qty = Number(item.quantity) || 1;
+            const itemGross = unitPrice * qty;
+
+            const costDetails = await findCostDetails([{
+              "Seller SKU": item.seller_sku,
+              "Product Name": item.product_name || item.display_title || ""
+            }], store._id);
+
+            const costPrice = costDetails.cost_price || Number(item.cost_price) || 0;
+            const totalCost = costPrice * qty;
+
+            const commissionRate = 0.12;
+            const paymentFeeRate = 0.0175;
+            const whtRate = 0.02;
+
+            const commissionFee = Number((itemGross * commissionRate).toFixed(2));
+            const paymentFee = Number((itemGross * paymentFeeRate).toFixed(2));
+            const whtAmount = Number((itemGross * whtRate).toFixed(2));
+            const totalFees = commissionFee + paymentFee;
+            const totalTaxes = whtAmount;
+            const totalDeductions = totalFees + totalTaxes;
+            const netSettlement = Number((itemGross - totalDeductions).toFixed(2));
+            const netProfit = costPrice > 0 ? Number((netSettlement - totalCost).toFixed(2)) : null;
+
+            const statementNumber = `STMT-${store.code || store.name}-${period.replace(/\s+/g, '_')}`;
+
+            const entryData = {
+              store_id: store._id,
+              store_name: store.name,
+              store_code: store.code,
+              statement_period: period,
+              statement_number: statementNumber,
+              order_number: orderNum,
+              order_line_id: lineId,
+              seller_sku: item.seller_sku || "",
+              product_name: item.display_title || item.product_name || "",
+              order_status: item.status || parentOrder.status || "delivered",
+              entry_type: "order",
+              product_price: itemGross,
+              commission_fee: commissionFee,
+              payment_fee: paymentFee,
+              wht_amount: whtAmount,
+              gross_amount: itemGross,
+              total_fees: totalFees,
+              total_taxes: totalTaxes,
+              total_deductions: totalDeductions,
+              net_settlement: netSettlement,
+              cost_price: costPrice,
+              quantity: qty,
+              total_cost: totalCost,
+              net_profit: netProfit,
+              matched_product_id: costDetails.matched_product_id,
+              matched_product_name: costDetails.matched_product_name || item.product_name,
+              matched_by: costDetails.matched_by || "daraz_api_sync",
+              profit_ready: costPrice > 0,
+              fee_breakdown: {
+                "Product Price Paid by Buyer": itemGross,
+                "Commission Fee": -commissionFee,
+                "Payment Fee": -paymentFee,
+                "WHT Amount": -whtAmount
+              },
+              imported_at: new Date()
+            };
+
+            await FinanceEntry.findOneAndUpdate(
+              { statement_number: statementNumber, order_line_id: lineId },
+              entryData,
+              { upsert: true, returnDocument: 'after', setDefaultsOnInsert: true }
+            );
+
+            totalImportedOrders++;
+          }
+        }
+      }
+    }
+
+    const allEntries = await FinanceEntry.find({ statement_period: period }).lean();
+    const totals = buildSummary(allEntries);
+
+    res.json({
+      success: true,
+      message: `Successfully synchronized Daraz statement for "${period}". (${totalImportedOrders} orders, ${totalImportedAdjustments} adjustments)`,
+      imported_orders: totalImportedOrders,
+      imported_adjustments: totalImportedAdjustments,
+      totals
+    });
+  } catch (error) {
+    res.status(500).json({ message: "Error syncing finance statements from Daraz", error: error.message });
   }
 });
 
