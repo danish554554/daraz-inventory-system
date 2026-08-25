@@ -59,8 +59,8 @@ async function findOrCreateInventoryBySku({ store_id, seller_sku, product_name =
 
   const existing = await CentralInventory.findOne({ store_id, seller_sku: sku }).populate('store_id', 'name code');
   if (existing) {
-    if (existing.is_archived || existing.is_deleted || existing.status === 'archived') {
-      if (!allowCreate) return null;
+    if (existing.is_archived || existing.is_deleted || existing.status === 'archived' || existing.status === 'inactive' || existing.status === 'deleted') {
+      return null;
     }
     if (Object.keys(update).length) {
       await CentralInventory.updateOne({ _id: existing._id }, { $set: update });
@@ -69,13 +69,22 @@ async function findOrCreateInventoryBySku({ store_id, seller_sku, product_name =
     return existing;
   }
 
+  // Check if this SKU was deleted/archived in any store or product catalog
+  const anyDeleted = await CentralInventory.findOne({
+    seller_sku: sku,
+    $or: [{ is_archived: true }, { is_deleted: true }, { status: { $in: ['archived', 'inactive', 'deleted'] } }]
+  });
+  if (anyDeleted) {
+    return null;
+  }
+
   if (!allowCreate) {
     return null;
   }
 
   const Product = require('../models/Product');
   const existingProd = await Product.findOne({ sku }).lean();
-  if (existingProd?.is_active === false || existingProd?.status === 'archived') {
+  if (existingProd?.is_active === false || existingProd?.status === 'archived' || existingProd?.status === 'inactive') {
     return null;
   }
 
@@ -233,6 +242,14 @@ async function updateTargetStock(target, { type, quantity, product_name, low_sto
 
   const Product = require('../models/Product');
   if (target.seller_sku) {
+    await CentralInventory.updateMany(
+      {
+        seller_sku: target.seller_sku,
+        is_archived: { $ne: true },
+        is_deleted: { $ne: true }
+      },
+      { $set: { stock: stockAfter } }
+    );
     await Product.updateMany(
       { sku: target.seller_sku },
       { $set: { stock: stockAfter } }
@@ -241,6 +258,14 @@ async function updateTargetStock(target, { type, quantity, product_name, low_sto
   if (target.kind === 'merge' && Array.isArray(target.linked_items)) {
     const skus = target.linked_items.map((i) => i.seller_sku).filter(Boolean);
     if (skus.length > 0) {
+      await CentralInventory.updateMany(
+        {
+          seller_sku: { $in: skus },
+          is_archived: { $ne: true },
+          is_deleted: { $ne: true }
+        },
+        { $set: { stock: stockAfter } }
+      );
       await Product.updateMany(
         { sku: { $in: skus } },
         { $set: { stock: stockAfter } }

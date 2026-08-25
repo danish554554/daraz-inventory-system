@@ -388,10 +388,10 @@ async function importProductsForStore(storeId, options = {}) {
           continue;
         }
 
-        // Check if SKU was removed / archived
+        // Check if SKU was removed / archived / deleted
         const archivedItem = await CentralInventory.findOne({
           seller_sku: { $regex: skuRegex },
-          $or: [{ is_archived: true }, { is_deleted: true }, { status: 'archived' }]
+          $or: [{ is_archived: true }, { is_deleted: true }, { status: { $in: ['archived', 'inactive', 'deleted', 'suspended'] } }]
         });
         if (archivedItem) {
           skipped += 1;
@@ -400,7 +400,7 @@ async function importProductsForStore(storeId, options = {}) {
 
         const Product = require('../models/Product');
         const existingProduct = await Product.findOne({ sku: { $regex: skuRegex } }).lean();
-        if (existingProduct?.is_active === false || existingProduct?.status === 'archived') {
+        if (existingProduct?.is_active === false || existingProduct?.status === 'archived' || existingProduct?.status === 'inactive' || existingProduct?.status === 'deleted') {
           skipped += 1;
           continue;
         }

@@ -232,14 +232,34 @@ async function getInventoryRows({ search = '', lowStockOnly = false, storeId = '
   }
 
   const singleRows = [];
+  const singleRowsBySku = new Map();
+
   for (const item of items) {
     if (groupedInventoryIds.has(String(item._id))) continue;
     const skuKey = String(item.seller_sku || '').toLowerCase().trim();
     if (skuKey && seenSkus.has(skuKey)) {
       continue;
     }
-    if (skuKey) seenSkus.add(skuKey);
-    singleRows.push(makeInventoryRow(item));
+
+    if (storeId) {
+      singleRows.push(makeInventoryRow(item));
+    } else {
+      if (!singleRowsBySku.has(skuKey)) {
+        singleRowsBySku.set(skuKey, item);
+      } else {
+        const existing = singleRowsBySku.get(skuKey);
+        // Prefer the record that has positive stock or higher stock
+        if (toNumber(item.stock, 0) > toNumber(existing.stock, 0)) {
+          singleRowsBySku.set(skuKey, item);
+        }
+      }
+    }
+  }
+
+  if (!storeId) {
+    for (const item of singleRowsBySku.values()) {
+      singleRows.push(makeInventoryRow(item));
+    }
   }
 
   let rows = [...mergedRows, ...singleRows].filter((row) => rowMatchesSearch(row, search));
@@ -937,7 +957,41 @@ router.put('/:id/prices', async (req, res, next) => {
 
 router.delete('/:id', async (req, res, next) => {
   try {
-    const item = await CentralInventory.findById(req.params.id);
+    const itemId = req.params.id;
+    let item = await CentralInventory.findById(itemId);
+    let group = null;
+
+    if (!item) {
+      group = await InventoryMergeGroup.findById(itemId);
+    }
+
+    if (group) {
+      const linkedIds = group.inventory_ids || [];
+      const linkedItems = await CentralInventory.find({ _id: { $in: linkedIds } });
+      const skus = linkedItems.map((i) => i.seller_sku).filter(Boolean);
+      if (group.master_sku) skus.push(group.master_sku);
+
+      await CentralInventory.updateMany(
+        { _id: { $in: linkedIds } },
+        { $set: { is_archived: true, is_deleted: true, status: 'archived' } }
+      );
+      if (skus.length > 0) {
+        await CentralInventory.updateMany(
+          { seller_sku: { $in: skus } },
+          { $set: { is_archived: true, is_deleted: true, status: 'archived' } }
+        );
+        await Product.updateMany(
+          { sku: { $in: skus } },
+          { $set: { is_active: false, status: 'archived' } }
+        );
+      }
+      await InventoryMergeGroup.findByIdAndDelete(group._id);
+      return res.json({
+        success: true,
+        message: `Merged product "${group.title || group.master_sku}" removed successfully.`
+      });
+    }
+
     if (!item) return res.status(404).json({ message: 'Inventory item not found' });
 
     await InventoryMergeGroup.updateMany(
@@ -975,34 +1029,53 @@ router.post('/batch-delete', async (req, res, next) => {
       return res.status(400).json({ message: 'No inventory IDs provided for removal.' });
     }
 
-    const items = await CentralInventory.find({ _id: { $in: inventory_ids } });
-    const skus = items.map(i => i.seller_sku).filter(Boolean);
+    const [items, groups] = await Promise.all([
+      CentralInventory.find({ _id: { $in: inventory_ids } }),
+      InventoryMergeGroup.find({ _id: { $in: inventory_ids } })
+    ]);
+
+    const allItemIds = new Set(items.map((i) => String(i._id)));
+    const skus = new Set(items.map((i) => i.seller_sku).filter(Boolean));
+
+    for (const group of groups) {
+      for (const id of group.inventory_ids || []) {
+        allItemIds.add(String(id));
+      }
+      if (group.master_sku) skus.add(group.master_sku);
+    }
+
+    const targetItemIds = Array.from(allItemIds);
+    const targetSkus = Array.from(skus);
 
     await InventoryMergeGroup.updateMany(
-      { inventory_ids: { $in: inventory_ids } },
-      { $pull: { inventory_ids: { $in: inventory_ids } } }
+      { inventory_ids: { $in: targetItemIds } },
+      { $pull: { inventory_ids: { $in: targetItemIds } } }
     );
 
+    if (groups.length > 0) {
+      await InventoryMergeGroup.deleteMany({ _id: { $in: groups.map((g) => g._id) } });
+    }
+
     const updateRes = await CentralInventory.updateMany(
-      { _id: { $in: inventory_ids } },
+      { _id: { $in: targetItemIds } },
       { $set: { is_archived: true, is_deleted: true, status: 'archived' } }
     );
 
-    if (skus.length > 0) {
+    if (targetSkus.length > 0) {
       await Product.updateMany(
-        { sku: { $in: skus } },
+        { sku: { $in: targetSkus } },
         { $set: { is_active: false, status: 'archived' } }
       );
       await CentralInventory.updateMany(
-        { seller_sku: { $in: skus } },
+        { seller_sku: { $in: targetSkus } },
         { $set: { is_archived: true, is_deleted: true, status: 'archived' } }
       );
     }
 
     res.json({
       success: true,
-      message: `${updateRes.modifiedCount || updateRes.matchedCount || 0} product(s) removed successfully.`,
-      deleted_count: updateRes.modifiedCount || updateRes.matchedCount || 0
+      message: `${targetItemIds.length || updateRes.modifiedCount || 0} product(s) removed successfully.`,
+      deleted_count: targetItemIds.length || updateRes.modifiedCount || 0
     });
   } catch (error) { next(error); }
 });

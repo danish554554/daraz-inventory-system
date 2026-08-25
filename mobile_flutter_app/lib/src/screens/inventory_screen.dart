@@ -375,12 +375,21 @@ class _InventoryScreenState extends State<InventoryScreen> {
     );
 
     if (confirmed == true) {
+      final id = item.inventoryId.isNotEmpty ? item.inventoryId : item.id;
+      final removedSku = item.sellerSku.toLowerCase().trim();
+      setState(() {
+        _inventory = _inventory.where((i) {
+          final isSameId = i.id == id || i.inventoryId == id || i.id == item.id || i.inventoryId == item.inventoryId;
+          final isSameSku = removedSku.isNotEmpty && (i.sellerSku.toLowerCase().trim() == removedSku || i.masterSku.toLowerCase().trim() == removedSku);
+          return !isSameId && !isSameSku;
+        }).toList();
+      });
       try {
-        final id = item.inventoryId.isNotEmpty ? item.inventoryId : item.id;
         await ApiClient.instance.delete('/central-inventory/$id');
         await _load(silent: true);
         if (mounted) showAppSnackBar(context, 'Product removed from inventory.');
       } catch (e) {
+        await _load(silent: true);
         if (mounted) showAppSnackBar(context, 'Failed to remove product: $e', error: true);
       }
     }
@@ -414,16 +423,23 @@ class _InventoryScreenState extends State<InventoryScreen> {
     );
 
     if (confirmed == true) {
-      setState(() => _deleting = true);
+      final targetIds = _selectedDeleteInventoryIds.toSet();
+      setState(() {
+        _deleting = true;
+        _inventory = _inventory.where((i) {
+          return !targetIds.contains(i.id) && !targetIds.contains(i.inventoryId);
+        }).toList();
+      });
       try {
         await ApiClient.instance.post(
           '/central-inventory/batch-delete',
-          body: <String, dynamic>{'inventory_ids': _selectedDeleteInventoryIds.toList()},
+          body: <String, dynamic>{'inventory_ids': targetIds.toList()},
         );
         _cancelDeleteMode();
         await _load(silent: true);
         if (mounted) showAppSnackBar(context, '$count products removed successfully.');
       } catch (e) {
+        await _load(silent: true);
         if (mounted) showAppSnackBar(context, 'Failed to remove products: $e', error: true);
       } finally {
         if (mounted) setState(() => _deleting = false);

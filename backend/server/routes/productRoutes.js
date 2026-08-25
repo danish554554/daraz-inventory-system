@@ -335,6 +335,16 @@ router.delete("/:id", async (req, res) => {
     await product.save();
 
     const CentralInventory = require("../models/CentralInventory");
+    const InventoryMergeGroup = require("../models/InventoryMergeGroup");
+    const invItems = await CentralInventory.find({ seller_sku: product.sku });
+    const invIds = invItems.map((i) => i._id);
+    if (invIds.length > 0) {
+      await InventoryMergeGroup.updateMany(
+        { inventory_ids: { $in: invIds } },
+        { $pull: { inventory_ids: { $in: invIds } } }
+      );
+    }
+
     await CentralInventory.updateMany(
       { seller_sku: product.sku },
       { $set: { is_archived: true, is_deleted: true, status: 'archived' } }
