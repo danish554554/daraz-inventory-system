@@ -1,6 +1,6 @@
 const mongoose = require("mongoose");
 
-const financeEntrySchema = new mongoose.Schema(
+const financeEntrySchema = new mongoose.Schema({
     store_id: {
       type: mongoose.Schema.Types.ObjectId,
       ref: "Store",
