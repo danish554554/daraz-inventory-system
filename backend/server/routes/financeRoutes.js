@@ -1144,6 +1144,20 @@ router.post("/sync", async (req, res) => {
               const qty = Number(item.quantity) || 1;
               const itemGross = Number((unitPrice * qty).toFixed(2));
 
+              // Compute Daraz Marketplace Fee Deductions
+              const commissionRate = 0.12; // 12% standard Daraz commission
+              const paymentFeeRate = 0.0175; // 1.75% payment gateway handling fee
+              const whtRate = 0.02; // 2% Income tax withholding (WHT)
+
+              const commissionFee = Number((itemGross * commissionRate).toFixed(2));
+              const paymentFee = Number((itemGross * paymentFeeRate).toFixed(2));
+              const whtAmount = Number((itemGross * whtRate).toFixed(2));
+
+              const totalFees = Number((commissionFee + paymentFee).toFixed(2));
+              const totalTaxes = Number(whtAmount.toFixed(2));
+              const totalDeductions = Number((totalFees + totalTaxes).toFixed(2));
+              const netSettlement = Number((itemGross - totalDeductions).toFixed(2));
+
               const costDetails = await findCostDetails([{
                 "Seller SKU": item.seller_sku,
                 "Product Name": item.product_name || item.display_title || ""
@@ -1166,21 +1180,27 @@ router.post("/sync", async (req, res) => {
                 order_status: item.status || parentOrder.status || "delivered",
                 entry_type: "order",
                 product_price: itemGross,
+                commission_fee: commissionFee,
+                payment_fee: paymentFee,
+                wht_amount: whtAmount,
                 gross_amount: itemGross,
-                total_fees: 0,
-                total_taxes: 0,
-                total_deductions: 0,
-                net_settlement: itemGross,
+                total_fees: totalFees,
+                total_taxes: totalTaxes,
+                total_deductions: totalDeductions,
+                net_settlement: netSettlement,
                 cost_price: costPrice,
                 quantity: qty,
                 total_cost: totalCost,
-                net_profit: costPrice > 0 ? Number((itemGross - totalCost).toFixed(2)) : null,
+                net_profit: costPrice > 0 ? Number((netSettlement - totalCost).toFixed(2)) : null,
                 matched_product_id: costDetails.matched_product_id,
                 matched_product_name: costDetails.matched_product_name || item.product_name,
                 matched_by: costDetails.matched_by || "store_order_sync",
                 profit_ready: costPrice > 0,
                 fee_breakdown: {
-                  "Product Price Paid by Buyer": itemGross
+                  "Product Price Paid by Buyer": itemGross,
+                  "Commission Fee": -commissionFee,
+                  "Payment Fee": -paymentFee,
+                  "Withholding Income Tax (WHT)": -whtAmount
                 },
                 imported_at: new Date()
               };
