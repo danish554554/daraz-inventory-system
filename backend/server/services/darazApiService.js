@@ -491,8 +491,13 @@ function extractTransactionsFromData(data) {
       (
         "transaction_id" in first ||
         "fee_name" in first ||
+        "fee_type" in first ||
+        "transaction_type" in first ||
         "order_number" in first ||
+        "order_no" in first ||
         "order_line_id" in first ||
+        "order_item_id" in first ||
+        "trade_order_id" in first ||
         "amount" in first
       )
     );
