@@ -23,13 +23,15 @@ class ApiClient {
   final http.Client _httpClient = http.Client();
   final Map<String, _CachedApiResponse> _memoryCache = <String, _CachedApiResponse>{};
   final Map<String, Future<dynamic>> _inFlightGets = <String, Future<dynamic>>{};
-  static const Duration _defaultCacheTtl = Duration(seconds: 20);
+  static const Duration _defaultCacheTtl = Duration(seconds: 30);
+  static const Duration _defaultTimeout = Duration(seconds: 45);
 
   Future<dynamic> get(
     String path, {
     Map<String, dynamic>? queryParameters,
     bool requiresAuth = true,
     bool bypassCache = false,
+    Duration? timeout,
   }) {
     return _send(
       method: 'GET',
@@ -37,6 +39,7 @@ class ApiClient {
       queryParameters: queryParameters,
       requiresAuth: requiresAuth,
       bypassCache: bypassCache,
+      timeout: timeout,
     );
   }
 
@@ -50,6 +53,7 @@ class ApiClient {
     Map<String, dynamic>? queryParameters,
     Object? body,
     bool requiresAuth = true,
+    Duration? timeout,
   }) {
     return _send(
       method: 'POST',
@@ -57,6 +61,7 @@ class ApiClient {
       queryParameters: queryParameters,
       body: body,
       requiresAuth: requiresAuth,
+      timeout: timeout,
     );
   }
 
@@ -65,6 +70,7 @@ class ApiClient {
     Map<String, dynamic>? queryParameters,
     Object? body,
     bool requiresAuth = true,
+    Duration? timeout,
   }) {
     return _send(
       method: 'PUT',
@@ -72,6 +78,7 @@ class ApiClient {
       queryParameters: queryParameters,
       body: body,
       requiresAuth: requiresAuth,
+      timeout: timeout,
     );
   }
 
@@ -80,6 +87,7 @@ class ApiClient {
     Map<String, dynamic>? queryParameters,
     Object? body,
     bool requiresAuth = true,
+    Duration? timeout,
   }) {
     return _send(
       method: 'DELETE',
@@ -87,6 +95,7 @@ class ApiClient {
       queryParameters: queryParameters,
       body: body,
       requiresAuth: requiresAuth,
+      timeout: timeout,
     );
   }
 
@@ -94,12 +103,14 @@ class ApiClient {
     String path, {
     Map<String, dynamic>? queryParameters,
     bool requiresAuth = true,
+    Duration? timeout,
   }) async {
     final response = await _sendRaw(
       method: 'GET',
       path: path,
       queryParameters: queryParameters,
       requiresAuth: requiresAuth,
+      timeout: timeout,
     );
     return response.body;
   }
@@ -111,6 +122,7 @@ class ApiClient {
     Object? body,
     bool requiresAuth = true,
     bool bypassCache = false,
+    Duration? timeout,
   }) async {
     final cacheKey = _cacheKey(method, path, queryParameters);
     final isCacheableGet = method.toUpperCase() == 'GET' && !bypassCache;
@@ -131,6 +143,7 @@ class ApiClient {
       queryParameters: queryParameters,
       body: body,
       requiresAuth: requiresAuth,
+      timeout: timeout,
     ).then((response) {
       final contentType = response.headers['content-type'] ?? '';
       dynamic decoded;
@@ -176,6 +189,7 @@ class ApiClient {
     Map<String, dynamic>? queryParameters,
     Object? body,
     bool requiresAuth = true,
+    Duration? timeout,
   }) async {
     final uri = _buildUri(path, queryParameters);
     final headers = <String, String>{
@@ -194,28 +208,29 @@ class ApiClient {
 
     http.Response response;
     final encodedBody = body == null ? null : jsonEncode(body);
+    final reqTimeout = timeout ?? _defaultTimeout;
 
     try {
       switch (method.toUpperCase()) {
         case 'GET':
           response = await _httpClient
               .get(uri, headers: headers)
-              .timeout(const Duration(seconds: 20));
+              .timeout(reqTimeout);
           break;
         case 'POST':
           response = await _httpClient
               .post(uri, headers: headers, body: encodedBody)
-              .timeout(const Duration(seconds: 20));
+              .timeout(reqTimeout);
           break;
         case 'PUT':
           response = await _httpClient
               .put(uri, headers: headers, body: encodedBody)
-              .timeout(const Duration(seconds: 20));
+              .timeout(reqTimeout);
           break;
         case 'DELETE':
           response = await _httpClient
               .delete(uri, headers: headers, body: encodedBody)
-              .timeout(const Duration(seconds: 20));
+              .timeout(reqTimeout);
           break;
         default:
           throw ApiException(message: 'Unsupported request method: $method');

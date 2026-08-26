@@ -19,6 +19,7 @@ class HomeShell extends StatefulWidget {
 
 class _HomeShellState extends State<HomeShell> {
   int _currentIndex = 0;
+  final Set<int> _visitedIndices = <int>{0};
 
   late final List<Widget> _pages = <Widget>[
     DashboardScreen(sessionManager: widget.sessionManager),
@@ -27,15 +28,29 @@ class _HomeShellState extends State<HomeShell> {
     const FinanceScreen(),
     AccountScreen(
       sessionManager: widget.sessionManager,
-      onNavigateToTab: (tabIndex) => setState(() => _currentIndex = tabIndex),
+      onNavigateToTab: (tabIndex) {
+        setState(() {
+          _visitedIndices.add(tabIndex);
+          _currentIndex = tabIndex;
+        });
+      },
     ),
   ];
 
   @override
   Widget build(BuildContext context) {
+    _visitedIndices.add(_currentIndex);
     return Scaffold(
       extendBody: true,
-      body: IndexedStack(index: _currentIndex, children: _pages),
+      body: IndexedStack(
+        index: _currentIndex,
+        children: List<Widget>.generate(_pages.length, (index) {
+          if (!_visitedIndices.contains(index)) {
+            return const SizedBox.shrink();
+          }
+          return _pages[index];
+        }),
+      ),
       bottomNavigationBar: Container(
         margin: const EdgeInsets.fromLTRB(14, 0, 14, 14),
         decoration: BoxDecoration(

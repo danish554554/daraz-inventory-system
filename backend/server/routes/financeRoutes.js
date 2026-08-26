@@ -188,7 +188,8 @@ function detectAdjustmentType(group) {
   };
 }
 
-async function findCostDetails(group, storeId = null) {
+// Fast in-memory or database cost details matcher
+async function findCostDetails(group, storeId = null, preloadedCache = null) {
   const first = group[0] || {};
   const sellerSku = (first["Seller SKU"] || first.seller_sku || "").trim();
   const lazadaSku = (first["Lazada SKU"] || first.lazada_sku || "").trim();
@@ -196,7 +197,96 @@ async function findCostDetails(group, storeId = null) {
 
   const skuCandidates = extractSkuCandidates(sellerSku, lazadaSku);
 
-  // 1. Check CentralInventory (Stock Section - Primary Source with Restock Costs)
+  // If cache is provided, use high-speed in-memory lookup
+  if (preloadedCache) {
+    const { inventoryList, productList, skuMapList, productMap } = preloadedCache;
+
+    // 1. Check CentralInventory (Stock Section - Primary Source with Restock Costs)
+    for (const candidate of skuCandidates) {
+      const candidateNorm = candidate.toLowerCase();
+      const invItem = inventoryList.find((inv) => {
+        if (storeId && String(inv.store_id) !== String(storeId)) return false;
+        return (inv.seller_sku || "").toLowerCase() === candidateNorm && (inv.cost_price > 0 || inv.purchase_price > 0);
+      });
+
+      if (invItem) {
+        const cost = invItem.cost_price > 0 ? invItem.cost_price : invItem.purchase_price;
+        return {
+          cost_price: Number(cost),
+          matched_product_id: invItem._id,
+          matched_product_name: invItem.product_name || invItem.display_title || productName,
+          matched_by: `central_inventory:${candidate}`,
+          profit_ready: true
+        };
+      }
+    }
+
+    // 2. Check Product Catalog
+    for (const candidate of skuCandidates) {
+      const candidateNorm = candidate.toLowerCase();
+      const prod = productList.find((p) => (p.sku || "").toLowerCase() === candidateNorm && p.purchase_price > 0);
+      if (prod) {
+        return {
+          cost_price: Number(prod.purchase_price),
+          matched_product_id: prod._id,
+          matched_product_name: prod.name,
+          matched_by: `primary_sku:${candidate}`,
+          profit_ready: true
+        };
+      }
+
+      const skuMap = skuMapList.find((m) => (m.sku || "").toLowerCase() === candidateNorm);
+      if (skuMap) {
+        const mappedProd = productMap.get(String(skuMap.product_id));
+        if (mappedProd && mappedProd.purchase_price > 0) {
+          return {
+            cost_price: Number(mappedProd.purchase_price),
+            matched_product_id: mappedProd._id,
+            matched_product_name: mappedProd.name,
+            matched_by: `mapped_sku:${candidate}`,
+            profit_ready: true
+          };
+        }
+      }
+    }
+
+    // 3. Match by exact product name
+    if (productName) {
+      const nameNorm = productName.toLowerCase();
+      const prodExact = productList.find((p) => (p.name || "").toLowerCase() === nameNorm && p.purchase_price > 0);
+      if (prodExact) {
+        return {
+          cost_price: Number(prodExact.purchase_price),
+          matched_product_id: prodExact._id,
+          matched_product_name: prodExact.name,
+          matched_by: "name_exact",
+          profit_ready: true
+        };
+      }
+
+      // 4. Partial product name match
+      const prodPartial = productList.find((p) => (p.name || "").toLowerCase().includes(nameNorm) && p.purchase_price > 0);
+      if (prodPartial) {
+        return {
+          cost_price: Number(prodPartial.purchase_price),
+          matched_product_id: prodPartial._id,
+          matched_product_name: prodPartial.name,
+          matched_by: "name_partial",
+          profit_ready: true
+        };
+      }
+    }
+
+    return {
+      cost_price: 0,
+      matched_product_id: null,
+      matched_product_name: "",
+      matched_by: "",
+      profit_ready: false
+    };
+  }
+
+  // Fallback to database queries if no preloaded cache
   for (const candidate of skuCandidates) {
     const invQuery = {
       seller_sku: { $regex: new RegExp(`^${escapeRegex(candidate)}$`, "i") },
@@ -204,7 +294,7 @@ async function findCostDetails(group, storeId = null) {
       is_deleted: { $ne: true }
     };
     if (storeId) invQuery.store_id = storeId;
-    const invItem = await CentralInventory.findOne(invQuery).sort({ cost_price: -1, purchase_price: -1 });
+    const invItem = await CentralInventory.findOne(invQuery).sort({ cost_price: -1, purchase_price: -1 }).lean();
     if (invItem && (invItem.cost_price > 0 || invItem.purchase_price > 0)) {
       const cost = invItem.cost_price > 0 ? invItem.cost_price : invItem.purchase_price;
       return {
@@ -217,9 +307,8 @@ async function findCostDetails(group, storeId = null) {
     }
   }
 
-  // 2. Check Product catalog
   for (const candidate of skuCandidates) {
-    let product = await Product.findOne({ sku: { $regex: new RegExp(`^${escapeRegex(candidate)}$`, "i") } });
+    let product = await Product.findOne({ sku: { $regex: new RegExp(`^${escapeRegex(candidate)}$`, "i") } }).lean();
     if (product && product.purchase_price > 0) {
       return {
         cost_price: Number(product.purchase_price),
@@ -230,9 +319,9 @@ async function findCostDetails(group, storeId = null) {
       };
     }
 
-    const skuMap = await ProductSkuMap.findOne({ sku: { $regex: new RegExp(`^${escapeRegex(candidate)}$`, "i") } });
+    const skuMap = await ProductSkuMap.findOne({ sku: { $regex: new RegExp(`^${escapeRegex(candidate)}$`, "i") } }).lean();
     if (skuMap) {
-      product = await Product.findById(skuMap.product_id);
+      product = await Product.findById(skuMap.product_id).lean();
       if (product && product.purchase_price > 0) {
         return {
           cost_price: Number(product.purchase_price),
@@ -245,12 +334,11 @@ async function findCostDetails(group, storeId = null) {
     }
   }
 
-  // 3. Match by exact product name
   if (productName) {
     const product = await Product.findOne({
       name: { $regex: `^${escapeRegex(productName)}$`, $options: "i" },
       purchase_price: { $gt: 0 }
-    });
+    }).lean();
     if (product) {
       return {
         cost_price: Number(product.purchase_price),
@@ -261,11 +349,10 @@ async function findCostDetails(group, storeId = null) {
       };
     }
 
-    // 4. Partial product name match
     const partialMatch = await Product.findOne({
       name: { $regex: escapeRegex(productName), $options: "i" },
       purchase_price: { $gt: 0 }
-    });
+    }).lean();
     if (partialMatch) {
       return {
         cost_price: Number(partialMatch.purchase_price),
@@ -286,7 +373,7 @@ async function findCostDetails(group, storeId = null) {
   };
 }
 
-async function buildEntryFromGroup(group, defaultStore = null) {
+async function buildEntryFromGroup(group, defaultStore = null, preloadedCache = null) {
   const first = group[0] || {};
   const adjustmentMeta = detectAdjustmentType(group);
 
@@ -423,7 +510,7 @@ async function buildEntryFromGroup(group, defaultStore = null) {
   };
 
   if (adjustmentMeta.entryType === "order") {
-    costDetails = await findCostDetails(group, defaultStore?._id || null);
+    costDetails = await findCostDetails(group, defaultStore?._id || null, preloadedCache);
   }
 
   const totalCost =
@@ -596,18 +683,18 @@ function generateDarazWeeklyCycles(count = 12) {
     return `${dd} ${mmm} ${yyyy}`;
   }
 
-  for (let i = 0; i < count; i += 1) {
-    const monday = new Date(currentMonday);
-    monday.setDate(currentMonday.getDate() - (i * 7));
+  for (let i = 0; i < count; i++) {
+    const mon = new Date(currentMonday);
+    mon.setDate(currentMonday.getDate() - i * 7);
 
-    const sunday = new Date(monday);
-    sunday.setDate(monday.getDate() + 6);
+    const sun = new Date(mon);
+    sun.setDate(mon.getDate() + 6);
 
-    const periodString = `${formatDarazDate(monday)} - ${formatDarazDate(sunday)}`;
+    const periodStr = `${formatDarazDate(mon)} - ${formatDarazDate(sun)}`;
     cycles.push({
-      statement_period: periodString,
-      start_date: monday.toISOString(),
-      end_date: sunday.toISOString(),
+      statement_period: periodStr,
+      start_date: mon,
+      end_date: sun,
       is_current: i === 0
     });
   }
@@ -619,19 +706,18 @@ function generateDarazWeeklyCycles(count = 12) {
 // ROUTES
 // -----------------------------------------------------------------------------
 
-// 1. Get Weekly Statement Periods
+// 1. Get Statement Periods list (Weekly cycles + existing statement periods)
 router.get("/periods", async (req, res) => {
   try {
-    const distinctPeriods = await FinanceEntry.distinct("statement_period", {
-      statement_period: { $exists: true, $nin: ["", null] }
+    const weeklyCycles = generateDarazWeeklyCycles(16);
+    const existingPeriods = await FinanceEntry.distinct("statement_period", {
+      statement_period: { $ne: "" }
     });
 
-    const generatedCycles = generateDarazWeeklyCycles(16);
-    const existingSet = new Set(distinctPeriods.map(p => p.trim()));
-
-    // Combine distinct periods from DB and official calendar cycles
+    const existingSet = new Set(existingPeriods);
     const periodList = [];
-    for (const cycle of generatedCycles) {
+
+    for (const cycle of weeklyCycles) {
       periodList.push({
         statement_period: cycle.statement_period,
         has_data: existingSet.has(cycle.statement_period),
@@ -740,6 +826,9 @@ router.get("/", async (req, res) => {
 // Deduplication cleanup utility to remove duplicate order_line_id records if any exist
 async function cleanupDuplicateFinanceEntries() {
   try {
+    // Also remove any legacy synthetic entries from old estimated sync runs
+    await FinanceEntry.deleteMany({ matched_by: "daraz_api_sync" });
+
     const duplicates = await FinanceEntry.aggregate([
       { $group: { _id: "$order_line_id", count: { $sum: 1 }, docs: { $push: "$_id" } } },
       { $match: { count: { $gt: 1 } } }
@@ -755,7 +844,7 @@ async function cleanupDuplicateFinanceEntries() {
   }
 }
 
-// 4. Import Statement CSV / Excel Rows
+// 4. Import Statement CSV / Excel Rows (High-speed batch processing)
 router.post("/import-csv", async (req, res) => {
   try {
     const { rows = [], store_id = "" } = req.body;
@@ -766,27 +855,37 @@ router.post("/import-csv", async (req, res) => {
 
     let defaultStore = null;
     if (store_id) {
-      defaultStore = await Store.findById(store_id);
+      defaultStore = await Store.findById(store_id).lean();
     }
+
+    // Pre-load all inventories and products into memory for lightning-fast matching
+    const [inventoryList, productList, skuMapList] = await Promise.all([
+      CentralInventory.find({ is_archived: { $ne: true }, is_deleted: { $ne: true } }).lean(),
+      Product.find().lean(),
+      ProductSkuMap.find().lean()
+    ]);
+
+    const productMap = new Map(productList.map((p) => [String(p._id), p]));
+    const preloadedCache = { inventoryList, productList, skuMapList, productMap };
 
     const groupedRows = groupRowsByOrder(rows);
     const preparedEntries = [];
 
     for (const group of groupedRows) {
-      const entry = await buildEntryFromGroup(group, defaultStore);
+      const entry = await buildEntryFromGroup(group, defaultStore, preloadedCache);
       preparedEntries.push(entry);
     }
 
-    for (const entry of preparedEntries) {
-      await FinanceEntry.findOneAndUpdate(
-        { order_line_id: entry.order_line_id },
-        entry,
-        {
-          upsert: true,
-          returnDocument: 'after',
-          setDefaultsOnInsert: true
+    // Fast bulk write
+    if (preparedEntries.length > 0) {
+      const bulkOps = preparedEntries.map((entry) => ({
+        updateOne: {
+          filter: { order_line_id: entry.order_line_id },
+          update: { $set: entry },
+          upsert: true
         }
-      );
+      }));
+      await FinanceEntry.bulkWrite(bulkOps, { ordered: false });
     }
 
     await cleanupDuplicateFinanceEntries();
@@ -926,25 +1025,25 @@ router.post("/sync", async (req, res) => {
     let totalImportedOrders = 0;
     let totalImportedAdjustments = 0;
 
-    for (const store of stores) {
-      // Clean previous fallback/auto-sync entries for this store and period to prevent duplicates
-      await FinanceEntry.deleteMany({
-        store_id: store._id,
-        statement_period: period,
-        matched_by: "daraz_api_sync"
-      });
+    // Pre-load all inventories and products into memory for lightning-fast matching
+    const [inventoryList, productList, skuMapList] = await Promise.all([
+      CentralInventory.find({ is_archived: { $ne: true }, is_deleted: { $ne: true } }).lean(),
+      Product.find().lean(),
+      ProductSkuMap.find().lean()
+    ]);
 
+    const productMap = new Map(productList.map((p) => [String(p._id), p]));
+    const preloadedCache = { inventoryList, productList, skuMapList, productMap };
+
+    for (const store of stores) {
       let storeToken = null;
       try {
         storeToken = await ensureStoreTokenReadyForSync(store._id);
       } catch (err) {
-        console.warn(`[FinanceSync] Token refresh notice for store ${store.name}: ${err.message}`);
         storeToken = await StoreToken.findOne({ store_id: store._id });
       }
 
-      let liveTxCount = 0;
-
-      // 1. Attempt Live Daraz Open Platform Transaction Details API
+      // Live Daraz Open Platform Transaction Details API
       if (storeToken?.access_token && dateRange) {
         try {
           const startTimeStr = dateRange.startDate.toISOString().split("T")[0];
@@ -984,121 +1083,28 @@ router.post("/sync", async (req, res) => {
               });
             }
 
+            const entries = [];
             for (const group of Object.values(grouped)) {
-              const entry = await buildEntryFromGroup(group, store);
+              const entry = await buildEntryFromGroup(group, store, preloadedCache);
               entry.statement_period = period;
-              await FinanceEntry.findOneAndUpdate(
-                { order_line_id: entry.order_line_id },
-                entry,
-                { upsert: true, returnDocument: 'after', setDefaultsOnInsert: true }
-              );
+              entries.push(entry);
               if (entry.entry_type === "order") totalImportedOrders++;
               else totalImportedAdjustments++;
-              liveTxCount++;
+            }
+
+            if (entries.length > 0) {
+              const bulkOps = entries.map((entry) => ({
+                updateOne: {
+                  filter: { order_line_id: entry.order_line_id },
+                  update: { $set: entry },
+                  upsert: true
+                }
+              }));
+              await FinanceEntry.bulkWrite(bulkOps, { ordered: false });
             }
           }
         } catch (apiErr) {
-          console.warn(`[FinanceSync] Live transaction details notice for ${store.name}: ${apiErr.message}`);
-        }
-      }
-
-      // 2. Synchronize from Store Orders (CentralOrder & CentralOrderItem) with Central Inventory Cost Mapping
-      if (liveTxCount === 0 && dateRange) {
-        const orderQuery = {
-          store_id: store._id,
-          $or: [
-            { order_created_at: { $gte: dateRange.startDate, $lte: dateRange.endDate } },
-            { order_updated_at: { $gte: dateRange.startDate, $lte: dateRange.endDate } },
-            { synced_at: { $gte: dateRange.startDate, $lte: dateRange.endDate } }
-          ]
-        };
-
-        const centralOrders = await CentralOrder.find(orderQuery).lean();
-        const orderIds = centralOrders.map(o => o._id);
-
-        if (orderIds.length > 0) {
-          const orderItems = await CentralOrderItem.find({ order_id: { $in: orderIds } }).lean();
-          const orderMap = new Map(centralOrders.map(o => [o._id.toString(), o]));
-
-          for (const item of orderItems) {
-            const parentOrder = orderMap.get(item.order_id?.toString()) || {};
-            const orderNum = item.order_number || parentOrder.order_number || parentOrder.external_order_id || "";
-            const lineId = item.external_order_item_id || `${orderNum}_${item.seller_sku}`;
-            if (!orderNum) continue;
-
-            const unitPrice = Number(item.unit_price) || 0;
-            const qty = Number(item.quantity) || 1;
-            const itemGross = unitPrice * qty;
-
-            const costDetails = await findCostDetails([{
-              "Seller SKU": item.seller_sku,
-              "Product Name": item.product_name || item.display_title || ""
-            }], store._id);
-
-            const costPrice = costDetails.cost_price || Number(item.cost_price) || 0;
-            const totalCost = costPrice * qty;
-
-            const commissionRate = 0.12;
-            const paymentFeeRate = 0.0175;
-            const whtRate = 0.02;
-
-            const commissionFee = Number((itemGross * commissionRate).toFixed(2));
-            const paymentFee = Number((itemGross * paymentFeeRate).toFixed(2));
-            const whtAmount = Number((itemGross * whtRate).toFixed(2));
-            const totalFees = commissionFee + paymentFee;
-            const totalTaxes = whtAmount;
-            const totalDeductions = totalFees + totalTaxes;
-            const netSettlement = Number((itemGross - totalDeductions).toFixed(2));
-            const netProfit = costPrice > 0 ? Number((netSettlement - totalCost).toFixed(2)) : null;
-
-            const statementNumber = `STMT-${store.code || store.name}-${period.replace(/\s+/g, '_')}`;
-
-            const entryData = {
-              store_id: store._id,
-              store_name: store.name,
-              store_code: store.code,
-              statement_period: period,
-              statement_number: statementNumber,
-              order_number: orderNum,
-              order_line_id: lineId,
-              seller_sku: item.seller_sku || "",
-              product_name: item.display_title || item.product_name || "",
-              order_status: item.status || parentOrder.status || "delivered",
-              entry_type: "order",
-              product_price: itemGross,
-              commission_fee: commissionFee,
-              payment_fee: paymentFee,
-              wht_amount: whtAmount,
-              gross_amount: itemGross,
-              total_fees: totalFees,
-              total_taxes: totalTaxes,
-              total_deductions: totalDeductions,
-              net_settlement: netSettlement,
-              cost_price: costPrice,
-              quantity: qty,
-              total_cost: totalCost,
-              net_profit: netProfit,
-              matched_product_id: costDetails.matched_product_id,
-              matched_product_name: costDetails.matched_product_name || item.product_name,
-              matched_by: costDetails.matched_by || "daraz_api_sync",
-              profit_ready: costPrice > 0,
-              fee_breakdown: {
-                "Product Price Paid by Buyer": itemGross,
-                "Commission Fee": -commissionFee,
-                "Payment Fee": -paymentFee,
-                "WHT Amount": -whtAmount
-              },
-              imported_at: new Date()
-            };
-
-            await FinanceEntry.findOneAndUpdate(
-              { order_line_id: lineId },
-              entryData,
-              { upsert: true, returnDocument: 'after', setDefaultsOnInsert: true }
-            );
-
-            totalImportedOrders++;
-          }
+          console.warn(`[FinanceSync] Live transaction notice for ${store.name}: ${apiErr.message}`);
         }
       }
     }
@@ -1108,9 +1114,13 @@ router.post("/sync", async (req, res) => {
     const allEntries = await FinanceEntry.find({ statement_period: period }).lean();
     const totals = buildSummary(allEntries);
 
+    const message = totalImportedOrders > 0 || totalImportedAdjustments > 0
+      ? `Successfully synchronized Daraz statement for "${period}". (${totalImportedOrders} orders, ${totalImportedAdjustments} adjustments)`
+      : `No live transaction entries returned by Daraz API for "${period}". Please import your Daraz Seller Center Statement CSV/Excel file.`;
+
     res.json({
       success: true,
-      message: `Successfully synchronized Daraz statement for "${period}". (${totalImportedOrders} orders, ${totalImportedAdjustments} adjustments)`,
+      message,
       imported_orders: totalImportedOrders,
       imported_adjustments: totalImportedAdjustments,
       totals

@@ -131,16 +131,19 @@ class MetricCard extends StatelessWidget {
                 ),
             ],
           ),
-          const SizedBox(height: 13),
-          Text(
-            value,
-            maxLines: 1,
-            overflow: TextOverflow.ellipsis,
-            style: TextStyle(
-              fontSize: 22,
-              fontWeight: FontWeight.w900,
-              letterSpacing: -0.6,
-              color: AppTheme.textPrimaryColor(context),
+          const SizedBox(height: 12),
+          FittedBox(
+            fit: BoxFit.scaleDown,
+            alignment: Alignment.centerLeft,
+            child: Text(
+              value,
+              maxLines: 1,
+              style: TextStyle(
+                fontSize: 20,
+                fontWeight: FontWeight.w900,
+                letterSpacing: -0.5,
+                color: AppTheme.textPrimaryColor(context),
+              ),
             ),
           ),
           const SizedBox(height: 3),

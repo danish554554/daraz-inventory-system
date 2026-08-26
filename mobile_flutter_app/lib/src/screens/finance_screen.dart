@@ -37,10 +37,10 @@ class _FinanceScreenState extends State<FinanceScreen> {
   @override
   void initState() {
     super.initState();
-    _load(autoSyncIfEmpty: true);
+    _load();
   }
 
-  Future<void> _load({bool silent = false, bool autoSyncIfEmpty = false}) async {
+  Future<void> _load({bool silent = false}) async {
     if (!silent) {
       setState(() {
         _loading = true;
@@ -69,9 +69,9 @@ class _FinanceScreenState extends State<FinanceScreen> {
           },
           bypassCache: true,
         ),
-        ApiClient.instance.get('/finance/periods', bypassCache: true),
-        ApiClient.instance.get('/stores', bypassCache: true),
-        ApiClient.instance.get('/central-inventory', bypassCache: true),
+        ApiClient.instance.get('/finance/periods'),
+        ApiClient.instance.get('/stores'),
+        ApiClient.instance.get('/central-inventory'),
       ]);
 
       final summaryMap = JsonReaders.map(results[0]);
@@ -89,11 +89,6 @@ class _FinanceScreenState extends State<FinanceScreen> {
           _stores = storesList;
           _inventory = invList;
         });
-
-        // Auto sync from Daraz API if specific cycle selected and no data exists yet
-        if (autoSyncIfEmpty && _selectedPeriod != 'all' && entriesList.isEmpty) {
-          _syncFromDaraz(period: _selectedPeriod, silent: true);
-        }
       }
     } on ApiException catch (e) {
       if (mounted) setState(() => _error = e.message);
@@ -117,6 +112,7 @@ class _FinanceScreenState extends State<FinanceScreen> {
           if (targetPeriod != 'all') 'statement_period': targetPeriod,
           if (_selectedStoreId != 'all') 'store_id': _selectedStoreId,
         },
+        timeout: const Duration(seconds: 90),
       );
       final respMap = JsonReaders.map(response);
       final msg = JsonReaders.string(respMap, 'message', 'Statements synchronized successfully.');
@@ -1226,43 +1222,62 @@ class _FinanceScreenState extends State<FinanceScreen> {
                 borderRadius: BorderRadius.circular(10),
               ),
               child: Row(
-                mainAxisAlignment: MainAxisAlignment.spaceBetween,
                 children: <Widget>[
-                  if (isAdjustment)
-                    const StatusChip(label: 'Adjustment / Reversal', color: AppTheme.warning, softColor: AppTheme.warningSoft)
-                  else ...<Widget>[
-                    Row(
-                      mainAxisSize: MainAxisSize.min,
-                      children: <Widget>[
-                        Text(
-                          'Cost: ',
-                          style: TextStyle(fontSize: 11, color: AppTheme.textMutedColor(context), fontWeight: FontWeight.w700),
-                        ),
-                        Text(
-                          isProfitReady ? 'PKR ${Formatters.money(totalCost)}' : 'Not set',
-                          style: TextStyle(
-                            fontSize: 11,
-                            fontWeight: FontWeight.w900,
-                            color: isProfitReady ? AppTheme.textPrimaryColor(context) : AppTheme.danger,
+                  Expanded(
+                    child: isAdjustment
+                        ? const StatusChip(
+                            label: 'Adjustment / Reversal',
+                            color: AppTheme.warning,
+                            softColor: AppTheme.warningSoft,
+                          )
+                        : Row(
+                            mainAxisSize: MainAxisSize.min,
+                            children: <Widget>[
+                              Text(
+                                'Cost: ',
+                                style: TextStyle(
+                                  fontSize: 11,
+                                  color: AppTheme.textMutedColor(context),
+                                  fontWeight: FontWeight.w700,
+                                ),
+                              ),
+                              Flexible(
+                                child: Text(
+                                  isProfitReady ? 'PKR ${Formatters.money(totalCost)}' : 'Not set',
+                                  overflow: TextOverflow.ellipsis,
+                                  style: TextStyle(
+                                    fontSize: 11,
+                                    fontWeight: FontWeight.w900,
+                                    color: isProfitReady
+                                        ? AppTheme.textPrimaryColor(context)
+                                        : AppTheme.danger,
+                                  ),
+                                ),
+                              ),
+                              if (isProfitReady && item.matchedBy.isNotEmpty) ...<Widget>[
+                                const SizedBox(width: 4),
+                                Container(
+                                  padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 1),
+                                  decoration: BoxDecoration(
+                                    color: AppTheme.primary.withValues(alpha: 0.1),
+                                    borderRadius: BorderRadius.circular(4),
+                                  ),
+                                  child: Text(
+                                    item.matchedBy.contains(':')
+                                        ? item.matchedBy.split(':')[0]
+                                        : item.matchedBy,
+                                    style: const TextStyle(
+                                      fontSize: 9,
+                                      fontWeight: FontWeight.w800,
+                                      color: AppTheme.primary,
+                                    ),
+                                  ),
+                                ),
+                              ],
+                            ],
                           ),
-                        ),
-                        if (isProfitReady && item.matchedBy.isNotEmpty) ...<Widget>[
-                          const SizedBox(width: 4),
-                          Container(
-                            padding: const EdgeInsets.symmetric(horizontal: 5, vertical: 1),
-                            decoration: BoxDecoration(
-                              color: AppTheme.primary.withValues(alpha: 0.1),
-                              borderRadius: BorderRadius.circular(4),
-                            ),
-                            child: Text(
-                              item.matchedBy.contains(':') ? item.matchedBy.split(':')[0] : item.matchedBy,
-                              style: const TextStyle(fontSize: 9, fontWeight: FontWeight.w800, color: AppTheme.primary),
-                            ),
-                          ),
-                        ],
-                      ],
-                    ),
-                  ],
+                  ),
+                  const SizedBox(width: 8),
                   if (isAdjustment)
                     Text(
                       'Impact: PKR ${Formatters.money(netSettlement)}',
@@ -1284,17 +1299,18 @@ class _FinanceScreenState extends State<FinanceScreen> {
                             fontWeight: FontWeight.w900,
                           ),
                         ),
-                        const SizedBox(width: 6),
+                        const SizedBox(width: 4),
                         Container(
-                          padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                          padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 1),
                           decoration: BoxDecoration(
-                            color: (margin >= 0 ? AppTheme.success : AppTheme.danger).withValues(alpha: 0.15),
-                            borderRadius: BorderRadius.circular(6),
+                            color: (margin >= 0 ? AppTheme.success : AppTheme.danger)
+                                .withValues(alpha: 0.15),
+                            borderRadius: BorderRadius.circular(4),
                           ),
                           child: Text(
                             '${margin >= 0 ? '+' : ''}${margin.toStringAsFixed(0)}%',
                             style: TextStyle(
-                              fontSize: 10,
+                              fontSize: 9,
                               fontWeight: FontWeight.w900,
                               color: margin >= 0 ? AppTheme.success : AppTheme.danger,
                             ),
@@ -1306,7 +1322,7 @@ class _FinanceScreenState extends State<FinanceScreen> {
                     InkWell(
                       onTap: () => _openSetCostDialog(item),
                       child: Container(
-                        padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+                        padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2.5),
                         decoration: BoxDecoration(
                           color: AppTheme.dangerSoft,
                           borderRadius: BorderRadius.circular(6),
@@ -1314,11 +1330,15 @@ class _FinanceScreenState extends State<FinanceScreen> {
                         child: const Row(
                           mainAxisSize: MainAxisSize.min,
                           children: <Widget>[
-                            Icon(Icons.edit_note_rounded, size: 14, color: AppTheme.danger),
-                            SizedBox(width: 3),
+                            Icon(Icons.edit_note_rounded, size: 13, color: AppTheme.danger),
+                            SizedBox(width: 2),
                             Text(
-                              'Set Purchase Price',
-                              style: TextStyle(fontSize: 11, color: AppTheme.danger, fontWeight: FontWeight.w900),
+                              'Set Price',
+                              style: TextStyle(
+                                fontSize: 10.5,
+                                color: AppTheme.danger,
+                                fontWeight: FontWeight.w900,
+                              ),
                             ),
                           ],
                         ),
