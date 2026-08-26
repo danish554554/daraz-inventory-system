@@ -511,23 +511,21 @@ async function getTransactionDetails({
   storeToken,
   startTime,
   endTime,
-  transType,
+  transType = "-1",
   offset = 0,
   limit = 100
 }) {
   const params = {
     offset,
-    limit
+    limit,
+    trans_type: transType
   };
 
   if (startTime) {
-    params.start_time = typeof startTime === "string" ? startTime : toDarazIso(startTime);
+    params.start_time = typeof startTime === "string" ? startTime.split("T")[0] : toDarazIso(startTime);
   }
   if (endTime) {
-    params.end_time = typeof endTime === "string" ? endTime : toDarazIso(endTime);
-  }
-  if (transType) {
-    params.trans_type = transType;
+    params.end_time = typeof endTime === "string" ? endTime.split("T")[0] : toDarazIso(endTime);
   }
 
   const result = await darazRequest("/finance/transaction/details/get", storeToken, params);
