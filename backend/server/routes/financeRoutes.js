@@ -891,6 +891,15 @@ router.post("/import-csv", async (req, res) => {
 
     // Fast bulk write
     if (preparedEntries.length > 0) {
+      // Delete any old sync-estimated entries for orders that are now being imported from real CSV data
+      const orderNumbers = [...new Set(preparedEntries.map(e => e.order_number).filter(Boolean))];
+      if (orderNumbers.length > 0) {
+        await FinanceEntry.deleteMany({
+          order_number: { $in: orderNumbers },
+          matched_by: { $in: ["store_order_sync", "store_order_sync_estimated", "daraz_api_sync"] }
+        });
+      }
+
       const bulkOps = preparedEntries.map((entry) => ({
         updateOne: {
           filter: { order_line_id: entry.order_line_id },
@@ -1153,21 +1162,39 @@ router.post("/sync", async (req, res) => {
               const lineId = item.external_order_item_id || `${orderNum}_${item.seller_sku}`;
               if (!orderNum) continue;
 
+              // Skip if a CSV-imported entry already exists for this order
+              const existingCsvEntry = await FinanceEntry.findOne({
+                order_number: orderNum,
+                matched_by: { $nin: ["store_order_sync", "store_order_sync_estimated"] }
+              }).lean();
+              if (existingCsvEntry) continue;
+
               const unitPrice = Number(item.unit_price) || Number(item.item_price) || Number(item.paid_price) || 0;
               const qty = Number(item.quantity) || 1;
               const itemGross = Number((unitPrice * qty).toFixed(2));
 
-              // Compute Daraz Marketplace Fee Deductions
-              const commissionRate = 0.12; // 12% standard Daraz commission
-              const paymentFeeRate = 0.0175; // 1.75% payment gateway handling fee
-              const whtRate = 0.02; // 2% Income tax withholding (WHT)
+              // Comprehensive Daraz Marketplace Fee Estimates
+              // These rates approximate real Daraz Pakistan deductions
+              const commissionRate = 0.12;       // 12% Commission Fee
+              const paymentFeeRate = 0.0175;     // 1.75% Payment Fee
+              const handlingFeeRate = 0.01;       // ~1% Handling Fee
+              const cofundedVoucherRate = 0.015;  // ~1.5% Co-funded Voucher Max
+              const freeShippingMaxRate = 0.035;  // ~3.5% Free Shipping Max Fee
+              const incomeTaxRate = 0.02;         // 2% Income Tax Withholding (WHT)
+              const salesTaxRate = 0.02;          // 2% Sales Tax Withholding
+              const shippingFeeEstimate = 250;    // Flat ~PKR 250 average shipping fee
 
               const commissionFee = Number((itemGross * commissionRate).toFixed(2));
               const paymentFee = Number((itemGross * paymentFeeRate).toFixed(2));
-              const whtAmount = Number((itemGross * whtRate).toFixed(2));
+              const handlingFee = Number((itemGross * handlingFeeRate).toFixed(2));
+              const cofundedVoucherFee = Number((itemGross * cofundedVoucherRate).toFixed(2));
+              const freeShippingMaxFee = Number((itemGross * freeShippingMaxRate).toFixed(2));
+              const incomeTaxWithholding = Number((itemGross * incomeTaxRate).toFixed(2));
+              const salesTaxWithholding = Number((itemGross * salesTaxRate).toFixed(2));
+              const shippingFee = shippingFeeEstimate;
 
-              const totalFees = Number((commissionFee + paymentFee).toFixed(2));
-              const totalTaxes = Number(whtAmount.toFixed(2));
+              const totalFees = Number((commissionFee + paymentFee + handlingFee + cofundedVoucherFee + freeShippingMaxFee + shippingFee).toFixed(2));
+              const totalTaxes = Number((incomeTaxWithholding + salesTaxWithholding).toFixed(2));
               const totalDeductions = Number((totalFees + totalTaxes).toFixed(2));
               const netSettlement = Number((itemGross - totalDeductions).toFixed(2));
 
@@ -1195,7 +1222,13 @@ router.post("/sync", async (req, res) => {
                 product_price: itemGross,
                 commission_fee: commissionFee,
                 payment_fee: paymentFee,
-                wht_amount: whtAmount,
+                handling_fee: handlingFee,
+                cofunded_voucher_fee: cofundedVoucherFee,
+                free_shipping_max_fee: freeShippingMaxFee,
+                shipping_fee: shippingFee,
+                income_tax_withholding: incomeTaxWithholding,
+                sales_tax_withholding: salesTaxWithholding,
+                wht_amount: 0,
                 gross_amount: itemGross,
                 total_fees: totalFees,
                 total_taxes: totalTaxes,
@@ -1207,13 +1240,18 @@ router.post("/sync", async (req, res) => {
                 net_profit: costPrice > 0 ? Number((netSettlement - totalCost).toFixed(2)) : null,
                 matched_product_id: costDetails.matched_product_id,
                 matched_product_name: costDetails.matched_product_name || item.product_name,
-                matched_by: costDetails.matched_by || "store_order_sync",
+                matched_by: "store_order_sync_estimated",
                 profit_ready: costPrice > 0,
                 fee_breakdown: {
                   "Product Price Paid by Buyer": itemGross,
-                  "Commission Fee": -commissionFee,
-                  "Payment Fee": -paymentFee,
-                  "Withholding Income Tax (WHT)": -whtAmount
+                  "Commission Fee (est.)": -commissionFee,
+                  "Payment Fee (est.)": -paymentFee,
+                  "Handling Fee (est.)": -handlingFee,
+                  "Co-funded Voucher Max (est.)": -cofundedVoucherFee,
+                  "Free Shipping Max Fee (est.)": -freeShippingMaxFee,
+                  "Shipping Fee (est.)": -shippingFee,
+                  "Income Tax Withholding (est.)": -incomeTaxWithholding,
+                  "Sales Tax Withholding (est.)": -salesTaxWithholding
                 },
                 imported_at: new Date()
               };

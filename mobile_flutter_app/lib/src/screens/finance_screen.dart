@@ -532,18 +532,20 @@ class _FinanceScreenState extends State<FinanceScreen> {
                               color: Colors.white.withValues(alpha: 0.08),
                               borderRadius: BorderRadius.circular(10),
                             ),
-                            child: Row(
-                              mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                            child: Column(
+                              crossAxisAlignment: CrossAxisAlignment.start,
                               children: <Widget>[
                                 Text(
-                                  'Net Received Payout: PKR ${Formatters.money(item.netSettlement)}',
+                                  'Net Received: PKR ${Formatters.money(item.netSettlement)}',
                                   style: const TextStyle(color: Colors.white, fontSize: 11, fontWeight: FontWeight.w800),
                                 ),
-                                if (isProfitReady)
+                                if (isProfitReady) ...<Widget>[
+                                  const SizedBox(height: 3),
                                   Text(
-                                    'COGS: PKR ${Formatters.money(item.totalCost)}',
+                                    'Stock Cost (COGS): -PKR ${Formatters.money(item.totalCost)}',
                                     style: TextStyle(color: Colors.white.withValues(alpha: 0.7), fontSize: 11, fontWeight: FontWeight.w700),
                                   ),
+                                ],
                               ],
                             ),
                           ),
