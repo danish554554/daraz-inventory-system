@@ -1191,6 +1191,7 @@ class _FinanceScreenState extends State<FinanceScreen> {
     final isAdjustment = item.isAdjustment;
     final orderNum = item.orderNumber;
     final sku = item.sellerSku;
+    final storeName = item.storeName;
     final prodName = item.productName.isNotEmpty ? item.productName : sku;
     final netSettlement = item.netSettlement;
     final netProfit = item.netProfit;
@@ -1207,32 +1208,9 @@ class _FinanceScreenState extends State<FinanceScreen> {
           crossAxisAlignment: CrossAxisAlignment.start,
           children: <Widget>[
             Row(
+              crossAxisAlignment: CrossAxisAlignment.start,
               children: <Widget>[
-                Container(
-                  padding: const EdgeInsets.all(8),
-                  decoration: BoxDecoration(
-                    color: isAdjustment
-                        ? AppTheme.warningSoft
-                        : isProfitReady
-                            ? AppTheme.successSoft
-                            : AppTheme.dangerSoft,
-                    borderRadius: BorderRadius.circular(12),
-                  ),
-                  child: Icon(
-                    isAdjustment
-                        ? Icons.sync_alt_rounded
-                        : isProfitReady
-                            ? Icons.verified_rounded
-                            : Icons.help_outline_rounded,
-                    size: 16,
-                    color: isAdjustment
-                        ? AppTheme.warning
-                        : isProfitReady
-                            ? AppTheme.success
-                            : AppTheme.danger,
-                  ),
-                ),
-                const SizedBox(width: 10),
+                // Left Column: Order #, Store Name, and Product/SKU
                 Expanded(
                   child: Column(
                     crossAxisAlignment: CrossAxisAlignment.start,
@@ -1240,189 +1218,171 @@ class _FinanceScreenState extends State<FinanceScreen> {
                       Text(
                         isAdjustment
                             ? (item.adjustmentReason.isNotEmpty ? item.adjustmentReason : 'Financial Adjustment')
-                            : (prodName.isNotEmpty ? prodName : 'Order #$orderNum'),
-                        maxLines: 1,
-                        overflow: TextOverflow.ellipsis,
-                        style: TextStyle(fontWeight: FontWeight.w900, fontSize: 13, color: AppTheme.textPrimaryColor(context)),
+                            : 'Order #$orderNum',
+                        style: TextStyle(
+                          fontWeight: FontWeight.w900,
+                          fontSize: 14,
+                          color: AppTheme.textPrimaryColor(context),
+                        ),
                       ),
-                      const SizedBox(height: 2),
-                      Row(
-                        children: <Widget>[
-                          if (item.storeName.isNotEmpty) ...<Widget>[
-                            Text(
-                              '🏬 ${item.storeName} · ',
-                              style: const TextStyle(color: AppTheme.primary, fontSize: 11, fontWeight: FontWeight.w800),
-                            ),
-                          ],
-                          Expanded(
-                            child: Text(
-                              isAdjustment
-                                  ? 'Statement: ${item.statementNumber.isNotEmpty ? item.statementNumber : '-'}'
-                                  : 'Order #$orderNum · SKU: $sku',
-                              maxLines: 1,
-                              overflow: TextOverflow.ellipsis,
-                              style: TextStyle(color: AppTheme.textMutedColor(context), fontSize: 11, fontWeight: FontWeight.w700),
-                            ),
+                      const SizedBox(height: 3),
+                      if (storeName.isNotEmpty) ...<Widget>[
+                        Text(
+                          '🏬 $storeName',
+                          style: const TextStyle(
+                            color: AppTheme.primary,
+                            fontSize: 11.5,
+                            fontWeight: FontWeight.w800,
                           ),
-                        ],
-                      ),
+                        ),
+                        const SizedBox(height: 2),
+                      ],
+                      if (!isAdjustment && prodName.isNotEmpty)
+                        Text(
+                          prodName,
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                          style: TextStyle(
+                            color: AppTheme.textMutedColor(context),
+                            fontSize: 11,
+                            fontWeight: FontWeight.w600,
+                          ),
+                        ),
+                      if (sku.isNotEmpty && sku != prodName)
+                        Text(
+                          'SKU: $sku',
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                          style: TextStyle(
+                            color: AppTheme.textMutedColor(context),
+                            fontSize: 10,
+                            fontWeight: FontWeight.w600,
+                          ),
+                        ),
                     ],
                   ),
                 ),
-                const SizedBox(width: 8),
+                const SizedBox(width: 12),
+                // Right Column: Final Received Amount (Green) & Purchasing Price (Red)
                 Column(
                   crossAxisAlignment: CrossAxisAlignment.end,
                   children: <Widget>[
+                    // Final Received Sold Amount in Green
                     Text(
                       'PKR ${Formatters.money(netSettlement)}',
                       style: TextStyle(
                         fontWeight: FontWeight.w900,
-                        fontSize: 14,
-                        color: netSettlement >= 0 ? AppTheme.primary : AppTheme.danger,
+                        fontSize: 15,
+                        color: netSettlement >= 0 ? AppTheme.success : AppTheme.danger,
+                        letterSpacing: -0.3,
                       ),
                     ),
-                    const SizedBox(height: 2),
+                    const SizedBox(height: 1),
                     Text(
-                      'Received Payment',
-                      style: TextStyle(color: AppTheme.textMutedColor(context), fontSize: 10, fontWeight: FontWeight.w700),
+                      isAdjustment ? 'Adjustment Net' : 'Final Received Payout',
+                      style: const TextStyle(
+                        color: AppTheme.success,
+                        fontSize: 9.5,
+                        fontWeight: FontWeight.w800,
+                      ),
                     ),
+                    const SizedBox(height: 4),
+                    // Purchasing Price in Red
+                    if (!isAdjustment) ...<Widget>[
+                      if (isProfitReady)
+                        Text(
+                          'Cost: -PKR ${Formatters.money(totalCost)}',
+                          style: const TextStyle(
+                            fontWeight: FontWeight.w800,
+                            fontSize: 11.5,
+                            color: AppTheme.danger,
+                          ),
+                        )
+                      else
+                        InkWell(
+                          onTap: () => _openSetCostDialog(item),
+                          child: Container(
+                            padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                            decoration: BoxDecoration(
+                              color: AppTheme.dangerSoft,
+                              borderRadius: BorderRadius.circular(6),
+                            ),
+                            child: const Row(
+                              mainAxisSize: MainAxisSize.min,
+                              children: <Widget>[
+                                Icon(Icons.edit_note_rounded, size: 12, color: AppTheme.danger),
+                                SizedBox(width: 2),
+                                Text(
+                                  'Set Cost',
+                                  style: TextStyle(
+                                    fontSize: 10,
+                                    color: AppTheme.danger,
+                                    fontWeight: FontWeight.w900,
+                                  ),
+                                ),
+                              ],
+                            ),
+                          ),
+                        ),
+                    ],
                   ],
                 ),
               ],
             ),
-            const SizedBox(height: 10),
-            Container(
-              padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
-              decoration: BoxDecoration(
-                color: AppTheme.softGreyColor(context),
-                borderRadius: BorderRadius.circular(10),
-              ),
-              child: Row(
-                children: <Widget>[
-                  Expanded(
-                    child: isAdjustment
-                        ? const StatusChip(
-                            label: 'Adjustment / Reversal',
-                            color: AppTheme.warning,
-                            softColor: AppTheme.warningSoft,
-                          )
-                        : Row(
-                            mainAxisSize: MainAxisSize.min,
-                            children: <Widget>[
-                              Text(
-                                'Cost: ',
-                                style: TextStyle(
-                                  fontSize: 11,
-                                  color: AppTheme.textMutedColor(context),
-                                  fontWeight: FontWeight.w700,
-                                ),
-                              ),
-                              Flexible(
-                                child: Text(
-                                  isProfitReady ? 'PKR ${Formatters.money(totalCost)}' : 'Not set',
-                                  overflow: TextOverflow.ellipsis,
-                                  style: TextStyle(
-                                    fontSize: 11,
-                                    fontWeight: FontWeight.w900,
-                                    color: isProfitReady
-                                        ? AppTheme.textPrimaryColor(context)
-                                        : AppTheme.danger,
-                                  ),
-                                ),
-                              ),
-                              if (isProfitReady && item.matchedBy.isNotEmpty) ...<Widget>[
-                                const SizedBox(width: 4),
-                                Container(
-                                  padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 1),
-                                  decoration: BoxDecoration(
-                                    color: AppTheme.primary.withValues(alpha: 0.1),
-                                    borderRadius: BorderRadius.circular(4),
-                                  ),
-                                  child: Text(
-                                    item.matchedBy.contains(':')
-                                        ? item.matchedBy.split(':')[0]
-                                        : item.matchedBy,
-                                    style: const TextStyle(
-                                      fontSize: 9,
-                                      fontWeight: FontWeight.w800,
-                                      color: AppTheme.primary,
-                                    ),
-                                  ),
-                                ),
-                              ],
-                            ],
-                          ),
+            if (!isAdjustment && isProfitReady && netProfit != null) ...<Widget>[
+              const SizedBox(height: 10),
+              Container(
+                padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 7),
+                decoration: BoxDecoration(
+                  color: (netProfit >= 0 ? AppTheme.success : AppTheme.danger).withValues(alpha: 0.08),
+                  borderRadius: BorderRadius.circular(10),
+                  border: Border.all(
+                    color: (netProfit >= 0 ? AppTheme.success : AppTheme.danger).withValues(alpha: 0.25),
                   ),
-                  const SizedBox(width: 8),
-                  if (isAdjustment)
-                    Text(
-                      'Impact: PKR ${Formatters.money(netSettlement)}',
-                      style: TextStyle(
-                        fontSize: 11,
-                        fontWeight: FontWeight.w900,
-                        color: netSettlement >= 0 ? AppTheme.success : AppTheme.danger,
-                      ),
-                    )
-                  else if (isProfitReady && netProfit != null)
+                ),
+                child: Row(
+                  mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                  children: <Widget>[
                     Row(
                       mainAxisSize: MainAxisSize.min,
                       children: <Widget>[
                         Text(
-                          'Profit: PKR ${Formatters.money(netProfit)}',
+                          'Exact True Profit: ',
                           style: TextStyle(
                             fontSize: 11,
-                            color: netProfit >= 0 ? AppTheme.success : AppTheme.danger,
-                            fontWeight: FontWeight.w900,
+                            fontWeight: FontWeight.w700,
+                            color: AppTheme.textMutedColor(context),
                           ),
                         ),
-                        const SizedBox(width: 4),
-                        Container(
-                          padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 1),
-                          decoration: BoxDecoration(
-                            color: (margin >= 0 ? AppTheme.success : AppTheme.danger)
-                                .withValues(alpha: 0.15),
-                            borderRadius: BorderRadius.circular(4),
-                          ),
-                          child: Text(
-                            '${margin >= 0 ? '+' : ''}${margin.toStringAsFixed(0)}%',
-                            style: TextStyle(
-                              fontSize: 9,
-                              fontWeight: FontWeight.w900,
-                              color: margin >= 0 ? AppTheme.success : AppTheme.danger,
-                            ),
+                        Text(
+                          '${netProfit >= 0 ? '+' : ''}PKR ${Formatters.money(netProfit)}',
+                          style: TextStyle(
+                            fontSize: 12.5,
+                            fontWeight: FontWeight.w900,
+                            color: netProfit >= 0 ? AppTheme.success : AppTheme.danger,
                           ),
                         ),
                       ],
-                    )
-                  else
-                    InkWell(
-                      onTap: () => _openSetCostDialog(item),
-                      child: Container(
-                        padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2.5),
-                        decoration: BoxDecoration(
-                          color: AppTheme.dangerSoft,
-                          borderRadius: BorderRadius.circular(6),
-                        ),
-                        child: const Row(
-                          mainAxisSize: MainAxisSize.min,
-                          children: <Widget>[
-                            Icon(Icons.edit_note_rounded, size: 13, color: AppTheme.danger),
-                            SizedBox(width: 2),
-                            Text(
-                              'Set Price',
-                              style: TextStyle(
-                                fontSize: 10.5,
-                                color: AppTheme.danger,
-                                fontWeight: FontWeight.w900,
-                              ),
-                            ),
-                          ],
+                    ),
+                    Container(
+                      padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                      decoration: BoxDecoration(
+                        color: (margin >= 0 ? AppTheme.success : AppTheme.danger).withValues(alpha: 0.18),
+                        borderRadius: BorderRadius.circular(6),
+                      ),
+                      child: Text(
+                        '${margin >= 0 ? '+' : ''}${margin.toStringAsFixed(1)}%',
+                        style: TextStyle(
+                          fontSize: 10,
+                          fontWeight: FontWeight.w900,
+                          color: margin >= 0 ? AppTheme.success : AppTheme.danger,
                         ),
                       ),
                     ),
-                ],
+                  ],
+                ),
               ),
-            ),
+            ],
           ],
         ),
       ),
