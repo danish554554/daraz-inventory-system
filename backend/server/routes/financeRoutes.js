@@ -380,6 +380,7 @@ async function buildEntryFromGroup(group, defaultStore = null, preloadedCache = 
   let productPrice = 0;
   let shippingPaidByBuyer = 0;
   let shippingFeeDiscount = 0;
+  let otherCredits = 0;
 
   let commissionFee = 0;
   let paymentFee = 0;
@@ -389,9 +390,11 @@ async function buildEntryFromGroup(group, defaultStore = null, preloadedCache = 
   let cofundedVoucherFee = 0;
   let coinsDiscountFee = 0;
   let penalties = 0;
+  let otherFees = 0;
 
   let incomeTaxWithholding = 0;
   let salesTaxWithholding = 0;
+  let otherTaxes = 0;
   let whtAmount = 0;
   let vatTotal = 0;
 
@@ -399,8 +402,8 @@ async function buildEntryFromGroup(group, defaultStore = null, preloadedCache = 
   const feeBreakdown = {};
 
   for (const row of group) {
-    const feeName = (row["Fee Name"] || row["Transaction Type"] || "").trim();
-    const feeNameKey = normalizeFeeName(feeName);
+    const rawFeeName = (row["Fee Name"] || row["Transaction Type"] || "").trim();
+    const feeNameKey = normalizeFeeName(rawFeeName);
 
     const amount = toNumber(row["Amount(Include Tax)"] || row["Amount"] || 0);
     const vat = absNumber(row["VAT Amount"] || row["VAT"] || 0);
@@ -410,83 +413,92 @@ async function buildEntryFromGroup(group, defaultStore = null, preloadedCache = 
     vatTotal += vat;
     whtAmount += wht;
 
-    feeBreakdown[feeName || "Uncategorized"] = (feeBreakdown[feeName || "Uncategorized"] || 0) + amount;
+    feeBreakdown[rawFeeName || "Uncategorized"] = (feeBreakdown[rawFeeName || "Uncategorized"] || 0) + amount;
 
-    switch (feeNameKey) {
-      case "product price paid by buyer":
-      case "item price credit":
-      case "product price":
-      case "item price":
-        productPrice += amount;
-        break;
-      case "shipping fee paid by buyer":
-      case "shipping fee (paid by buyer)":
-        shippingPaidByBuyer += amount;
-        break;
-      case "shipping fee discount":
-      case "shipping fee discount (seller)":
-      case "promotional shipping fee discount":
-        shippingFeeDiscount += amount;
-        break;
-      case "commission fee":
-      case "commission":
-      case "daraz commission":
-        commissionFee += absNumber(amount);
-        break;
-      case "payment fee":
-      case "payment handling fee":
-      case "payment gateway fee":
-        paymentFee += absNumber(amount);
-        break;
-      case "shipping fee":
-      case "shipping fee (charged by lazada)":
-      case "shipping fee (charged by daraz)":
-      case "shipping fee charged by daraz":
-        shippingFee += absNumber(amount);
-        break;
-      case "handling fee":
-      case "order handling fee":
-      case "handling charge":
-        handlingFee += absNumber(amount);
-        break;
-      case "free shipping max fee":
-      case "free shipping max":
-      case "free shipping max promotion fee":
-        freeShippingMaxFee += absNumber(amount);
-        break;
-      case "co-funded voucher max":
-      case "co-funded voucher":
-      case "cofunded voucher":
-      case "voucher subsidy":
-        cofundedVoucherFee += absNumber(amount);
-        break;
-      case "daraz coins discount participation fee":
-      case "coins discount fee":
-      case "coins fee":
-        coinsDiscountFee += absNumber(amount);
-        break;
-      case "penalties for fulfillment":
-      case "penalty":
-      case "penalties":
-      case "fulfillment penalty":
-        penalties += absNumber(amount);
-        break;
-      case "income tax withholding":
-      case "income tax":
-      case "withholding income tax":
-        incomeTaxWithholding += absNumber(amount);
-        break;
-      case "sales tax withholding":
-      case "sales tax":
-      case "withholding sales tax":
-        salesTaxWithholding += absNumber(amount);
-        break;
-      default:
-        break;
+    // 1. Check Taxes (Income Tax Withholding, Sales Tax Withholding, WHT, VAT, GST)
+    if (
+      feeNameKey.includes("income tax") ||
+      feeNameKey.includes("withholding income tax") ||
+      feeNameKey.includes("wht")
+    ) {
+      incomeTaxWithholding += absNumber(amount);
+    } else if (
+      feeNameKey.includes("sales tax") ||
+      feeNameKey.includes("withholding sales tax") ||
+      feeNameKey.includes("vat") ||
+      feeNameKey.includes("gst")
+    ) {
+      salesTaxWithholding += absNumber(amount);
+    } else if (
+      feeNameKey.includes("tax") ||
+      feeNameKey.includes("withholding")
+    ) {
+      otherTaxes += absNumber(amount);
+    }
+    // 2. Check Credits & Buyer Payments
+    else if (
+      feeNameKey.includes("product price") ||
+      feeNameKey.includes("item price") ||
+      feeNameKey.includes("item credit")
+    ) {
+      productPrice += amount;
+    } else if (
+      feeNameKey.includes("shipping fee paid by buyer") ||
+      feeNameKey.includes("shipping fee (paid by buyer)")
+    ) {
+      shippingPaidByBuyer += amount;
+    } else if (
+      feeNameKey.includes("shipping fee discount")
+    ) {
+      shippingFeeDiscount += amount;
+    }
+    // 3. Check Platform Fees & Deductions
+    else if (feeNameKey.includes("commission")) {
+      commissionFee += absNumber(amount);
+    } else if (
+      feeNameKey.includes("payment fee") ||
+      feeNameKey.includes("payment handling") ||
+      feeNameKey.includes("payment gateway") ||
+      feeNameKey.includes("cash payment")
+    ) {
+      paymentFee += absNumber(amount);
+    } else if (
+      feeNameKey.includes("handling fee") ||
+      feeNameKey.includes("order handling")
+    ) {
+      handlingFee += absNumber(amount);
+    } else if (
+      feeNameKey.includes("voucher") ||
+      feeNameKey.includes("seller discount") ||
+      feeNameKey.includes("subsidy")
+    ) {
+      cofundedVoucherFee += absNumber(amount);
+    } else if (
+      feeNameKey.includes("free shipping max") ||
+      feeNameKey.includes("free shipping promotion")
+    ) {
+      freeShippingMaxFee += absNumber(amount);
+    } else if (
+      feeNameKey.includes("shipping fee") ||
+      feeNameKey.includes("shipping charge") ||
+      feeNameKey.includes("freight")
+    ) {
+      shippingFee += absNumber(amount);
+    } else if (feeNameKey.includes("coin")) {
+      coinsDiscountFee += absNumber(amount);
+    } else if (
+      feeNameKey.includes("penalt") ||
+      feeNameKey.includes("fulfillment penalty")
+    ) {
+      penalties += absNumber(amount);
+    } else if (amount < 0) {
+      otherFees += absNumber(amount);
+    } else if (amount > 0) {
+      otherCredits += amount;
     }
   }
 
-  const grossAmount = productPrice + shippingPaidByBuyer + shippingFeeDiscount;
+  const grossAmount = productPrice + shippingPaidByBuyer + shippingFeeDiscount + otherCredits;
   const totalFees =
     commissionFee +
     paymentFee +
@@ -495,8 +507,9 @@ async function buildEntryFromGroup(group, defaultStore = null, preloadedCache = 
     freeShippingMaxFee +
     cofundedVoucherFee +
     coinsDiscountFee +
-    penalties;
-  const totalTaxes = incomeTaxWithholding + salesTaxWithholding + whtAmount;
+    penalties +
+    otherFees;
+  const totalTaxes = incomeTaxWithholding + salesTaxWithholding + otherTaxes + whtAmount;
   const totalDeductions = totalFees + totalTaxes;
 
   const quantity = adjustmentMeta.entryType === "adjustment" ? 0 : extractQuantity(first);
@@ -564,10 +577,10 @@ async function buildEntryFromGroup(group, defaultStore = null, preloadedCache = 
     free_shipping_max_fee: freeShippingMaxFee,
     cofunded_voucher_fee: cofundedVoucherFee,
     coins_discount_fee: coinsDiscountFee,
-    penalties,
+    penalties: penalties + otherFees,
 
     income_tax_withholding: incomeTaxWithholding,
-    sales_tax_withholding: salesTaxWithholding,
+    sales_tax_withholding: salesTaxWithholding + otherTaxes,
     wht_amount: whtAmount,
     vat_total: vatTotal,
 
