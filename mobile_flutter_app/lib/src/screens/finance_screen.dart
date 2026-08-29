@@ -433,6 +433,10 @@ class _FinanceScreenState extends State<FinanceScreen> {
       backgroundColor: AppTheme.cardColor(context),
       shape: const RoundedRectangleBorder(borderRadius: BorderRadius.vertical(top: Radius.circular(24))),
       builder: (context) {
+        final isProfitReady = item.isProfitReady;
+        final netProfit = item.netProfit ?? 0;
+        final margin = item.profitMargin;
+
         return Container(
           constraints: BoxConstraints(maxHeight: MediaQuery.of(context).size.height * 0.85),
           padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 18),
@@ -448,12 +452,12 @@ class _FinanceScreenState extends State<FinanceScreen> {
                       crossAxisAlignment: CrossAxisAlignment.start,
                       children: <Widget>[
                         Text(
-                          item.isAdjustment ? 'Adjustment Details' : 'Financial Breakdown',
+                          item.isAdjustment ? 'Adjustment Details' : 'Profit & Settlement Details',
                           style: TextStyle(fontWeight: FontWeight.w900, fontSize: 18, color: AppTheme.textPrimaryColor(context)),
                         ),
                         const SizedBox(height: 2),
                         Text(
-                          item.isAdjustment ? 'Statement #${item.statementNumber}' : 'Order #${item.orderNumber} (Line ${item.orderLineId})',
+                          item.isAdjustment ? 'Statement #${item.statementNumber}' : 'Order #${item.orderNumber}',
                           style: TextStyle(color: AppTheme.textMutedColor(context), fontSize: 12, fontWeight: FontWeight.w700),
                         ),
                       ],
@@ -462,53 +466,106 @@ class _FinanceScreenState extends State<FinanceScreen> {
                   IconButton(onPressed: () => Navigator.pop(context), icon: const Icon(Icons.close_rounded)),
                 ],
               ),
-              const SizedBox(height: 12),
+              const SizedBox(height: 10),
               const Divider(height: 1),
-              const SizedBox(height: 12),
+              const SizedBox(height: 10),
               Expanded(
                 child: ListView(
                   children: <Widget>[
                     _breakdownHeader(item),
+                    const SizedBox(height: 14),
+                    // High-Impact Profit Card
+                    Container(
+                      padding: const EdgeInsets.all(16),
+                      decoration: BoxDecoration(
+                        gradient: AppTheme.heroGradient,
+                        borderRadius: BorderRadius.circular(16),
+                        border: Border.all(color: const Color(0xFF334155)),
+                      ),
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: <Widget>[
+                          Row(
+                            mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                            children: <Widget>[
+                              Text(
+                                item.isAdjustment ? 'ADJUSTMENT IMPACT' : 'TRUE NET PROFIT',
+                                style: const TextStyle(
+                                  color: Color(0xFF94A3B8),
+                                  fontSize: 11,
+                                  fontWeight: FontWeight.w800,
+                                  letterSpacing: 0.5,
+                                ),
+                              ),
+                              if (isProfitReady)
+                                Container(
+                                  padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+                                  decoration: BoxDecoration(
+                                    gradient: AppTheme.profitGradient,
+                                    borderRadius: BorderRadius.circular(12),
+                                  ),
+                                  child: Text(
+                                    '${margin >= 0 ? '+' : ''}${margin.toStringAsFixed(1)}% Margin',
+                                    style: const TextStyle(color: Colors.white, fontSize: 10.5, fontWeight: FontWeight.w900),
+                                  ),
+                                ),
+                            ],
+                          ),
+                          const SizedBox(height: 8),
+                          Text(
+                            item.isAdjustment
+                                ? 'PKR ${Formatters.money(item.netSettlement)}'
+                                : (isProfitReady ? 'PKR ${Formatters.money(netProfit)}' : 'Cost Not Set'),
+                            style: TextStyle(
+                              color: item.isAdjustment
+                                  ? (item.netSettlement >= 0 ? AppTheme.success : AppTheme.danger)
+                                  : (isProfitReady ? (netProfit >= 0 ? AppTheme.success : AppTheme.danger) : Colors.white),
+                              fontSize: 26,
+                              fontWeight: FontWeight.w900,
+                              letterSpacing: -0.5,
+                            ),
+                          ),
+                          const SizedBox(height: 12),
+                          Container(
+                            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+                            decoration: BoxDecoration(
+                              color: Colors.white.withValues(alpha: 0.08),
+                              borderRadius: BorderRadius.circular(10),
+                            ),
+                            child: Row(
+                              mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                              children: <Widget>[
+                                Text(
+                                  'Net Received Payout: PKR ${Formatters.money(item.netSettlement)}',
+                                  style: const TextStyle(color: Colors.white, fontSize: 11, fontWeight: FontWeight.w800),
+                                ),
+                                if (isProfitReady)
+                                  Text(
+                                    'COGS: PKR ${Formatters.money(item.totalCost)}',
+                                    style: TextStyle(color: Colors.white.withValues(alpha: 0.7), fontSize: 11, fontWeight: FontWeight.w700),
+                                  ),
+                              ],
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
                     const SizedBox(height: 16),
-                    _breakdownSectionTitle('Revenue & Buyer Payments'),
-                    _breakdownRow('Product Price Paid by Buyer', '+PKR ${Formatters.money(item.productPrice)}', color: AppTheme.success),
-                    if (item.shippingPaidByBuyer > 0)
-                      _breakdownRow('Shipping Paid by Buyer', '+PKR ${Formatters.money(item.shippingPaidByBuyer)}', color: AppTheme.success),
-                    if (item.shippingFeeDiscount > 0)
-                      _breakdownRow('Shipping Fee Discount', '+PKR ${Formatters.money(item.shippingFeeDiscount)}', color: AppTheme.success),
-                    _breakdownRow('Gross Sales Amount', 'PKR ${Formatters.money(item.grossAmount)}', isBold: true),
-                    const SizedBox(height: 14),
-                    _breakdownSectionTitle('Daraz Marketplace Fees'),
-                    if (item.commissionFee > 0) _breakdownRow('Commission Fee', '-PKR ${Formatters.money(item.commissionFee)}', color: AppTheme.danger),
-                    if (item.paymentFee > 0) _breakdownRow('Payment Fee', '-PKR ${Formatters.money(item.paymentFee)}', color: AppTheme.danger),
-                    if (item.shippingFee > 0) _breakdownRow('Shipping Fee', '-PKR ${Formatters.money(item.shippingFee)}', color: AppTheme.danger),
-                    if (item.handlingFee > 0) _breakdownRow('Handling Fee', '-PKR ${Formatters.money(item.handlingFee)}', color: AppTheme.danger),
-                    if (item.freeShippingMaxFee > 0) _breakdownRow('Free Shipping Max Fee', '-PKR ${Formatters.money(item.freeShippingMaxFee)}', color: AppTheme.danger),
-                    if (item.cofundedVoucherFee > 0) _breakdownRow('Co-funded Voucher Fee', '-PKR ${Formatters.money(item.cofundedVoucherFee)}', color: AppTheme.danger),
-                    if (item.coinsDiscountFee > 0) _breakdownRow('Coins Discount Fee', '-PKR ${Formatters.money(item.coinsDiscountFee)}', color: AppTheme.danger),
-                    if (item.penalties > 0) _breakdownRow('Fulfillment Penalties', '-PKR ${Formatters.money(item.penalties)}', color: AppTheme.danger),
-                    _breakdownRow('Total Daraz Fees', '-PKR ${Formatters.money(item.totalFees)}', isBold: true, color: AppTheme.danger),
-                    const SizedBox(height: 14),
-                    _breakdownSectionTitle('Taxes & Withholdings'),
-                    if (item.whtAmount > 0) _breakdownRow('WHT Amount', '-PKR ${Formatters.money(item.whtAmount)}', color: AppTheme.warning),
-                    if (item.incomeTaxWithholding > 0) _breakdownRow('Income Tax Withholding', '-PKR ${Formatters.money(item.incomeTaxWithholding)}', color: AppTheme.warning),
-                    if (item.salesTaxWithholding > 0) _breakdownRow('Sales Tax Withholding', '-PKR ${Formatters.money(item.salesTaxWithholding)}', color: AppTheme.warning),
-                    if (item.vatTotal > 0) _breakdownRow('VAT Total', '-PKR ${Formatters.money(item.vatTotal)}', color: AppTheme.warning),
-                    _breakdownRow('Total Taxes', '-PKR ${Formatters.money(item.totalTaxes)}', isBold: true, color: AppTheme.warning),
-                    const SizedBox(height: 14),
-                    _breakdownSectionTitle('Settlement & Profit Analysis'),
+                    _breakdownSectionTitle('Financial Summary'),
+                    _breakdownRow('Gross Sales Amount', '+PKR ${Formatters.money(item.grossAmount)}', isBold: true, color: AppTheme.success),
+                    if (item.totalFees > 0)
+                      _breakdownRow('Daraz Marketplace Fees', '-PKR ${Formatters.money(item.totalFees)}', color: AppTheme.danger),
+                    if (item.totalTaxes > 0)
+                      _breakdownRow('Taxes & Withholdings (WHT / VAT)', '-PKR ${Formatters.money(item.totalTaxes)}', color: AppTheme.warning),
                     _breakdownRow('Net Settlement Payout', 'PKR ${Formatters.money(item.netSettlement)}', isBold: true, color: AppTheme.primary),
                     if (item.isOrder) ...<Widget>[
-                      _breakdownRow('Unit Cost Price', 'PKR ${Formatters.money(item.costPrice)} (${item.quantity} pcs)'),
-                      _breakdownRow('Total Cost of Goods (COGS)', '-PKR ${Formatters.money(item.totalCost)}', color: AppTheme.danger),
+                      _breakdownRow('Stock Purchase Cost (COGS)', '-PKR ${Formatters.money(item.totalCost)}', color: isProfitReady ? AppTheme.danger : AppTheme.textMutedColor(context)),
                       _breakdownRow(
-                        'Net True Profit',
-                        item.isProfitReady ? 'PKR ${Formatters.money(item.netProfit ?? 0)}' : 'Pending Cost Price',
+                        'True Net Profit',
+                        isProfitReady ? 'PKR ${Formatters.money(netProfit)}' : 'Set purchase price to see profit',
                         isBold: true,
-                        color: (item.netProfit ?? 0) >= 0 ? AppTheme.success : AppTheme.danger,
+                        color: isProfitReady ? (netProfit >= 0 ? AppTheme.success : AppTheme.danger) : AppTheme.danger,
                       ),
-                      if (item.isProfitReady)
-                        _breakdownRow('Profit Margin', '${item.profitMargin.toStringAsFixed(1)}%', isBold: true, color: item.profitMargin >= 0 ? AppTheme.success : AppTheme.danger),
                     ],
                     if (item.adjustmentReason.isNotEmpty) ...<Widget>[
                       const SizedBox(height: 14),
@@ -524,6 +581,18 @@ class _FinanceScreenState extends State<FinanceScreen> {
                           style: const TextStyle(fontSize: 12, fontWeight: FontWeight.w700, color: AppTheme.warning),
                         ),
                       ),
+                    ],
+                    if (item.feeBreakdown.isNotEmpty) ...<Widget>[
+                      const SizedBox(height: 16),
+                      _breakdownSectionTitle('Itemized Statement Breakdown'),
+                      ...item.feeBreakdown.entries.map((e) {
+                        final val = e.value;
+                        return _breakdownRow(
+                          e.key,
+                          '${val >= 0 ? '+' : ''}PKR ${Formatters.money(val)}',
+                          color: val >= 0 ? AppTheme.success : AppTheme.danger,
+                        );
+                      }),
                     ],
                   ],
                 ),
@@ -551,21 +620,31 @@ class _FinanceScreenState extends State<FinanceScreen> {
               item.productName,
               style: TextStyle(fontWeight: FontWeight.w900, fontSize: 13, color: AppTheme.textPrimaryColor(context)),
             ),
-            const SizedBox(height: 4),
+            const SizedBox(height: 6),
           ],
           Row(
-            mainAxisAlignment: MainAxisAlignment.spaceBetween,
             children: <Widget>[
-              Text('SKU: ${item.sellerSku}', style: TextStyle(color: AppTheme.textMutedColor(context), fontSize: 11, fontWeight: FontWeight.w700)),
-              if (item.storeName.isNotEmpty)
-                Container(
-                  padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
-                  decoration: BoxDecoration(color: AppTheme.primarySoft, borderRadius: BorderRadius.circular(6)),
-                  child: Text(
-                    '🏬 ${item.storeName}',
-                    style: const TextStyle(color: AppTheme.primary, fontSize: 10, fontWeight: FontWeight.w800),
+              Expanded(
+                child: Text(
+                  'SKU: ${item.sellerSku.isEmpty ? 'N/A' : item.sellerSku}',
+                  overflow: TextOverflow.ellipsis,
+                  style: TextStyle(color: AppTheme.textMutedColor(context), fontSize: 11, fontWeight: FontWeight.w700),
+                ),
+              ),
+              if (item.storeName.isNotEmpty) ...<Widget>[
+                const SizedBox(width: 8),
+                Flexible(
+                  child: Container(
+                    padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 2.5),
+                    decoration: BoxDecoration(color: AppTheme.primarySoft, borderRadius: BorderRadius.circular(6)),
+                    child: Text(
+                      '🏬 ${item.storeName}',
+                      overflow: TextOverflow.ellipsis,
+                      style: const TextStyle(color: AppTheme.primary, fontSize: 10, fontWeight: FontWeight.w800),
+                    ),
                   ),
                 ),
+              ],
             ],
           ),
           if (item.statementPeriod.isNotEmpty) ...<Widget>[
