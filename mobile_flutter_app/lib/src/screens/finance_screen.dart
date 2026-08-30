@@ -559,12 +559,20 @@ class _FinanceScreenState extends State<FinanceScreen> {
                       _breakdownRow('Daraz Marketplace Fees', '-PKR ${Formatters.money(item.totalFees)}', color: AppTheme.danger),
                     if (item.totalTaxes > 0)
                       _breakdownRow('Taxes & Withholdings (WHT / VAT)', '-PKR ${Formatters.money(item.totalTaxes)}', color: AppTheme.warning),
-                    _breakdownRow('Net Settlement Payout', 'PKR ${Formatters.money(item.netSettlement)}', isBold: true, color: AppTheme.primary),
+                    _breakdownRow(
+                      item.orderStatus.toLowerCase().contains('return') ? 'Net Return Settlement' : 'Net Settlement Payout',
+                      '${item.netSettlement >= 0 ? '' : '-'}PKR ${Formatters.money(item.netSettlement.abs())}',
+                      isBold: true,
+                      color: item.netSettlement >= 0 ? AppTheme.primary : AppTheme.danger,
+                    ),
                     if (item.isOrder) ...<Widget>[
-                      _breakdownRow('Stock Purchase Cost (COGS)', '-PKR ${Formatters.money(item.totalCost)}', color: isProfitReady ? AppTheme.danger : AppTheme.textMutedColor(context)),
+                      if (item.orderStatus.toLowerCase().contains('return'))
+                        _breakdownRow('Stock Cost (COGS)', 'PKR 0.00 (Restocked)', color: AppTheme.info)
+                      else
+                        _breakdownRow('Stock Purchase Cost (COGS)', '-PKR ${Formatters.money(item.totalCost)}', color: isProfitReady ? AppTheme.danger : AppTheme.textMutedColor(context)),
                       _breakdownRow(
-                        'True Net Profit',
-                        isProfitReady ? 'PKR ${Formatters.money(netProfit)}' : 'Set purchase price to see profit',
+                        item.orderStatus.toLowerCase().contains('return') ? 'Exact Return Result' : 'True Net Profit',
+                        isProfitReady ? '${netProfit >= 0 ? '+' : ''}PKR ${Formatters.money(netProfit)}' : 'Set purchase price to see profit',
                         isBold: true,
                         color: isProfitReady ? (netProfit >= 0 ? AppTheme.success : AppTheme.danger) : AppTheme.danger,
                       ),
@@ -1198,6 +1206,9 @@ class _FinanceScreenState extends State<FinanceScreen> {
 
   Widget _buildFinanceRow(FinanceEntry item) {
     final isAdjustment = item.isAdjustment;
+    final isReturned = item.orderStatus.toLowerCase().contains('return') ||
+        item.orderStatus.toLowerCase().contains('cancel') ||
+        item.adjustmentReason.toLowerCase().contains('return');
     final orderNum = item.orderNumber;
     final sku = item.sellerSku;
     final storeName = item.storeName;
@@ -1224,15 +1235,38 @@ class _FinanceScreenState extends State<FinanceScreen> {
                   child: Column(
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: <Widget>[
-                      Text(
-                        isAdjustment
-                            ? (item.adjustmentReason.isNotEmpty ? item.adjustmentReason : 'Financial Adjustment')
-                            : 'Order #$orderNum',
-                        style: TextStyle(
-                          fontWeight: FontWeight.w900,
-                          fontSize: 14,
-                          color: AppTheme.textPrimaryColor(context),
-                        ),
+                      Row(
+                        children: <Widget>[
+                          Text(
+                            isAdjustment
+                                ? (item.adjustmentReason.isNotEmpty ? item.adjustmentReason : 'Financial Adjustment')
+                                : 'Order #$orderNum',
+                            style: TextStyle(
+                              fontWeight: FontWeight.w900,
+                              fontSize: 14,
+                              color: AppTheme.textPrimaryColor(context),
+                            ),
+                          ),
+                          if (isReturned) ...<Widget>[
+                            const SizedBox(width: 6),
+                            Container(
+                              padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 1.5),
+                              decoration: BoxDecoration(
+                                color: AppTheme.warningSoft,
+                                borderRadius: BorderRadius.circular(6),
+                                border: Border.all(color: AppTheme.warning.withValues(alpha: 0.4)),
+                              ),
+                              child: const Text(
+                                'RETURNED',
+                                style: TextStyle(
+                                  fontSize: 9,
+                                  fontWeight: FontWeight.w900,
+                                  color: AppTheme.warning,
+                                ),
+                              ),
+                            ),
+                          ],
+                        ],
                       ),
                       const SizedBox(height: 3),
                       if (storeName.isNotEmpty) ...<Widget>[
@@ -1272,13 +1306,13 @@ class _FinanceScreenState extends State<FinanceScreen> {
                   ),
                 ),
                 const SizedBox(width: 12),
-                // Right Column: Final Received Amount (Green) & Purchasing Price (Red)
+                // Right Column: Final Received Amount (Green/Red) & Purchasing Price (Red)
                 Column(
                   crossAxisAlignment: CrossAxisAlignment.end,
                   children: <Widget>[
-                    // Final Received Sold Amount in Green
+                    // Final Received Sold Amount
                     Text(
-                      'PKR ${Formatters.money(netSettlement)}',
+                      '${netSettlement >= 0 ? '' : '-'}PKR ${Formatters.money(netSettlement.abs())}',
                       style: TextStyle(
                         fontWeight: FontWeight.w900,
                         fontSize: 15,
@@ -1288,17 +1322,28 @@ class _FinanceScreenState extends State<FinanceScreen> {
                     ),
                     const SizedBox(height: 1),
                     Text(
-                      isAdjustment ? 'Adjustment Net' : 'Final Received Payout',
-                      style: const TextStyle(
-                        color: AppTheme.success,
+                      isReturned
+                          ? 'Net Return Settlement'
+                          : (isAdjustment ? 'Adjustment Net' : 'Final Received Payout'),
+                      style: TextStyle(
+                        color: netSettlement >= 0 ? AppTheme.success : AppTheme.danger,
                         fontSize: 9.5,
                         fontWeight: FontWeight.w800,
                       ),
                     ),
                     const SizedBox(height: 4),
-                    // Purchasing Price in Red
+                    // Purchasing Price
                     if (!isAdjustment) ...<Widget>[
-                      if (isProfitReady)
+                      if (isReturned)
+                        const Text(
+                          'Stock: PKR 0 (Restocked)',
+                          style: TextStyle(
+                            fontWeight: FontWeight.w700,
+                            fontSize: 10.5,
+                            color: AppTheme.info,
+                          ),
+                        )
+                      else if (isProfitReady)
                         Text(
                           'Cost: -PKR ${Formatters.money(totalCost)}',
                           style: const TextStyle(
@@ -1356,7 +1401,7 @@ class _FinanceScreenState extends State<FinanceScreen> {
                       mainAxisSize: MainAxisSize.min,
                       children: <Widget>[
                         Text(
-                          'Exact True Profit: ',
+                          isReturned ? 'Net Return Loss: ' : 'Exact True Profit: ',
                           style: TextStyle(
                             fontSize: 11,
                             fontWeight: FontWeight.w700,
@@ -1373,21 +1418,22 @@ class _FinanceScreenState extends State<FinanceScreen> {
                         ),
                       ],
                     ),
-                    Container(
-                      padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
-                      decoration: BoxDecoration(
-                        color: (margin >= 0 ? AppTheme.success : AppTheme.danger).withValues(alpha: 0.18),
-                        borderRadius: BorderRadius.circular(6),
-                      ),
-                      child: Text(
-                        '${margin >= 0 ? '+' : ''}${margin.toStringAsFixed(1)}%',
-                        style: TextStyle(
-                          fontSize: 10,
-                          fontWeight: FontWeight.w900,
-                          color: margin >= 0 ? AppTheme.success : AppTheme.danger,
+                    if (!isReturned)
+                      Container(
+                        padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                        decoration: BoxDecoration(
+                          color: (margin >= 0 ? AppTheme.success : AppTheme.danger).withValues(alpha: 0.18),
+                          borderRadius: BorderRadius.circular(6),
+                        ),
+                        child: Text(
+                          '${margin >= 0 ? '+' : ''}${margin.toStringAsFixed(1)}%',
+                          style: TextStyle(
+                            fontSize: 10,
+                            fontWeight: FontWeight.w900,
+                            color: margin >= 0 ? AppTheme.success : AppTheme.danger,
+                          ),
                         ),
                       ),
-                    ),
                   ],
                 ),
               ),

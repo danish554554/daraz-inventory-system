@@ -106,6 +106,9 @@ function groupRowsByOrder(rows) {
 }
 
 function detectAdjustmentType(group) {
+  const first = group[0] || {};
+  const orderNum = (first["Order Number"] || first["Order No"] || first["Order ID"] || "").toString().trim();
+  const rawStatus = (first["Order Status"] || first["Status"] || "").toString().trim();
   const feeNames = group.map((row) =>
     normalizeFeeName((row["Fee Name"] || row["Transaction Type"] || "").toString())
   );
@@ -113,78 +116,20 @@ function detectAdjustmentType(group) {
     .map((row) => (row["Comment"] || row["Reason"] || "").toString().trim().toLowerCase())
     .filter(Boolean);
 
-  const hasSalesComponent = feeNames.some((fee) =>
-    [
-      "product price paid by buyer",
-      "item price credit",
-      "product price",
-      "item price",
-      "shipping fee paid by buyer",
-      "shipping fee (paid by buyer)",
-      "shipping fee discount",
-      "shipping fee discount (seller)"
-    ].includes(fee)
-  );
-
-  const hasOtherCreditOrDebit = feeNames.some(
-    (fee) =>
-      fee.includes("other credit") ||
-      fee.includes("other debit") ||
-      fee.includes("credit") ||
-      fee.includes("debit") ||
-      fee.includes("reversal") ||
-      fee.includes("claim")
-  );
-
   const commentText = comments.join(" | ");
-  const reversalKeywords = [
-    "refund",
-    "reversal",
-    "reverse",
-    "correction",
-    "corrected",
-    "system error",
-    "charged twice",
-    "overcharged",
-    "refund for",
-    "adjustment",
-    "compensation",
-    "claim"
-  ];
 
-  const hasReversalComment = reversalKeywords.some((keyword) =>
-    commentText.includes(keyword)
-  );
-
-  const standalonePenalty =
-    feeNames.length > 0 &&
-    feeNames.every((fee) => fee.includes("penalties") || fee.includes("penalty")) &&
-    !hasSalesComponent;
-
-  if (hasOtherCreditOrDebit || hasReversalComment) {
+  // If there is a real order number and product/item information, it is an ORDER
+  if (orderNum && orderNum !== "0" && orderNum.toLowerCase() !== "null") {
     return {
-      entryType: "adjustment",
-      reason: commentText || "Financial adjustment / reversal"
+      entryType: "order",
+      reason: rawStatus || (commentText.includes("return") ? "Returned" : "")
     };
   }
 
-  if (standalonePenalty) {
-    return {
-      entryType: "adjustment",
-      reason: "Standalone fulfillment penalty"
-    };
-  }
-
-  if (!hasSalesComponent) {
-    return {
-      entryType: "adjustment",
-      reason: commentText || "Financial-only entry without buyer sale component"
-    };
-  }
-
+  // Otherwise, it's a standalone account adjustment, penalty, or credit
   return {
-    entryType: "order",
-    reason: ""
+    entryType: "adjustment",
+    reason: commentText || feeNames.join(", ") || "Financial adjustment"
   };
 }
 
@@ -510,7 +455,19 @@ async function buildEntryFromGroup(group, defaultStore = null, preloadedCache = 
     penalties +
     otherFees;
   const totalTaxes = incomeTaxWithholding + salesTaxWithholding + otherTaxes + whtAmount;
-  const totalDeductions = totalFees + totalTaxes;
+  const rawStatus = (first["Order Status"] || first["Status"] || "").trim();
+  const isReturnedOrCancelled =
+    rawStatus.toLowerCase().includes("return") ||
+    rawStatus.toLowerCase().includes("cancel") ||
+    rawStatus.toLowerCase().includes("refund") ||
+    group.some((r) => {
+      const c = ((r["Comment"] || r["Reason"] || "") + "").toLowerCase();
+      return c.includes("return") || c.includes("refund");
+    });
+
+  const finalStatus = isReturnedOrCancelled
+    ? (rawStatus.toLowerCase().includes("cancel") ? "Cancelled" : "Returned")
+    : (rawStatus || "Delivered");
 
   const quantity = adjustmentMeta.entryType === "adjustment" ? 0 : extractQuantity(first);
 
@@ -526,15 +483,26 @@ async function buildEntryFromGroup(group, defaultStore = null, preloadedCache = 
     costDetails = await findCostDetails(group, defaultStore?._id || null, preloadedCache);
   }
 
+  // If order was returned/cancelled, inventory was returned to stock -> COGS = 0
+  // If order was delivered, inventory was sold -> COGS = cost_price * quantity
   const totalCost =
     adjustmentMeta.entryType === "order"
-      ? (costDetails.cost_price || 0) * quantity
+      ? (isReturnedOrCancelled ? 0 : (costDetails.cost_price || 0) * quantity)
       : 0;
 
   const netProfit =
-    adjustmentMeta.entryType === "order" && quantity > 0 && costDetails.profit_ready
-      ? Number((netSettlement - totalCost).toFixed(2))
+    adjustmentMeta.entryType === "order"
+      ? (isReturnedOrCancelled
+          ? Number(netSettlement.toFixed(2))
+          : (costDetails.profit_ready && quantity > 0
+              ? Number((netSettlement - totalCost).toFixed(2))
+              : null))
       : null;
+
+  const profitReady =
+    adjustmentMeta.entryType === "order"
+      ? (isReturnedOrCancelled ? true : costDetails.profit_ready)
+      : false;
 
   const orderNum = (first["Order Number"] || first["Order No"] || first["Order ID"] || "").toString().trim();
   const rawLineId = (first["Order Line ID"] || first["Order Item ID"] || first["Item ID"] || "").toString().trim();
@@ -561,10 +529,10 @@ async function buildEntryFromGroup(group, defaultStore = null, preloadedCache = 
     seller_sku: first["Seller SKU"] || "",
     lazada_sku: first["Lazada SKU"] || "",
     product_name: first["Product Name"] || "",
-    order_status: first["Order Status"] || "",
+    order_status: finalStatus,
 
     entry_type: adjustmentMeta.entryType,
-    adjustment_reason: adjustmentMeta.reason,
+    adjustment_reason: isReturnedOrCancelled ? "Returned / Restocked" : adjustmentMeta.reason,
 
     product_price: productPrice,
     shipping_paid_by_buyer: shippingPaidByBuyer,
@@ -590,7 +558,7 @@ async function buildEntryFromGroup(group, defaultStore = null, preloadedCache = 
     total_deductions: Number(totalDeductions.toFixed(2)),
     net_settlement: Number(netSettlement.toFixed(2)),
 
-    cost_price: adjustmentMeta.entryType === "order" ? costDetails.cost_price : 0,
+    cost_price: isReturnedOrCancelled ? 0 : (costDetails.cost_price || 0),
     quantity,
     total_cost: Number(totalCost.toFixed(2)),
     net_profit: netProfit,
@@ -599,9 +567,8 @@ async function buildEntryFromGroup(group, defaultStore = null, preloadedCache = 
       adjustmentMeta.entryType === "order" ? costDetails.matched_product_id : null,
     matched_product_name:
       adjustmentMeta.entryType === "order" ? costDetails.matched_product_name : "",
-    matched_by: adjustmentMeta.entryType === "order" ? costDetails.matched_by : "",
-    profit_ready:
-      adjustmentMeta.entryType === "order" ? costDetails.profit_ready : false,
+    matched_by: isReturnedOrCancelled ? "returned_restocked" : (costDetails.matched_by || ""),
+    profit_ready: profitReady,
 
     fee_breakdown: feeBreakdown,
     imported_at: new Date()
