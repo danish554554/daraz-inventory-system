@@ -1134,6 +1134,8 @@ router.post("/sync", async (req, res) => {
       }
 
       // 2. Fallback to Store Orders (Delivered/Shipped orders for this weekly period)
+      // NOTE: Daraz fees vary per order/category/promotion - only the actual CSV statement has real numbers.
+      // This fallback records orders WITHOUT fee calculations. Import CSV for accurate profit.
       if (storeImported === 0 && dateRange) {
         try {
           const CentralOrder = require("../models/CentralOrder");
@@ -1162,41 +1164,16 @@ router.post("/sync", async (req, res) => {
               const lineId = item.external_order_item_id || `${orderNum}_${item.seller_sku}`;
               if (!orderNum) continue;
 
-              // Skip if a CSV-imported entry already exists for this order
+              // Skip if a real CSV-imported entry already exists for this order
               const existingCsvEntry = await FinanceEntry.findOne({
                 order_number: orderNum,
-                matched_by: { $nin: ["store_order_sync", "store_order_sync_estimated"] }
+                matched_by: { $nin: ["store_order_sync", "store_order_sync_estimated", "pending_statement"] }
               }).lean();
               if (existingCsvEntry) continue;
 
               const unitPrice = Number(item.unit_price) || Number(item.item_price) || Number(item.paid_price) || 0;
               const qty = Number(item.quantity) || 1;
               const itemGross = Number((unitPrice * qty).toFixed(2));
-
-              // Comprehensive Daraz Marketplace Fee Estimates
-              // These rates approximate real Daraz Pakistan deductions
-              const commissionRate = 0.12;       // 12% Commission Fee
-              const paymentFeeRate = 0.0175;     // 1.75% Payment Fee
-              const handlingFeeRate = 0.01;       // ~1% Handling Fee
-              const cofundedVoucherRate = 0.015;  // ~1.5% Co-funded Voucher Max
-              const freeShippingMaxRate = 0.035;  // ~3.5% Free Shipping Max Fee
-              const incomeTaxRate = 0.02;         // 2% Income Tax Withholding (WHT)
-              const salesTaxRate = 0.02;          // 2% Sales Tax Withholding
-              const shippingFeeEstimate = 250;    // Flat ~PKR 250 average shipping fee
-
-              const commissionFee = Number((itemGross * commissionRate).toFixed(2));
-              const paymentFee = Number((itemGross * paymentFeeRate).toFixed(2));
-              const handlingFee = Number((itemGross * handlingFeeRate).toFixed(2));
-              const cofundedVoucherFee = Number((itemGross * cofundedVoucherRate).toFixed(2));
-              const freeShippingMaxFee = Number((itemGross * freeShippingMaxRate).toFixed(2));
-              const incomeTaxWithholding = Number((itemGross * incomeTaxRate).toFixed(2));
-              const salesTaxWithholding = Number((itemGross * salesTaxRate).toFixed(2));
-              const shippingFee = shippingFeeEstimate;
-
-              const totalFees = Number((commissionFee + paymentFee + handlingFee + cofundedVoucherFee + freeShippingMaxFee + shippingFee).toFixed(2));
-              const totalTaxes = Number((incomeTaxWithholding + salesTaxWithholding).toFixed(2));
-              const totalDeductions = Number((totalFees + totalTaxes).toFixed(2));
-              const netSettlement = Number((itemGross - totalDeductions).toFixed(2));
 
               const costDetails = await findCostDetails([{
                 "Seller SKU": item.seller_sku,
@@ -1207,6 +1184,8 @@ router.post("/sync", async (req, res) => {
               const totalCost = Number((costPrice * qty).toFixed(2));
               const statementNumber = `STMT-${store.code || store.name}-${period.replace(/\s+/g, '_')}`;
 
+              // Record the order WITHOUT any fee estimates
+              // Fees vary per order - only actual CSV/Excel statement data is accurate
               const entryData = {
                 store_id: store._id,
                 store_name: store.name,
@@ -1220,39 +1199,31 @@ router.post("/sync", async (req, res) => {
                 order_status: item.status || parentOrder.status || "delivered",
                 entry_type: "order",
                 product_price: itemGross,
-                commission_fee: commissionFee,
-                payment_fee: paymentFee,
-                handling_fee: handlingFee,
-                cofunded_voucher_fee: cofundedVoucherFee,
-                free_shipping_max_fee: freeShippingMaxFee,
-                shipping_fee: shippingFee,
-                income_tax_withholding: incomeTaxWithholding,
-                sales_tax_withholding: salesTaxWithholding,
-                wht_amount: 0,
                 gross_amount: itemGross,
-                total_fees: totalFees,
-                total_taxes: totalTaxes,
-                total_deductions: totalDeductions,
-                net_settlement: netSettlement,
+                // No fee estimates - fees vary per order, only CSV has real data
+                commission_fee: 0,
+                payment_fee: 0,
+                handling_fee: 0,
+                cofunded_voucher_fee: 0,
+                free_shipping_max_fee: 0,
+                shipping_fee: 0,
+                coins_discount_fee: 0,
+                income_tax_withholding: 0,
+                sales_tax_withholding: 0,
+                wht_amount: 0,
+                total_fees: 0,
+                total_taxes: 0,
+                total_deductions: 0,
+                net_settlement: 0,
                 cost_price: costPrice,
                 quantity: qty,
                 total_cost: totalCost,
-                net_profit: costPrice > 0 ? Number((netSettlement - totalCost).toFixed(2)) : null,
+                net_profit: null,
                 matched_product_id: costDetails.matched_product_id,
                 matched_product_name: costDetails.matched_product_name || item.product_name,
-                matched_by: "store_order_sync_estimated",
-                profit_ready: costPrice > 0,
-                fee_breakdown: {
-                  "Product Price Paid by Buyer": itemGross,
-                  "Commission Fee (est.)": -commissionFee,
-                  "Payment Fee (est.)": -paymentFee,
-                  "Handling Fee (est.)": -handlingFee,
-                  "Co-funded Voucher Max (est.)": -cofundedVoucherFee,
-                  "Free Shipping Max Fee (est.)": -freeShippingMaxFee,
-                  "Shipping Fee (est.)": -shippingFee,
-                  "Income Tax Withholding (est.)": -incomeTaxWithholding,
-                  "Sales Tax Withholding (est.)": -salesTaxWithholding
-                },
+                matched_by: "pending_statement",
+                profit_ready: false,
+                fee_breakdown: {},
                 imported_at: new Date()
               };
 
@@ -1283,7 +1254,7 @@ router.post("/sync", async (req, res) => {
     const totals = buildSummary(allEntries);
 
     const message = totalImportedOrders > 0 || totalImportedAdjustments > 0
-      ? `Successfully imported ${totalImportedOrders} order(s) for "${period}".`
+      ? `Found ${totalImportedOrders} order(s) for "${period}". Import your Daraz Statement CSV/Excel for exact profit calculation.`
       : `No transactions found for "${period}". Import your Daraz Statement CSV/Excel file for complete details.`;
 
     res.json({
