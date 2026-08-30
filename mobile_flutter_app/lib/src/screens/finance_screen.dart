@@ -219,8 +219,8 @@ class _FinanceScreenState extends State<FinanceScreen> {
                               final targetPeriod = p.statementPeriod;
                               setState(() => _selectedPeriod = targetPeriod);
                               Navigator.pop(context);
-                              // Automatically import statement from Daraz for this cycle
-                              await _syncFromDaraz(period: targetPeriod);
+                              // If this period already has data, simply load it
+                              await _load();
                             },
                           );
                         }),
@@ -858,6 +858,13 @@ class _FinanceScreenState extends State<FinanceScreen> {
                     ],
                   ),
                 ),
+      floatingActionButton: FloatingActionButton.extended(
+        onPressed: _openImportSheet,
+        backgroundColor: AppTheme.primary,
+        foregroundColor: Colors.white,
+        icon: const Icon(Icons.upload_file_rounded),
+        label: const Text('Import Statement CSV', style: TextStyle(fontWeight: FontWeight.w900)),
+      ),
     );
   }
 
