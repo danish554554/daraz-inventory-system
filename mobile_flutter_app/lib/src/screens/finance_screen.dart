@@ -219,8 +219,8 @@ class _FinanceScreenState extends State<FinanceScreen> {
                               final targetPeriod = p.statementPeriod;
                               setState(() => _selectedPeriod = targetPeriod);
                               Navigator.pop(context);
-                              // If this period already has data, simply load it
-                              await _load();
+                              // Automatically import statement from Daraz for this cycle
+                              await _syncFromDaraz(period: targetPeriod);
                             },
                           );
                         }),
