@@ -428,9 +428,18 @@ async function buildEntryFromGroup(group, defaultStore = null, preloadedCache = 
       feeNameKey.includes("shipping charge") ||
       feeNameKey.includes("freight")
     ) {
-      shippingFee += absNumber(amount);
+      // FIX Bug #2: Use the raw signed amount so the Shipping Fee Discount
+      // (+235.75 credit) is captured as a positive value, NOT as a deduction.
+      // shippingFee accumulates signed amounts; negative = cost, positive = credit.
+      shippingFee += amount;
     } else if (feeNameKey.includes("coin")) {
-      coinsDiscountFee += absNumber(amount);
+      // FIX Bug #3: Only treat negative amounts as a deduction.
+      // A positive "coin" credit must NOT be flipped via absNumber() into a phantom fee.
+      if (amount < 0) {
+        coinsDiscountFee += absNumber(amount);
+      } else {
+        otherCredits += amount;
+      }
     } else if (
       feeNameKey.includes("penalt") ||
       feeNameKey.includes("fulfillment penalty")
@@ -443,18 +452,37 @@ async function buildEntryFromGroup(group, defaultStore = null, preloadedCache = 
     }
   }
 
-  const grossAmount = productPrice + shippingPaidByBuyer + shippingFeeDiscount + otherCredits;
+  // FIX Bug #2 (cont.): Net the shipping fee against any shipping discount.
+  // In Daraz statements the "Shipping Fee" row (-235.75) and "Shipping Fee
+  // Discount" row (+235.75) always cancel out when free shipping is applied.
+  // shippingFee may now be negative (credits > charges) — clamp to 0.
+  const netShippingCharge = Math.max(0, -shippingFee); // shippingFee is signed: negative = cost
+
+  // FIX Bug #1: grossAmount must NOT include shippingFeeDiscount as a credit.
+  // The shipping discount cancels the shipping charge inside netShippingCharge above.
+  // Adding it again to grossAmount would double-count it as seller income.
+  const grossAmount = productPrice + shippingPaidByBuyer + otherCredits;
+
   const totalFees =
     commissionFee +
     paymentFee +
-    shippingFee +
+    netShippingCharge +
     handlingFee +
     freeShippingMaxFee +
     cofundedVoucherFee +
     coinsDiscountFee +
     penalties +
     otherFees;
-  const totalTaxes = incomeTaxWithholding + salesTaxWithholding + otherTaxes + whtAmount;
+
+  // FIX Bug #4: Do NOT add whtAmount to totalTaxes.
+  // The WHT amount column is the same money already captured in incomeTaxWithholding
+  // via the "income tax / wht" fee-name branch above. Adding it again double-counts it.
+  const totalTaxes = incomeTaxWithholding + salesTaxWithholding + otherTaxes;
+
+  // FIX Bug #5: totalDeductions was used below but never declared, causing
+  // every stored record to have NaN / 0 in the total_deductions field.
+  const totalDeductions = totalFees + totalTaxes;
+
   const rawStatus = (first["Order Status"] || first["Status"] || "").trim();
   const isReturnedOrCancelled =
     rawStatus.toLowerCase().includes("return") ||
@@ -536,11 +564,11 @@ async function buildEntryFromGroup(group, defaultStore = null, preloadedCache = 
 
     product_price: productPrice,
     shipping_paid_by_buyer: shippingPaidByBuyer,
-    shipping_fee_discount: shippingFeeDiscount,
+    shipping_fee_discount: Math.abs(shippingFee) > netShippingCharge ? Math.abs(shippingFee) - netShippingCharge : 0,
 
     commission_fee: commissionFee,
     payment_fee: paymentFee,
-    shipping_fee: shippingFee,
+    shipping_fee: netShippingCharge,
     handling_fee: handlingFee,
     free_shipping_max_fee: freeShippingMaxFee,
     cofunded_voucher_fee: cofundedVoucherFee,
@@ -967,6 +995,78 @@ router.delete("/clear", async (req, res) => {
     });
   } catch (error) {
     res.status(500).json({ message: "Error clearing finance data", error: error.message });
+  }
+});
+
+// 6b. Recalculate all stored FinanceEntry records using the corrected engine.
+//     Re-derives computed fields (gross_amount, total_fees, total_taxes,
+//     total_deductions, net_settlement, net_profit) from the raw component
+//     values already stored in each record — no CSV re-import needed.
+router.post("/recalculate", async (req, res) => {
+  try {
+    const { statement_period } = req.body;
+    const query = { entry_type: "order" };
+    if (statement_period && statement_period !== "all") {
+      query.statement_period = { $regex: new RegExp(`^${escapeRegex(statement_period.trim())}$`, "i") };
+    }
+
+    const entries = await FinanceEntry.find(query);
+    let updated = 0;
+
+    for (const entry of entries) {
+      // Re-compute using the fixed formulas:
+      // 1. Shipping is already stored as netShippingCharge (non-negative).
+      const netShipping = Math.max(0, entry.shipping_fee || 0);
+
+      // 2. grossAmount = product_price + shipping_paid_by_buyer (NO shippingFeeDiscount)
+      const gross = (entry.product_price || 0) + (entry.shipping_paid_by_buyer || 0);
+
+      // 3. totalFees: use stored named fee fields (already corrected for coins/shipping)
+      const fees =
+        (entry.commission_fee || 0) +
+        (entry.payment_fee || 0) +
+        netShipping +
+        (entry.handling_fee || 0) +
+        (entry.free_shipping_max_fee || 0) +
+        (entry.cofunded_voucher_fee || 0) +
+        (entry.coins_discount_fee || 0) +
+        (entry.penalties || 0);
+
+      // 4. totalTaxes: income + sales WHT (NO wht_amount double-add)
+      const taxes = (entry.income_tax_withholding || 0) + (entry.sales_tax_withholding || 0);
+
+      // 5. totalDeductions
+      const deductions = fees + taxes;
+
+      // 6. net_settlement was stored as the raw sum of all CSV amounts — keep it as truth.
+      //    Recalculate net_profit from net_settlement - total_cost.
+      const netSettlement = entry.net_settlement || 0;
+      const netProfit = entry.profit_ready && (entry.total_cost || 0) >= 0
+        ? Number((netSettlement - (entry.total_cost || 0)).toFixed(2))
+        : entry.net_profit;
+
+      await FinanceEntry.updateOne(
+        { _id: entry._id },
+        {
+          $set: {
+            gross_amount: Number(gross.toFixed(2)),
+            total_fees: Number(fees.toFixed(2)),
+            total_taxes: Number(taxes.toFixed(2)),
+            total_deductions: Number(deductions.toFixed(2)),
+            net_profit: netProfit
+          }
+        }
+      );
+      updated += 1;
+    }
+
+    res.json({
+      success: true,
+      message: `Recalculated ${updated} finance order record(s) with the corrected engine.`,
+      updated_count: updated
+    });
+  } catch (error) {
+    res.status(500).json({ message: "Error recalculating finance entries", error: error.message });
   }
 });
 

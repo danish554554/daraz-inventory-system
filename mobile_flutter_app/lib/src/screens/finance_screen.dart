@@ -592,11 +592,47 @@ class _FinanceScreenState extends State<FinanceScreen> {
                         ),
                       ),
                     ],
-                    if (item.feeBreakdown.isNotEmpty) ...<Widget>[
+                    // ── Itemized Statement Breakdown ──────────────────────────────
+                    // Uses the structured, named fields from the settlement engine
+                    // instead of raw CSV column names, so every label is clean and
+                    // human-readable — matching Daraz's "My Payment Information" view.
+                    if (item.isOrder) ...<Widget>[
                       const SizedBox(height: 16),
                       _breakdownSectionTitle('Itemized Statement Breakdown'),
+                      // Credits
+                      if (item.productPrice > 0)
+                        _breakdownRow('Product Price Paid by Buyer', '+PKR ${Formatters.money(item.productPrice)}', color: AppTheme.success),
+                      if (item.shippingPaidByBuyer > 0)
+                        _breakdownRow('Shipping Fee (Paid by Buyer)', '+PKR ${Formatters.money(item.shippingPaidByBuyer)}', color: AppTheme.success),
+                      // Daraz Fees
+                      if (item.commissionFee > 0)
+                        _breakdownRow('Commission Fee', 'PKR -${Formatters.money(item.commissionFee)}', color: AppTheme.danger),
+                      if (item.paymentFee > 0)
+                        _breakdownRow('Payment Fee', 'PKR -${Formatters.money(item.paymentFee)}', color: AppTheme.danger),
+                      if (item.shippingFee > 0)
+                        _breakdownRow('Shipping Fee (Net)', 'PKR -${Formatters.money(item.shippingFee)}', color: AppTheme.danger)
+                      else if (item.shippingFeeDiscount > 0)
+                        _breakdownRow('Shipping Fee (Subsidized)', 'PKR 0.00', color: AppTheme.info),
+                      if (item.freeShippingMaxFee > 0)
+                        _breakdownRow('Free Shipping Max Fee', 'PKR -${Formatters.money(item.freeShippingMaxFee)}', color: AppTheme.danger),
+                      if (item.cofundedVoucherFee > 0)
+                        _breakdownRow('Co-funded Voucher', 'PKR -${Formatters.money(item.cofundedVoucherFee)}', color: AppTheme.danger),
+                      if (item.handlingFee > 0)
+                        _breakdownRow('Handling / Seller Discount', 'PKR -${Formatters.money(item.handlingFee)}', color: AppTheme.danger),
+                      if (item.coinsDiscountFee > 0)
+                        _breakdownRow('Daraz Coins Discount', 'PKR -${Formatters.money(item.coinsDiscountFee)}', color: AppTheme.danger),
+                      if (item.penalties > 0)
+                        _breakdownRow('Penalties & Other Fees', 'PKR -${Formatters.money(item.penalties)}', color: AppTheme.danger),
+                      // Taxes
+                      if (item.incomeTaxWithholding > 0)
+                        _breakdownRow('Income Tax Withholding', 'PKR -${Formatters.money(item.incomeTaxWithholding)}', color: AppTheme.warning),
+                      if (item.salesTaxWithholding > 0)
+                        _breakdownRow('Sales Tax Withholding', 'PKR -${Formatters.money(item.salesTaxWithholding)}', color: AppTheme.warning),
+                    ] else if (item.feeBreakdown.isNotEmpty) ...<Widget>[
+                      const SizedBox(height: 16),
+                      _breakdownSectionTitle('Adjustment Breakdown'),
                       ...item.feeBreakdown.entries.map((e) {
-                        final val = e.value;
+                        final val = (e.value as num?)?.toDouble() ?? 0.0;
                         return _breakdownRow(
                           e.key,
                           '${val >= 0 ? '+' : ''}PKR ${Formatters.money(val)}',
@@ -604,6 +640,7 @@ class _FinanceScreenState extends State<FinanceScreen> {
                         );
                       }),
                     ],
+
                   ],
                 ),
               ),
@@ -742,6 +779,43 @@ class _FinanceScreenState extends State<FinanceScreen> {
     }
   }
 
+  Future<void> _recalculate() async {
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (context) => AlertDialog(
+        backgroundColor: AppTheme.cardColor(context),
+        title: Text('Fix Existing Records?',
+            style: TextStyle(color: AppTheme.textPrimaryColor(context), fontWeight: FontWeight.w900)),
+        content: Text(
+          'This will re-apply the corrected calculation engine to all existing imported records and fix any wrong Net Received / Profit values — without re-importing CSV files.',
+          style: TextStyle(color: AppTheme.textMutedColor(context)),
+        ),
+        actions: <Widget>[
+          TextButton(onPressed: () => Navigator.pop(context, false), child: const Text('Cancel')),
+          FilledButton(onPressed: () => Navigator.pop(context, true), child: const Text('Recalculate')),
+        ],
+      ),
+    );
+
+    if (confirmed == true) {
+      try {
+        final response = await ApiClient.instance.post(
+          '/finance/recalculate',
+          body: <String, dynamic>{
+            if (_selectedPeriod != 'all') 'statement_period': _selectedPeriod,
+          },
+          timeout: const Duration(seconds: 120),
+        );
+        final respMap = JsonReaders.map(response);
+        final msg = JsonReaders.string(respMap, 'message', 'Records recalculated.');
+        if (mounted) showAppSnackBar(context, msg);
+        await _load(silent: true);
+      } catch (e) {
+        if (mounted) showAppSnackBar(context, 'Recalculation failed: $e', error: true);
+      }
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
     return Scaffold(
@@ -788,6 +862,13 @@ class _FinanceScreenState extends State<FinanceScreen> {
                               onPressed: _confirmClearData,
                               background: AppTheme.dangerSoft,
                               foreground: AppTheme.danger,
+                            ),
+                            const SizedBox(width: 8),
+                            CircleIconButton(
+                              icon: Icons.calculate_rounded,
+                              onPressed: _recalculate,
+                              background: AppTheme.primarySoft,
+                              foreground: AppTheme.primary,
                             ),
                             const SizedBox(width: 8),
                             CircleIconButton(
