@@ -1,3 +1,4 @@
+import 'dart:convert';
 import 'dart:io';
 
 import 'package:file_picker/file_picker.dart';
@@ -1543,6 +1544,8 @@ class _FinanceCsvImportSheetState extends State<FinanceCsvImportSheet> {
   String? _selectedStoreId;
   bool _importing = false;
   int _parsedRowsCount = 0;
+  String _pickedFileName = '';
+  String _pickedFileBase64 = '';
 
   @override
   void initState() {
@@ -1558,18 +1561,19 @@ class _FinanceCsvImportSheetState extends State<FinanceCsvImportSheet> {
     super.dispose();
   }
 
-  String _pickedFileName = '';
-
   void _onTextChange(String val) {
-    final rows = _parseCsv(val);
-    setState(() => _parsedRowsCount = rows.length);
+    setState(() {
+      _pickedFileBase64 = '';
+      _pickedFileName = '';
+      _parsedRowsCount = val.trim().isEmpty ? 0 : val.split('\n').where((l) => l.trim().isNotEmpty).length;
+    });
   }
 
-  Future<void> _pickCsvFile() async {
+  Future<void> _pickFile() async {
     try {
       final result = await FilePicker.platform.pickFiles(
         type: FileType.custom,
-        allowedExtensions: <String>['csv', 'txt'],
+        allowedExtensions: <String>['xlsx', 'xls', 'csv', 'txt'],
         withData: false,
       );
       if (result == null || result.files.isEmpty) return;
@@ -1578,82 +1582,51 @@ class _FinanceCsvImportSheetState extends State<FinanceCsvImportSheet> {
       final path = file.path;
       if (path == null) return;
 
-      final content = await File(path).readAsString();
-      _csvController.text = content;
-      _onTextChange(content);
-      setState(() => _pickedFileName = file.name);
+      final bytes = await File(path).readAsBytes();
+      final base64String = base64Encode(bytes);
+
+      setState(() {
+        _pickedFileName = file.name;
+        _pickedFileBase64 = base64String;
+        _csvController.clear();
+        _parsedRowsCount = 0;
+      });
     } catch (e) {
       if (mounted) {
-        showAppSnackBar(context, 'Failed to read CSV file: $e', error: true);
+        showAppSnackBar(context, 'Failed to read file: $e', error: true);
       }
     }
-  }
-
-  List<Map<String, String>> _parseCsv(String text) {
-    final lines = text.replaceAll('\r', '').split('\n').where((l) => l.trim().isNotEmpty).toList();
-    if (lines.length < 2) return <Map<String, String>>[];
-
-    final delimiter = lines[0].contains(';') ? ';' : ',';
-    final headers = _splitLine(lines[0], delimiter);
-
-    final rows = <Map<String, String>>[];
-    for (int i = 1; i < lines.length; i++) {
-      final values = _splitLine(lines[i], delimiter);
-      final row = <String, String>{};
-      for (int h = 0; h < headers.length; h++) {
-        row[headers[h]] = h < values.length ? values[h] : '';
-      }
-      rows.add(row);
-    }
-    return rows;
-  }
-
-  List<String> _splitLine(String line, String delimiter) {
-    final result = <String>[];
-    String current = '';
-    bool inQuotes = false;
-    for (int i = 0; i < line.length; i++) {
-      final char = line[i];
-      if (char == '"') {
-        inQuotes = !inQuotes;
-      } else if (char == delimiter && !inQuotes) {
-        result.add(current.trim());
-        current = '';
-      } else {
-        current += char;
-      }
-    }
-    result.add(current.trim());
-    return result;
   }
 
   Future<void> _submit() async {
     final text = _csvController.text.trim();
-    if (text.isEmpty) {
-      showAppSnackBar(context, 'Please paste your Daraz weekly finance statement CSV text.', error: true);
-      return;
-    }
-
-    final rows = _parseCsv(text);
-    if (rows.isEmpty) {
-      showAppSnackBar(context, 'Could not parse any valid CSV rows. Check CSV headers.', error: true);
+    if (_pickedFileBase64.isEmpty && text.isEmpty) {
+      showAppSnackBar(context, 'Please select a Daraz statement file (.xlsx, .xls, .csv) or paste CSV text.', error: true);
       return;
     }
 
     setState(() => _importing = true);
     try {
+      final body = <String, dynamic>{
+        if (_selectedStoreId != null) 'store_id': _selectedStoreId,
+      };
+
+      if (_pickedFileBase64.isNotEmpty) {
+        body['file_base64'] = _pickedFileBase64;
+        body['file_name'] = _pickedFileName;
+      } else {
+        body['rows'] = text;
+      }
+
       await ApiClient.instance.post(
         '/finance/import-csv',
-        body: <String, dynamic>{
-          'rows': rows,
-          if (_selectedStoreId != null) 'store_id': _selectedStoreId,
-        },
+        body: body,
       );
       if (mounted) Navigator.pop(context, true);
     } on ApiException catch (e) {
       if (mounted) showAppSnackBar(context, e.message, error: true);
-    } catch (_) {
-      if (mounted) showAppSnackBar(context, 'Failed to import statement CSV.', error: true);
+    } catch (e) {
+      if (mounted) showAppSnackBar(context, 'Failed to import statement: $e', error: true);
     } finally {
       if (mounted) setState(() => _importing = false);
     }
@@ -1674,8 +1647,8 @@ class _FinanceCsvImportSheetState extends State<FinanceCsvImportSheet> {
           crossAxisAlignment: CrossAxisAlignment.start,
           children: <Widget>[
             SectionHeader(
-              title: 'Import Weekly Statement',
-              subtitle: 'Pick a CSV file or paste CSV text from Daraz Seller Center Finance export.',
+              title: 'Import Daraz Statement',
+              subtitle: 'Select an official Daraz statement file (.xlsx, .xls, .csv) or paste CSV text.',
               action: IconButton(onPressed: () => Navigator.pop(context), icon: const Icon(Icons.close)),
             ),
             if (widget.stores.isNotEmpty) ...<Widget>[
@@ -1699,7 +1672,7 @@ class _FinanceCsvImportSheetState extends State<FinanceCsvImportSheet> {
             ],
             const SizedBox(height: 14),
             InkWell(
-              onTap: _pickCsvFile,
+              onTap: _pickFile,
               borderRadius: BorderRadius.circular(14),
               child: Container(
                 width: double.infinity,
@@ -1734,7 +1707,7 @@ class _FinanceCsvImportSheetState extends State<FinanceCsvImportSheet> {
                         crossAxisAlignment: CrossAxisAlignment.start,
                         children: <Widget>[
                           Text(
-                            _pickedFileName.isNotEmpty ? _pickedFileName : 'Pick CSV File from Device',
+                            _pickedFileName.isNotEmpty ? _pickedFileName : 'Select Statement File (.xlsx, .xls, .csv)',
                             style: TextStyle(
                               fontSize: 13,
                               fontWeight: FontWeight.w800,
@@ -1743,7 +1716,7 @@ class _FinanceCsvImportSheetState extends State<FinanceCsvImportSheet> {
                           ),
                           const SizedBox(height: 2),
                           Text(
-                            _pickedFileName.isNotEmpty ? 'Tap to change file' : 'Select .csv export from Downloads',
+                            _pickedFileName.isNotEmpty ? 'File selected (tap to change)' : 'From Daraz Seller Center ➔ Finance statement download',
                             style: TextStyle(
                               fontSize: 11,
                               fontWeight: FontWeight.w600,
@@ -1776,9 +1749,9 @@ class _FinanceCsvImportSheetState extends State<FinanceCsvImportSheet> {
             const SizedBox(height: 10),
             AppTextField(
               controller: _csvController,
-              labelText: 'Paste Daraz Statement CSV content',
+              labelText: 'Paste Daraz Statement CSV text',
               hintText: 'Statement Period,Statement Number,Order Number,Order Line ID,Seller SKU,Fee Name,Amount(Include Tax)...',
-              maxLines: 6,
+              maxLines: 5,
               onChanged: _onTextChange,
             ),
             const SizedBox(height: 8),
@@ -1786,7 +1759,7 @@ class _FinanceCsvImportSheetState extends State<FinanceCsvImportSheet> {
               mainAxisAlignment: MainAxisAlignment.spaceBetween,
               children: <Widget>[
                 Text(
-                  '💡 Daraz Seller Center ➔ Finance ➔ Export CSV',
+                  '💡 Direct Excel & CSV files are automatically parsed',
                   style: TextStyle(color: AppTheme.textMutedColor(context), fontSize: 11, fontWeight: FontWeight.w700),
                 ),
                 if (_parsedRowsCount > 0)

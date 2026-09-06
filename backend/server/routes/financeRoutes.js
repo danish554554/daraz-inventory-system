@@ -11,6 +11,111 @@ const CentralOrder = require("../models/CentralOrder");
 const CentralOrderItem = require("../models/CentralOrderItem");
 const { getTransactionDetails } = require("../services/darazApiService");
 const { ensureStoreTokenReadyForSync } = require("../services/darazService");
+const XLSX = require("xlsx");
+
+function parseDarazFileToRows(bufferOrText) {
+  let workbook;
+  if (Buffer.isBuffer(bufferOrText)) {
+    workbook = XLSX.read(bufferOrText, { type: "buffer", raw: false });
+  } else if (typeof bufferOrText === "string") {
+    workbook = XLSX.read(bufferOrText, { type: "string", raw: false });
+  } else {
+    return [];
+  }
+
+  if (!workbook || !workbook.SheetNames || workbook.SheetNames.length === 0) {
+    return [];
+  }
+
+  const sheet = workbook.Sheets[workbook.SheetNames[0]];
+  const rawMatrix = XLSX.utils.sheet_to_json(sheet, { header: 1, defval: "" });
+  if (!rawMatrix || rawMatrix.length === 0) return [];
+
+  // Locate the true header row by scanning first 15 rows for known keywords
+  let headerRowIndex = -1;
+  for (let r = 0; r < Math.min(15, rawMatrix.length); r++) {
+    const row = rawMatrix[r] || [];
+    const joined = row.map((cell) => String(cell || "").toLowerCase().trim()).join(" ");
+    if (
+      (joined.includes("order number") || joined.includes("order no") || joined.includes("order id")) &&
+      (joined.includes("fee name") || joined.includes("amount") || joined.includes("transaction type") || joined.includes("statement"))
+    ) {
+      headerRowIndex = r;
+      break;
+    }
+  }
+
+  if (headerRowIndex === -1) {
+    // Fallback: check if row 0 has any recognizable column
+    headerRowIndex = 0;
+  }
+
+  const headerRow = rawMatrix[headerRowIndex] || [];
+  const normalizedHeaders = headerRow.map((col) => {
+    let clean = String(col || "").replace(/^\uFEFF/, "").trim();
+    const lower = clean.toLowerCase();
+    if (lower === "order no" || lower === "order no." || lower === "order id" || lower === "order_number") {
+      return "Order Number";
+    }
+    if (lower === "order line id" || lower === "order item id" || lower === "order line no" || lower === "item id") {
+      return "Order Line ID";
+    }
+    if (lower === "seller sku" || lower === "sellersku") {
+      return "Seller SKU";
+    }
+    if (lower === "lazada sku" || lower === "daraz sku") {
+      return "Lazada SKU";
+    }
+    if (lower === "fee name" || lower === "feename" || lower === "transaction type") {
+      return "Fee Name";
+    }
+    if (lower === "amount(include tax)" || lower === "amount (include tax)" || lower === "amount(incl tax)" || lower === "amount (incl tax)" || lower === "amount") {
+      return "Amount(Include Tax)";
+    }
+    if (lower === "vat amount" || lower === "vat") {
+      return "VAT Amount";
+    }
+    if (lower === "wht amount" || lower === "wht") {
+      return "WHT Amount";
+    }
+    if (lower === "statement period" || lower === "period") {
+      return "Statement Period";
+    }
+    if (lower === "statement number" || lower === "statement no") {
+      return "Statement Number";
+    }
+    if (lower === "product name" || lower === "item name") {
+      return "Product Name";
+    }
+    if (lower === "order status" || lower === "status") {
+      return "Order Status";
+    }
+    if (lower === "quantity" || lower === "qty") {
+      return "Quantity";
+    }
+    return clean;
+  });
+
+  const parsedRows = [];
+  for (let r = headerRowIndex + 1; r < rawMatrix.length; r++) {
+    const dataRow = rawMatrix[r] || [];
+    if (!dataRow || dataRow.length === 0) continue;
+    const rowObj = {};
+    let hasData = false;
+    for (let c = 0; c < normalizedHeaders.length; c++) {
+      const h = normalizedHeaders[c];
+      if (!h) continue;
+      const val = dataRow[c] !== undefined && dataRow[c] !== null ? String(dataRow[c]).trim() : "";
+      if (val) hasData = true;
+      rowObj[h] = val;
+    }
+    if (hasData) {
+      parsedRows.push(rowObj);
+    }
+  }
+
+  return parsedRows;
+}
 
 function toNumber(value) {
   if (value === null || value === undefined || value === "") return 0;
@@ -595,7 +700,7 @@ async function buildEntryFromGroup(group, defaultStore = null, preloadedCache = 
       adjustmentMeta.entryType === "order" ? costDetails.matched_product_id : null,
     matched_product_name:
       adjustmentMeta.entryType === "order" ? costDetails.matched_product_name : "",
-    matched_by: isReturnedOrCancelled ? "returned_restocked" : (costDetails.matched_by || ""),
+    matched_by: isReturnedOrCancelled ? "returned_restocked" : (costDetails.matched_by || "file_imported"),
     profit_ready: profitReady,
 
     fee_breakdown: feeBreakdown,
@@ -855,10 +960,17 @@ async function cleanupDuplicateFinanceEntries() {
 // 4. Import Statement CSV / Excel Rows (High-speed batch processing)
 router.post("/import-csv", async (req, res) => {
   try {
-    const { rows = [], store_id = "" } = req.body;
+    let { rows = [], file_base64 = "", store_id = "" } = req.body;
+
+    if (file_base64) {
+      const buffer = Buffer.from(file_base64, "base64");
+      rows = parseDarazFileToRows(buffer);
+    } else if (typeof rows === "string") {
+      rows = parseDarazFileToRows(rows);
+    }
 
     if (!Array.isArray(rows) || rows.length === 0) {
-      return res.status(400).json({ message: "CSV rows are required" });
+      return res.status(400).json({ message: "No valid rows found in file. Please ensure it is a valid Daraz statement." });
     }
 
     let defaultStore = null;
@@ -1099,6 +1211,36 @@ router.post("/recalculate", async (req, res) => {
     let updated = 0;
 
     for (const entry of entries) {
+      // If this entry was imported from a real Daraz statement file, NEVER overwrite its
+      // official statement fee amounts and net settlement with heuristic estimates!
+      const isFileImported =
+        entry.matched_by === "file_imported" ||
+        entry.matched_by === "returned_restocked" ||
+        (entry.matched_by && entry.matched_by.startsWith("user_override")) ||
+        (entry.matched_by && !["store_order_sync", "store_order_sync_estimated", "daraz_api_sync"].includes(entry.matched_by) && entry.fee_breakdown && Object.keys(entry.fee_breakdown).length > 0);
+
+      if (isFileImported) {
+        // Only update total_cost and net_profit based on cost_price
+        const qty = entry.quantity > 0 ? entry.quantity : 1;
+        const costPrice = entry.cost_price || 0;
+        const totalCost = Number((costPrice * qty).toFixed(2));
+        const netProfit = entry.profit_ready && costPrice > 0
+          ? Number((entry.net_settlement - totalCost).toFixed(2))
+          : (entry.order_status?.toLowerCase().includes("return") ? Number(entry.net_settlement.toFixed(2)) : null);
+
+        await FinanceEntry.updateOne(
+          { _id: entry._id },
+          {
+            $set: {
+              total_cost: totalCost,
+              net_profit: netProfit
+            }
+          }
+        );
+        updated += 1;
+        continue;
+      }
+
       // Find matching CentralOrderItem if available
       let orderItem = null;
       if (entry.order_line_id) {
