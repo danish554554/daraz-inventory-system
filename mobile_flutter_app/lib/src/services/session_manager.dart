@@ -57,7 +57,17 @@ class SessionManager extends ChangeNotifier {
     notifyListeners();
 
     try {
-      final savedTheme = await _storage.read(key: _themeModeKey);
+      // Read all storage keys in parallel instead of sequentially to save
+      // ~300–600 ms on startup (each FlutterSecureStorage read hits the
+      // Android Keystore, which is slow).
+      final storageResults = await Future.wait<String?>(<Future<String?>>[
+        _storage.read(key: _themeModeKey),
+        _storage.read(key: _tokenKey),
+        _storage.read(key: _usernameKey),
+        _storage.read(key: _expiresAtKey),
+      ]);
+
+      final savedTheme = storageResults[0];
       if (savedTheme == 'light') {
         _themeMode = ThemeMode.light;
       } else if (savedTheme == 'dark') {
@@ -66,9 +76,9 @@ class SessionManager extends ChangeNotifier {
         _themeMode = ThemeMode.system;
       }
 
-      _token = await _storage.read(key: _tokenKey);
-      _username = await _storage.read(key: _usernameKey);
-      final expiresAtRaw = await _storage.read(key: _expiresAtKey);
+      _token = storageResults[1];
+      _username = storageResults[2];
+      final expiresAtRaw = storageResults[3];
       if (expiresAtRaw != null && expiresAtRaw.isNotEmpty) {
         _expiresAt = DateTime.tryParse(expiresAtRaw);
       }
@@ -77,7 +87,10 @@ class SessionManager extends ChangeNotifier {
         await logout(notify: false);
       } else if (_token != null) {
         try {
-          final response = await ApiClient.instance.get('/auth/me');
+          // Cap the session-validation call to 5 s so a sleeping Render
+          // backend (free tier) doesn't freeze the startup screen for 45 s.
+          final response = await ApiClient.instance
+              .get('/auth/me', timeout: const Duration(seconds: 5));
           final map = response is Map<String, dynamic> ? response : <String, dynamic>{};
           final user = map['user'];
           if (user is Map<String, dynamic>) {

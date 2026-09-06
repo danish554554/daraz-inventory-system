@@ -143,17 +143,21 @@ class _SyncScreenState extends State<SyncScreen> with WidgetsBindingObserver {
     }
 
     try {
+      // bypass = true on the first/manual load; false on periodic silent
+      // ticks so we serve the 30-second in-memory cache instead of hitting
+      // the server 9 times every 30 seconds.
+      final bypass = !silent;
       final historyParams = _historyQueryParameters();
       final results = await Future.wait<dynamic>(<Future<dynamic>>[
-        ApiClient.instance.get('/daraz-sync/status', bypassCache: true),
-        ApiClient.instance.get('/stores', bypassCache: true),
-        ApiClient.instance.get('/daraz-sync/orders', queryParameters: <String, dynamic>{'limit': 50}, bypassCache: true),
-        ApiClient.instance.get('/daraz-sync/order-items', queryParameters: <String, dynamic>{'limit': 80}, bypassCache: true),
-        ApiClient.instance.get('/daraz-sync/return-orders', queryParameters: <String, dynamic>{'limit': 60, ...historyParams}, bypassCache: true),
-        ApiClient.instance.get('/daraz-sync/failed-delivery', queryParameters: <String, dynamic>{'limit': 60, ...historyParams}, bypassCache: true),
-        ApiClient.instance.get('/daraz-sync/orders-history', queryParameters: <String, dynamic>{'limit': 80, ...historyParams}, bypassCache: true),
-        ApiClient.instance.get('/daraz-sync/cancelled-orders', queryParameters: <String, dynamic>{'limit': 40, ...historyParams}, bypassCache: true),
-        ApiClient.instance.get('/daraz-sync/collection-alerts', queryParameters: <String, dynamic>{'limit': 20}, bypassCache: true),
+        ApiClient.instance.get('/daraz-sync/status', bypassCache: bypass),
+        ApiClient.instance.get('/stores', bypassCache: bypass),
+        ApiClient.instance.get('/daraz-sync/orders', queryParameters: <String, dynamic>{'limit': 50}, bypassCache: bypass),
+        ApiClient.instance.get('/daraz-sync/order-items', queryParameters: <String, dynamic>{'limit': 80}, bypassCache: bypass),
+        ApiClient.instance.get('/daraz-sync/return-orders', queryParameters: <String, dynamic>{'limit': 60, ...historyParams}, bypassCache: bypass),
+        ApiClient.instance.get('/daraz-sync/failed-delivery', queryParameters: <String, dynamic>{'limit': 60, ...historyParams}, bypassCache: bypass),
+        ApiClient.instance.get('/daraz-sync/orders-history', queryParameters: <String, dynamic>{'limit': 80, ...historyParams}, bypassCache: bypass),
+        ApiClient.instance.get('/daraz-sync/cancelled-orders', queryParameters: <String, dynamic>{'limit': 40, ...historyParams}, bypassCache: bypass),
+        ApiClient.instance.get('/daraz-sync/collection-alerts', queryParameters: <String, dynamic>{'limit': 20}, bypassCache: bypass),
       ]);
 
       final storesMap = JsonReaders.map(results[1]);

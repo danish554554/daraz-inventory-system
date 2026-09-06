@@ -39,8 +39,12 @@ class _DashboardScreenState extends State<DashboardScreen> {
   @override
   void initState() {
     super.initState();
+    // Load data first, then trigger live sync after a short delay so the
+    // dashboard has a chance to render before a second round-trip fires.
     _load().then((_) {
-      _triggerBackgroundLiveSync();
+      Future<void>.delayed(const Duration(seconds: 3), () {
+        if (mounted) _triggerBackgroundLiveSync();
+      });
     });
     _refreshTimer = Timer.periodic(const Duration(seconds: 30), (_) {
       if (mounted && !_loading) _load(silent: true);
@@ -68,13 +72,19 @@ class _DashboardScreenState extends State<DashboardScreen> {
     }
   }
 
-  Future<void> _load({bool silent = false}) async {
+  Future<void> _load({bool silent = false, bool forceRefresh = false}) async {
     if (!silent) {
       setState(() {
         _loading = true;
         _error = null;
       });
     }
+
+    // Use bypassCache only when the user explicitly requests a refresh
+    // (pull-to-refresh) or on the very first load. The periodic 30-second
+    // timer can use cached data — the cache TTL is already 30 s, so data
+    // is still fresh and we avoid 6 redundant round-trips per tick.
+    final bypass = forceRefresh || !silent;
 
     Future<dynamic> safe(Future<dynamic> request) async {
       try {
@@ -86,16 +96,16 @@ class _DashboardScreenState extends State<DashboardScreen> {
 
     try {
       final results = await Future.wait<dynamic>(<Future<dynamic>>[
-        safe(ApiClient.instance.get('/stores', bypassCache: true)),
-        safe(ApiClient.instance.get('/central-inventory', bypassCache: true)),
+        safe(ApiClient.instance.get('/stores', bypassCache: bypass)),
+        safe(ApiClient.instance.get('/central-inventory', bypassCache: bypass)),
         safe(
           ApiClient.instance.get(
             '/daraz-sync/order-items',
             queryParameters: <String, dynamic>{'limit': 40},
-            bypassCache: true,
+            bypassCache: bypass,
           ),
         ),
-        safe(ApiClient.instance.get('/daraz-sync/status', bypassCache: true)),
+        safe(ApiClient.instance.get('/daraz-sync/status', bypassCache: bypass)),
         safe(
           ApiClient.instance.get(
             '/daraz-sync/orders-history',
@@ -103,14 +113,14 @@ class _DashboardScreenState extends State<DashboardScreen> {
               'period': _historyPeriod,
               'limit': 20,
             },
-            bypassCache: true,
+            bypassCache: bypass,
           ),
         ),
         safe(
           ApiClient.instance.get(
             '/daraz-sync/orders',
             queryParameters: <String, dynamic>{'limit': 20},
-            bypassCache: true,
+            bypassCache: bypass,
           ),
         ),
       ]);
@@ -207,7 +217,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
                 )
               : AppShell(
                   onRefresh: () async {
-                    await _load();
+                    await _load(forceRefresh: true);
                     await _triggerBackgroundLiveSync();
                   },
                   child: Column(

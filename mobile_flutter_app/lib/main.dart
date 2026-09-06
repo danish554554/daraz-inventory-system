@@ -6,8 +6,8 @@ import 'src/services/session_manager.dart';
 
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
-  PaintingBinding.instance.imageCache.maximumSize = 300;
-  PaintingBinding.instance.imageCache.maximumSizeBytes = 120 << 20;
+  PaintingBinding.instance.imageCache.maximumSize = 100;
+  PaintingBinding.instance.imageCache.maximumSizeBytes = 50 << 20;
   await AppConfig.load();
   await SessionManager.instance.restore();
   runApp(DarazInventoryApp(sessionManager: SessionManager.instance));

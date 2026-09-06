@@ -48,7 +48,10 @@ class _HomeShellState extends State<HomeShell> {
           if (!_visitedIndices.contains(index)) {
             return const SizedBox.shrink();
           }
-          return _pages[index];
+          // RepaintBoundary isolates each tab's repaint layer so that
+          // a 30-second timer tick on one screen doesn't cause the GPU
+          // to re-rasterize unrelated screens.
+          return RepaintBoundary(child: _pages[index]);
         }),
       ),
       bottomNavigationBar: Container(
