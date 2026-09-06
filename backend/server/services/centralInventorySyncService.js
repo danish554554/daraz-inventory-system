@@ -123,7 +123,19 @@ function getItemQuantity(item) {
 }
 
 function getItemPrice(item) {
-  return safeNumber(item?.paid_price || item?.unit_price || item?.price || item?.item_price || 0, 0);
+  // In Daraz OpenAPI, item_price is the seller's catalog price, and voucher_seller is the seller's voucher.
+  // The seller receives: item_price - voucher_seller (or paid_price + voucher_platform).
+  const itemPrice = safeNumber(item?.item_price || item?.price || item?.unit_price || 0, 0);
+  const voucherSeller = safeNumber(item?.voucher_seller || item?.seller_discount || 0, 0);
+  if (itemPrice > 0) {
+    return Math.max(0, itemPrice - voucherSeller);
+  }
+  const paidPrice = safeNumber(item?.paid_price || 0, 0);
+  const voucherPlatform = safeNumber(item?.voucher_platform || item?.daraz_discount || 0, 0);
+  if (paidPrice > 0) {
+    return paidPrice + voucherPlatform;
+  }
+  return 0;
 }
 
 
