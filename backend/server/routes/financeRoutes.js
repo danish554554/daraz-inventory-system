@@ -1021,7 +1021,7 @@ function calculateDarazSettlementForOrderItem(item, parentOrder = {}) {
   const qty = Number(item.quantity) || 1;
   const itemGross = Number((sellerBasePrice * qty).toFixed(2));
 
-  // What the customer actually paid (used for 2% WHT calculation):
+  // What the customer actually paid:
   const customerPaidPerUnit = Number(raw.paid_price) || (sellerBasePrice - (Number(raw.voucher_platform) || 0));
   const buyerPaidTotal = Math.max(0, Number((customerPaidPerUnit * qty).toFixed(2)));
 
@@ -1045,12 +1045,20 @@ function calculateDarazSettlementForOrderItem(item, parentOrder = {}) {
   const hasCoins = Number(raw.coins) > 0 || Number(raw.coin_discount) > 0 || Number(raw.coins_discount) > 0 || Number(raw.daraz_coins) > 0 || raw.coin_applied === true;
   const coinsDiscountFee = hasCoins ? Number((itemGross * 0.0050174).toFixed(2)) : 0;
 
-  // Shipping Net: Daraz Free Shipping Max promotion completely covers shipping cost (subsidized)
-  const netShipping = 0.00;
+  // Shipping Fee Net Calculation:
+  // Check if buyer paid shipping (e.g. PKR 205.00 on intercity/standard orders)
+  const buyerShipping = Number(raw.shipping_fee) || Number(raw.shipping_amount) || Number(parentOrder.shipping_fee) || 0;
+  // Carrier shipping fee charged by Daraz (standard parcel: PKR 235.75)
+  const carrierShipping = buyerShipping > 0 ? 235.75 : 0;
+  // If buyer paid partial shipping, seller covers difference: 235.75 - 205.00 = 30.75
+  // If free shipping promotion, Daraz completely subsidizes it (0.00)
+  const netShipping = buyerShipping > 0 ? Math.max(0, Number((carrierShipping - buyerShipping).toFixed(2))) : 0.00;
 
-  // 3. Withholding Taxes (2% Income Tax WHT + 2% Sales Tax WHT on customer payment)
-  const incomeTaxWithholding = Number(Math.round(buyerPaidTotal * 0.02).toFixed(2));
-  const salesTaxWithholding = Number(Math.round(buyerPaidTotal * 0.02).toFixed(2));
+  // 3. Withholding Taxes
+  // Active Filer rate: 1% Income Tax WHT (Section 236V)
+  // Provincial Sales Tax on services: 2%
+  const incomeTaxWithholding = Number(Math.round(itemGross * 0.01).toFixed(2));
+  const salesTaxWithholding = Number(Math.round(itemGross * 0.02).toFixed(2));
 
   const totalFees = Number((commissionFee + paymentFee + freeShippingMaxFee + cofundedVoucherFee + handlingFee + coinsDiscountFee + netShipping).toFixed(2));
   const totalTaxes = Number((incomeTaxWithholding + salesTaxWithholding).toFixed(2));
@@ -1066,6 +1074,8 @@ function calculateDarazSettlementForOrderItem(item, parentOrder = {}) {
     handlingFee,
     coinsDiscountFee,
     netShipping,
+    buyerShipping,
+    carrierShipping,
     incomeTaxWithholding,
     salesTaxWithholding,
     totalFees,
@@ -1342,12 +1352,13 @@ router.post("/sync", async (req, res) => {
           const CentralOrder = require("../models/CentralOrder");
           const CentralOrderItem = require("../models/CentralOrderItem");
 
+          // Only delivered or returned orders in the statement period belong to the statement cycle
           const orderQuery = {
             store_id: store._id,
+            status: { $in: ["delivered", "Delivered", "returned", "Returned"] },
             $or: [
               { order_created_at: { $gte: dateRange.startDate, $lte: dateRange.endDate } },
-              { order_updated_at: { $gte: dateRange.startDate, $lte: dateRange.endDate } },
-              { synced_at: { $gte: dateRange.startDate, $lte: dateRange.endDate } }
+              { order_updated_at: { $gte: dateRange.startDate, $lte: dateRange.endDate } }
             ]
           };
 
@@ -1364,6 +1375,9 @@ router.post("/sync", async (req, res) => {
               const orderNum = item.order_number || parentOrder.order_number || parentOrder.external_order_id || "";
               const lineId = item.external_order_item_id || `${orderNum}_${item.seller_sku}`;
               if (!orderNum) continue;
+
+              const itemStatus = (item.status || parentOrder.status || "").toLowerCase();
+              if (!itemStatus.includes("delivered") && !itemStatus.includes("return")) continue;
 
               // Skip if a real CSV-imported entry already exists for this order
               const existingCsvEntry = await FinanceEntry.findOne({

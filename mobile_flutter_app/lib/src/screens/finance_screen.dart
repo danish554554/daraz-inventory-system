@@ -1318,14 +1318,17 @@ class _FinanceScreenState extends State<FinanceScreen> {
                     children: <Widget>[
                       Row(
                         children: <Widget>[
-                          Text(
-                            isAdjustment
-                                ? (item.adjustmentReason.isNotEmpty ? item.adjustmentReason : 'Financial Adjustment')
-                                : 'Order #$orderNum',
-                            style: TextStyle(
-                              fontWeight: FontWeight.w900,
-                              fontSize: 14,
-                              color: AppTheme.textPrimaryColor(context),
+                          Flexible(
+                            child: Text(
+                              isAdjustment
+                                  ? (item.adjustmentReason.isNotEmpty ? item.adjustmentReason : 'Financial Adjustment')
+                                  : 'Order #$orderNum',
+                              overflow: TextOverflow.ellipsis,
+                              style: TextStyle(
+                                fontWeight: FontWeight.w900,
+                                fontSize: 14,
+                                color: AppTheme.textPrimaryColor(context),
+                              ),
                             ),
                           ),
                           if (isReturned) ...<Widget>[
