@@ -37,8 +37,8 @@ function parseDarazFileToRows(bufferOrText) {
     const row = rawMatrix[r] || [];
     const joined = row.map((cell) => String(cell || "").toLowerCase().trim()).join(" ");
     if (
-      (joined.includes("order number") || joined.includes("order no") || joined.includes("order id")) &&
-      (joined.includes("fee name") || joined.includes("amount") || joined.includes("transaction type") || joined.includes("statement"))
+      (joined.includes("order number") || joined.includes("order no") || joined.includes("order id") || joined.includes("statement detail")) &&
+      (joined.includes("fee name") || joined.includes("amount") || joined.includes("transaction type") || joined.includes("statement") || joined.includes("released amount") || joined.includes("release status"))
     ) {
       headerRowIndex = r;
       break;
@@ -46,7 +46,6 @@ function parseDarazFileToRows(bufferOrText) {
   }
 
   if (headerRowIndex === -1) {
-    // Fallback: check if row 0 has any recognizable column
     headerRowIndex = 0;
   }
 
@@ -54,10 +53,26 @@ function parseDarazFileToRows(bufferOrText) {
   const normalizedHeaders = headerRow.map((col) => {
     let clean = String(col || "").replace(/^\uFEFF/, "").trim();
     const lower = clean.toLowerCase();
-    if (lower === "order no" || lower === "order no." || lower === "order id" || lower === "order_number") {
+    if (
+      lower === "order no" ||
+      lower === "order no." ||
+      lower === "order id" ||
+      lower === "order_number" ||
+      lower === "order no/order id" ||
+      lower === "order no / order id" ||
+      lower.includes("order no/order id") ||
+      lower === "trade order id"
+    ) {
       return "Order Number";
     }
-    if (lower === "order line id" || lower === "order item id" || lower === "order line no" || lower === "item id") {
+    if (
+      lower === "order line id" ||
+      lower === "order item id" ||
+      lower === "order line no" ||
+      lower === "item id" ||
+      lower === "order line" ||
+      lower.includes("order line id")
+    ) {
       return "Order Line ID";
     }
     if (lower === "seller sku" || lower === "sellersku") {
@@ -66,10 +81,28 @@ function parseDarazFileToRows(bufferOrText) {
     if (lower === "lazada sku" || lower === "daraz sku") {
       return "Lazada SKU";
     }
-    if (lower === "fee name" || lower === "feename" || lower === "transaction type") {
+    if (
+      lower === "fee name" ||
+      lower === "feename" ||
+      lower === "transaction type" ||
+      lower === "fee details" ||
+      lower === "fee type"
+    ) {
       return "Fee Name";
     }
-    if (lower === "amount(include tax)" || lower === "amount (include tax)" || lower === "amount(incl tax)" || lower === "amount (incl tax)" || lower === "amount") {
+    if (
+      lower === "amount(include tax)" ||
+      lower === "amount (include tax)" ||
+      lower === "amount(incl tax)" ||
+      lower === "amount (incl tax)" ||
+      lower === "amount" ||
+      lower === "released amount" ||
+      lower === "released amount (pkr)" ||
+      lower === "released amount(pkr)" ||
+      lower.includes("released amount") ||
+      lower === "net amount" ||
+      lower === "settlement amount"
+    ) {
       return "Amount(Include Tax)";
     }
     if (lower === "vat amount" || lower === "vat") {
@@ -89,6 +122,15 @@ function parseDarazFileToRows(bufferOrText) {
     }
     if (lower === "order status" || lower === "status") {
       return "Order Status";
+    }
+    if (lower === "release status" || lower.includes("release status")) {
+      return "Release Status";
+    }
+    if (lower === "order creation date" || lower.includes("creation date")) {
+      return "Order Creation Date";
+    }
+    if (lower === "details" || lower === "item details") {
+      return "Details";
     }
     if (lower === "quantity" || lower === "qty") {
       return "Quantity";
@@ -110,6 +152,22 @@ function parseDarazFileToRows(bufferOrText) {
       rowObj[h] = val;
     }
     if (hasData) {
+      // Auto-extract Order Number & Order Line ID if embedded in 'Details' column
+      if (rowObj["Details"]) {
+        const detailsStr = String(rowObj["Details"]);
+        if (!rowObj["Order Number"]) {
+          const matchOrder = detailsStr.match(/Order\s*Number\s*[:#]?\s*(\d+)/i) || detailsStr.match(/Order\s*ID\s*[:#]?\s*(\d+)/i);
+          if (matchOrder) rowObj["Order Number"] = matchOrder[1];
+        }
+        if (!rowObj["Order Line ID"]) {
+          const matchLine = detailsStr.match(/Order\s*Line\s*ID\s*[:#]?\s*(\d+)/i) || detailsStr.match(/Item\s*ID\s*[:#]?\s*(\d+)/i);
+          if (matchLine) rowObj["Order Line ID"] = matchLine[1];
+        }
+        if (!rowObj["Product Name"]) {
+          const prodTitle = detailsStr.split(/Order\s*Number/i)[0].trim();
+          if (prodTitle) rowObj["Product Name"] = prodTitle;
+        }
+      }
       parsedRows.push(rowObj);
     }
   }
@@ -200,7 +258,8 @@ function groupRowsByOrder(rows) {
     const orderLineId = (row["Order Line ID"] || row["Order Item ID"] || row["Item ID"] || "").toString().trim();
     if (!orderNumber && !orderLineId) continue;
 
-    const lineKey = orderLineId || `${orderNumber}_${row["Seller SKU"] || Date.now()}`;
+    const skuOrFee = (row["Seller SKU"] || row["Fee Name"] || "line").toString().trim();
+    const lineKey = orderLineId || `${orderNumber || "adj"}_${skuOrFee}`;
     const key = `${orderNumber || "unknown"}__${lineKey}`;
     if (!grouped[key]) {
       grouped[key] = [];
@@ -213,7 +272,7 @@ function groupRowsByOrder(rows) {
 function detectAdjustmentType(group) {
   const first = group[0] || {};
   const orderNum = (first["Order Number"] || first["Order No"] || first["Order ID"] || "").toString().trim();
-  const rawStatus = (first["Order Status"] || first["Status"] || "").toString().trim();
+  const rawStatus = (first["Order Status"] || first["Status"] || first["Release Status"] || "").toString().trim();
   const feeNames = group.map((row) =>
     normalizeFeeName((row["Fee Name"] || row["Transaction Type"] || "").toString())
   );
@@ -222,12 +281,19 @@ function detectAdjustmentType(group) {
     .filter(Boolean);
 
   const commentText = comments.join(" | ");
+  const feeNamesText = feeNames.join(" | ");
 
-  // If there is a real order number and product/item information, it is an ORDER
+  // If there is a real order number, associate it with that ORDER
   if (orderNum && orderNum !== "0" && orderNum.toLowerCase() !== "null") {
+    let reason = rawStatus;
+    if (commentText.includes("return") || feeNamesText.includes("return")) {
+      reason = "Returned";
+    } else if (commentText.includes("penalt") || feeNamesText.includes("penalt") || feeNamesText.includes("fine")) {
+      reason = "Order Penalty Charged";
+    }
     return {
       entryType: "order",
-      reason: rawStatus || (commentText.includes("return") ? "Returned" : "")
+      reason: reason || rawStatus || "Delivered"
     };
   }
 
@@ -440,6 +506,7 @@ async function buildEntryFromGroup(group, defaultStore = null, preloadedCache = 
   let cofundedVoucherFee = 0;
   let coinsDiscountFee = 0;
   let penalties = 0;
+  let penaltiesRefunded = 0;
   let otherFees = 0;
 
   let incomeTaxWithholding = 0;
@@ -464,6 +531,14 @@ async function buildEntryFromGroup(group, defaultStore = null, preloadedCache = 
     whtAmount += wht;
 
     feeBreakdown[rawFeeName || "Uncategorized"] = (feeBreakdown[rawFeeName || "Uncategorized"] || 0) + amount;
+
+    // Check for Penalty Reversals / Refunds / Credits vs Penalty Charges
+    const isPenaltyReversal =
+      feeNameKey.includes("reversal") ||
+      feeNameKey.includes("refund") ||
+      feeNameKey.includes("reimburse") ||
+      feeNameKey.includes("compensation") ||
+      (feeNameKey.includes("penalt") && amount > 0);
 
     // 1. Check Taxes (Income Tax Withholding, Sales Tax Withholding, WHT, VAT, GST)
     if (
@@ -533,13 +608,8 @@ async function buildEntryFromGroup(group, defaultStore = null, preloadedCache = 
       feeNameKey.includes("shipping charge") ||
       feeNameKey.includes("freight")
     ) {
-      // FIX Bug #2: Use the raw signed amount so the Shipping Fee Discount
-      // (+235.75 credit) is captured as a positive value, NOT as a deduction.
-      // shippingFee accumulates signed amounts; negative = cost, positive = credit.
       shippingFee += amount;
     } else if (feeNameKey.includes("coin")) {
-      // FIX Bug #3: Only treat negative amounts as a deduction.
-      // A positive "coin" credit must NOT be flipped via absNumber() into a phantom fee.
       if (amount < 0) {
         coinsDiscountFee += absNumber(amount);
       } else {
@@ -547,9 +617,17 @@ async function buildEntryFromGroup(group, defaultStore = null, preloadedCache = 
       }
     } else if (
       feeNameKey.includes("penalt") ||
-      feeNameKey.includes("fulfillment penalty")
+      feeNameKey.includes("fine") ||
+      feeNameKey.includes("fulfillment penalty") ||
+      feeNameKey.includes("cancellation fee") ||
+      feeNameKey.includes("lost & damaged")
     ) {
-      penalties += absNumber(amount);
+      if (isPenaltyReversal || amount > 0) {
+        penaltiesRefunded += absNumber(amount);
+        otherCredits += absNumber(amount);
+      } else {
+        penalties += absNumber(amount);
+      }
     } else if (amount < 0) {
       otherFees += absNumber(amount);
     } else if (amount > 0) {
@@ -588,21 +666,44 @@ async function buildEntryFromGroup(group, defaultStore = null, preloadedCache = 
   // every stored record to have NaN / 0 in the total_deductions field.
   const totalDeductions = totalFees + totalTaxes;
 
-  const rawStatus = (first["Order Status"] || first["Status"] || "").trim();
+  const rawStatus = (first["Order Status"] || first["Status"] || first["Release Status"] || "").trim();
+  const feeNamesText = Object.keys(feeBreakdown).join(" ").toLowerCase();
+  const commentText = group.map((r) => ((r["Comment"] || r["Reason"] || "") + "").toLowerCase()).join(" ");
+
   const isReturnedOrCancelled =
     rawStatus.toLowerCase().includes("return") ||
     rawStatus.toLowerCase().includes("cancel") ||
     rawStatus.toLowerCase().includes("refund") ||
-    group.some((r) => {
-      const c = ((r["Comment"] || r["Reason"] || "") + "").toLowerCase();
-      return c.includes("return") || c.includes("refund");
-    });
+    feeNamesText.includes("return") ||
+    commentText.includes("return") ||
+    commentText.includes("refund");
 
-  const finalStatus = isReturnedOrCancelled
-    ? (rawStatus.toLowerCase().includes("cancel") ? "Cancelled" : "Returned")
-    : (rawStatus || "Delivered");
+  const isPenaltyCharged =
+    penalties > 0 ||
+    (netSettlement < 0 && (productPrice === 0 || feeNamesText.includes("penalt") || feeNamesText.includes("fine") || commentText.includes("penalt")));
 
-  const quantity = adjustmentMeta.entryType === "adjustment" ? 0 : extractQuantity(first);
+  const isPenaltyReturned =
+    penaltiesRefunded > 0 ||
+    (netSettlement > 0 && (feeNamesText.includes("reversal") || feeNamesText.includes("penalty return") || commentText.includes("reversal")));
+
+  if (isPenaltyCharged && penalties === 0) {
+    penalties = Math.abs(netSettlement);
+  }
+
+  let finalGrossAmount = grossAmount;
+  if (finalGrossAmount === 0 && netSettlement > 0) {
+    finalGrossAmount = netSettlement + totalDeductions;
+  }
+
+  const finalStatus = isPenaltyCharged
+    ? "Penalty Charged"
+    : (isPenaltyReturned
+        ? "Penalty Refunded"
+        : (isReturnedOrCancelled
+            ? (rawStatus.toLowerCase().includes("cancel") ? "Cancelled" : "Returned")
+            : (rawStatus || "Delivered")));
+
+  const quantity = (adjustmentMeta.entryType === "adjustment" || isPenaltyCharged) ? 0 : extractQuantity(first);
 
   let costDetails = {
     cost_price: 0,
@@ -612,34 +713,34 @@ async function buildEntryFromGroup(group, defaultStore = null, preloadedCache = 
     profit_ready: false
   };
 
-  if (adjustmentMeta.entryType === "order") {
+  if (adjustmentMeta.entryType === "order" && !isPenaltyCharged) {
     costDetails = await findCostDetails(group, defaultStore?._id || null, preloadedCache);
   }
 
-  // If order was returned/cancelled, inventory was returned to stock -> COGS = 0
+  // If order was a penalty or returned/cancelled, inventory was returned to stock -> COGS = 0
   // If order was delivered, inventory was sold -> COGS = cost_price * quantity
   const totalCost =
-    adjustmentMeta.entryType === "order"
-      ? (isReturnedOrCancelled ? 0 : (costDetails.cost_price || 0) * quantity)
+    (adjustmentMeta.entryType === "order" && !isReturnedOrCancelled && !isPenaltyCharged && !isPenaltyReturned)
+      ? (costDetails.cost_price || 0) * quantity
       : 0;
 
   const netProfit =
-    adjustmentMeta.entryType === "order"
-      ? (isReturnedOrCancelled
-          ? Number(netSettlement.toFixed(2))
-          : (costDetails.profit_ready && quantity > 0
+    (isReturnedOrCancelled || isPenaltyCharged || isPenaltyReturned)
+      ? Number(netSettlement.toFixed(2))
+      : (adjustmentMeta.entryType === "order"
+          ? (costDetails.profit_ready && quantity > 0
               ? Number((netSettlement - totalCost).toFixed(2))
-              : null))
-      : null;
+              : null)
+          : null);
 
   const profitReady =
-    adjustmentMeta.entryType === "order"
-      ? (isReturnedOrCancelled ? true : costDetails.profit_ready)
-      : false;
+    (isReturnedOrCancelled || isPenaltyCharged || isPenaltyReturned)
+      ? true
+      : (adjustmentMeta.entryType === "order" ? costDetails.profit_ready : false);
 
   const orderNum = (first["Order Number"] || first["Order No"] || first["Order ID"] || "").toString().trim();
   const rawLineId = (first["Order Line ID"] || first["Order Item ID"] || first["Item ID"] || "").toString().trim();
-  const orderLineId = rawLineId || `${orderNum}_${first["Seller SKU"] || Date.now()}`;
+  const orderLineId = rawLineId || `${orderNum || "adj"}_${first["Seller SKU"] || first["Fee Name"] || "line"}`;
   const shortCode = first["Short Code"] || first["Seller Short Code"] || "";
 
   return {
@@ -665,7 +766,11 @@ async function buildEntryFromGroup(group, defaultStore = null, preloadedCache = 
     order_status: finalStatus,
 
     entry_type: adjustmentMeta.entryType,
-    adjustment_reason: isReturnedOrCancelled ? "Returned / Restocked" : adjustmentMeta.reason,
+    adjustment_reason: isPenaltyCharged
+      ? "Daraz Fine / Penalty Charged"
+      : (isPenaltyReturned
+          ? "Daraz Penalty Refund / Credit"
+          : (isReturnedOrCancelled ? "Returned / Restocked" : adjustmentMeta.reason)),
 
     product_price: productPrice,
     shipping_paid_by_buyer: shippingPaidByBuyer,
@@ -678,20 +783,23 @@ async function buildEntryFromGroup(group, defaultStore = null, preloadedCache = 
     free_shipping_max_fee: freeShippingMaxFee,
     cofunded_voucher_fee: cofundedVoucherFee,
     coins_discount_fee: coinsDiscountFee,
-    penalties: penalties + otherFees,
+    penalties: Number((penalties + otherFees).toFixed(2)),
+    penalties_refunded: Number(penaltiesRefunded.toFixed(2)),
+    is_penalty: isPenaltyCharged,
+    is_penalty_refund: isPenaltyReturned,
 
     income_tax_withholding: incomeTaxWithholding,
     sales_tax_withholding: salesTaxWithholding + otherTaxes,
     wht_amount: whtAmount,
     vat_total: vatTotal,
 
-    gross_amount: Number(grossAmount.toFixed(2)),
+    gross_amount: Number(finalGrossAmount.toFixed(2)),
     total_fees: Number(totalFees.toFixed(2)),
     total_taxes: Number(totalTaxes.toFixed(2)),
     total_deductions: Number(totalDeductions.toFixed(2)),
     net_settlement: Number(netSettlement.toFixed(2)),
 
-    cost_price: isReturnedOrCancelled ? 0 : (costDetails.cost_price || 0),
+    cost_price: (isReturnedOrCancelled || isPenaltyCharged || isPenaltyReturned) ? 0 : (costDetails.cost_price || 0),
     quantity,
     total_cost: Number(totalCost.toFixed(2)),
     net_profit: netProfit,
@@ -734,12 +842,17 @@ function buildSummary(entries = []) {
     uniqueEntries.push(item);
   }
 
+  let totalPenaltiesCharged = 0;
+  let totalPenaltiesRefunded = 0;
+
   for (const item of uniqueEntries) {
     grossAmount += Number(item.gross_amount) || 0;
     totalFees += Number(item.total_fees) || 0;
     totalTaxes += Number(item.total_taxes) || 0;
     totalDeductions += Number(item.total_deductions) || 0;
     netSettlement += Number(item.net_settlement) || 0;
+    totalPenaltiesCharged += Number(item.penalties) || 0;
+    totalPenaltiesRefunded += Number(item.penalties_refunded) || 0;
 
     if (item.entry_type === "adjustment") {
       totalAdjustments += 1;
@@ -768,6 +881,8 @@ function buildSummary(entries = []) {
     total_fees: Number(totalFees.toFixed(2)),
     total_taxes: Number(totalTaxes.toFixed(2)),
     total_deductions: Number(totalDeductions.toFixed(2)),
+    total_penalties_charged: Number(totalPenaltiesCharged.toFixed(2)),
+    total_penalties_refunded: Number(totalPenaltiesRefunded.toFixed(2)),
     total_cost: Number(totalCost.toFixed(2)),
     net_settlement: Number(netSettlement.toFixed(2)),
     net_profit: Number(netProfit.toFixed(2)),
@@ -867,21 +982,17 @@ async function autoHealOutdatedFinanceEntries() {
     const CentralOrderItem = require("../models/CentralOrderItem");
     const CentralOrder = require("../models/CentralOrder");
 
-    // Heal all entries generated via sync/fallback (identified by STMT- in statement_number or source !== 'statement_file')
-    // that have outdated fees (e.g. handling_fee != 17.40, phantom fees, or stale net_settlement like 545.16, 362.10, 452.16)
+    // Heal ONLY un-imported synthetic sync records that had the legacy corrupted figures (545.16, 362.10, 452.16).
+    // NEVER touch any entry imported from a statement file, or records with real fee breakdowns!
     const outdated = await FinanceEntry.find({
-      entry_type: "order",
+      source: "store_order_sync",
       statement_number: { $regex: /^STMT-/i },
-      $or: [
-        { handling_fee: { $ne: 17.40 } },
-        { free_shipping_max_fee: { $gt: 0 } },
-        { cofunded_voucher_fee: { $gt: 0 } },
-        { shipping_paid_by_buyer: { $in: [0, null] } },
-        { net_settlement: { $in: [545.16, 362.10, 452.16, 0] } }
-      ]
-    }).limit(300);
+      matched_by: { $nin: ["file_imported", "statement_file", "returned_restocked"] },
+      net_settlement: { $in: [545.16, 362.10, 452.16] }
+    }).limit(50);
 
     for (const entry of outdated) {
+      if (entry.source === "statement_file" || entry.matched_by === "file_imported") continue;
       const orderItem = await CentralOrderItem.findOne({ external_order_item_id: entry.order_line_id }).lean();
       let parentOrder = {};
       if (orderItem?.order_id) {
@@ -1353,11 +1464,14 @@ router.post("/recalculate", async (req, res) => {
     let updated = 0;
 
     for (const entry of entries) {
-      // If this entry was imported from a real Daraz statement file, NEVER overwrite its
+      // If this entry was imported from a real Daraz statement file or live transaction, NEVER overwrite its
       // official statement fee amounts and net settlement with heuristic estimates!
       const isFileImported =
         entry.source === "statement_file" ||
-        (entry.statement_number && !entry.statement_number.startsWith("STMT-") && entry.matched_by === "file_imported");
+        entry.source === "live_api_transaction" ||
+        entry.matched_by === "file_imported" ||
+        (entry.statement_number && !entry.statement_number.startsWith("STMT-")) ||
+        (entry.fee_breakdown && Object.keys(entry.fee_breakdown).length > 2);
 
       if (isFileImported) {
         // Only update total_cost and net_profit based on cost_price

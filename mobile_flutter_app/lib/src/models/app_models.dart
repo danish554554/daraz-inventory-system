@@ -1292,6 +1292,8 @@ class FinanceSummary {
     required this.totalFees,
     required this.totalTaxes,
     required this.totalDeductions,
+    this.totalPenaltiesCharged = 0,
+    this.totalPenaltiesRefunded = 0,
     required this.totalCost,
     required this.netSettlement,
     required this.netProfit,
@@ -1308,6 +1310,8 @@ class FinanceSummary {
   final double totalFees;
   final double totalTaxes;
   final double totalDeductions;
+  final double totalPenaltiesCharged;
+  final double totalPenaltiesRefunded;
   final double totalCost;
   final double netSettlement;
   final double netProfit;
@@ -1325,6 +1329,8 @@ class FinanceSummary {
       totalFees: JsonReaders.number(json, 'total_fees'),
       totalTaxes: JsonReaders.number(json, 'total_taxes'),
       totalDeductions: JsonReaders.number(json, 'total_deductions'),
+      totalPenaltiesCharged: JsonReaders.number(json, 'total_penalties_charged'),
+      totalPenaltiesRefunded: JsonReaders.number(json, 'total_penalties_refunded'),
       totalCost: JsonReaders.number(json, 'total_cost'),
       netSettlement: JsonReaders.number(json, 'net_settlement'),
       netProfit: JsonReaders.number(json, 'net_profit'),
@@ -1343,6 +1349,8 @@ class FinanceSummary {
         totalFees: 0,
         totalTaxes: 0,
         totalDeductions: 0,
+        totalPenaltiesCharged: 0,
+        totalPenaltiesRefunded: 0,
         totalCost: 0,
         netSettlement: 0,
         netProfit: 0,
@@ -1386,6 +1394,9 @@ class FinanceEntry {
     required this.cofundedVoucherFee,
     required this.coinsDiscountFee,
     required this.penalties,
+    required this.penaltiesRefunded,
+    required this.isPenalty,
+    required this.isPenaltyRefund,
     required this.incomeTaxWithholding,
     required this.salesTaxWithholding,
     required this.whtAmount,
@@ -1437,6 +1448,9 @@ class FinanceEntry {
   final double cofundedVoucherFee;
   final double coinsDiscountFee;
   final double penalties;
+  final double penaltiesRefunded;
+  final bool isPenalty;
+  final bool isPenaltyRefund;
   final double incomeTaxWithholding;
   final double salesTaxWithholding;
   final double whtAmount;
@@ -1461,12 +1475,48 @@ class FinanceEntry {
   bool get isAdjustment => entryType == 'adjustment';
   bool get isProfitReady => profitReady && netProfit != null;
 
+  bool get isPenaltyCharged =>
+      isPenalty ||
+      penalties > 0 ||
+      (netSettlement < 0 &&
+          (productPrice == 0 ||
+              orderStatus.toLowerCase().contains('penalty') ||
+              adjustmentReason.toLowerCase().contains('penalt') ||
+              adjustmentReason.toLowerCase().contains('fine')));
+
+  bool get isPenaltyReturned =>
+      isPenaltyRefund ||
+      penaltiesRefunded > 0 ||
+      (netSettlement > 0 &&
+          (adjustmentReason.toLowerCase().contains('reversal') ||
+              adjustmentReason.toLowerCase().contains('reimburse') ||
+              adjustmentReason.toLowerCase().contains('penalty return')));
+
   double get profitMargin {
     if (grossAmount <= 0 || netProfit == null) return 0;
     return (netProfit! / grossAmount) * 100;
   }
 
   factory FinanceEntry.fromJson(Map<String, dynamic> json) {
+    final netSet = JsonReaders.number(json, 'net_settlement');
+    final pen = JsonReaders.number(json, 'penalties');
+    final penRef = JsonReaders.number(json, 'penalties_refunded');
+    final prodPr = JsonReaders.number(json, 'product_price');
+    final reason = JsonReaders.string(json, 'adjustment_reason').toLowerCase();
+    final status = JsonReaders.string(json, 'order_status').toLowerCase();
+
+    final isPen = JsonReaders.boolean(
+      json,
+      'is_penalty',
+      pen > 0 || (netSet < 0 && (prodPr == 0 || reason.contains('penalt') || status.contains('penalt'))),
+    );
+
+    final isPenRef = JsonReaders.boolean(
+      json,
+      'is_penalty_refund',
+      penRef > 0 || (netSet > 0 && (reason.contains('reversal') || reason.contains('penalty return'))),
+    );
+
     return FinanceEntry(
       id: JsonReaders.string(json, '_id'),
       storeId: json['store_id'] is Map ? JsonReaders.string(json['store_id'], '_id') : JsonReaders.string(json, 'store_id'),
@@ -1487,7 +1537,7 @@ class FinanceEntry {
       orderStatus: JsonReaders.string(json, 'order_status'),
       entryType: JsonReaders.string(json, 'entry_type', 'order'),
       adjustmentReason: JsonReaders.string(json, 'adjustment_reason'),
-      productPrice: JsonReaders.number(json, 'product_price'),
+      productPrice: prodPr,
       shippingPaidByBuyer: JsonReaders.number(json, 'shipping_paid_by_buyer'),
       shippingFeeDiscount: JsonReaders.number(json, 'shipping_fee_discount'),
       commissionFee: JsonReaders.number(json, 'commission_fee'),
@@ -1497,7 +1547,10 @@ class FinanceEntry {
       freeShippingMaxFee: JsonReaders.number(json, 'free_shipping_max_fee'),
       cofundedVoucherFee: JsonReaders.number(json, 'cofunded_voucher_fee'),
       coinsDiscountFee: JsonReaders.number(json, 'coins_discount_fee'),
-      penalties: JsonReaders.number(json, 'penalties'),
+      penalties: pen,
+      penaltiesRefunded: penRef,
+      isPenalty: isPen,
+      isPenaltyRefund: isPenRef,
       incomeTaxWithholding: JsonReaders.number(json, 'income_tax_withholding'),
       salesTaxWithholding: JsonReaders.number(json, 'sales_tax_withholding'),
       whtAmount: JsonReaders.number(json, 'wht_amount'),
@@ -1506,7 +1559,7 @@ class FinanceEntry {
       totalFees: JsonReaders.number(json, 'total_fees'),
       totalTaxes: JsonReaders.number(json, 'total_taxes'),
       totalDeductions: JsonReaders.number(json, 'total_deductions'),
-      netSettlement: JsonReaders.number(json, 'net_settlement'),
+      netSettlement: netSet,
       costPrice: JsonReaders.number(json, 'cost_price'),
       quantity: JsonReaders.integer(json, 'quantity', 1),
       totalCost: JsonReaders.number(json, 'total_cost'),

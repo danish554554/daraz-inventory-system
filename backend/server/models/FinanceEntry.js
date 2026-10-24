@@ -45,6 +45,9 @@ const financeEntrySchema = new mongoose.Schema({
     cofunded_voucher_fee: { type: Number, default: 0 },
     coins_discount_fee: { type: Number, default: 0 },
     penalties: { type: Number, default: 0 },
+    penalties_refunded: { type: Number, default: 0 },
+    is_penalty: { type: Boolean, default: false },
+    is_penalty_refund: { type: Boolean, default: false },
 
     income_tax_withholding: { type: Number, default: 0 },
     sales_tax_withholding: { type: Number, default: 0 },

@@ -145,10 +145,10 @@ class _FinanceScreenState extends State<FinanceScreen> {
     final query = _search.trim().toLowerCase();
     return _entries.where((item) {
       // Filter by tab
-      if (_activeTab == 'orders' && !item.isOrder) return false;
-      if (_activeTab == 'adjustments' && !item.isAdjustment) return false;
+      if (_activeTab == 'orders' && !item.isOrder && item.orderNumber.isEmpty) return false;
+      if (_activeTab == 'adjustments' && !item.isAdjustment && !item.isPenaltyCharged && !item.isPenaltyReturned) return false;
       if (_activeTab == 'pending_cost') {
-        if (!item.isOrder || item.isProfitReady || item.productPrice == 0) return false;
+        if (!item.isOrder || item.isProfitReady || item.productPrice == 0 || item.isPenaltyCharged || item.isPenaltyReturned) return false;
       }
 
       // Filter by search
@@ -643,7 +643,9 @@ class _FinanceScreenState extends State<FinanceScreen> {
                       if (item.coinsDiscountFee > 0)
                         _breakdownRow('Daraz Coins Discount', 'PKR -${Formatters.money(item.coinsDiscountFee)}', color: AppTheme.danger),
                       if (item.penalties > 0)
-                        _breakdownRow('Penalties & Other Fees', 'PKR -${Formatters.money(item.penalties)}', color: AppTheme.danger),
+                        _breakdownRow('Penalties & Fines Charged', 'PKR -${Formatters.money(item.penalties)}', color: AppTheme.danger),
+                      if (item.penaltiesRefunded > 0)
+                        _breakdownRow('Penalty Refund / Reversal', '+PKR ${Formatters.money(item.penaltiesRefunded)}', color: AppTheme.success),
                       // Taxes
                       if (item.incomeTaxWithholding > 0)
                         _breakdownRow('Income Tax Withholding', 'PKR -${Formatters.money(item.incomeTaxWithholding)}', color: AppTheme.warning),
@@ -1321,6 +1323,9 @@ class _FinanceScreenState extends State<FinanceScreen> {
     final totalCost = item.totalCost;
     final margin = item.profitMargin;
 
+    final isPenaltyCharged = item.isPenaltyCharged;
+    final isPenaltyReturned = item.isPenaltyReturned;
+
     return Padding(
       padding: const EdgeInsets.only(bottom: 10),
       child: AppCard(
@@ -1341,9 +1346,15 @@ class _FinanceScreenState extends State<FinanceScreen> {
                         children: <Widget>[
                           Flexible(
                             child: Text(
-                              isAdjustment
-                                  ? (item.adjustmentReason.isNotEmpty ? item.adjustmentReason : 'Financial Adjustment')
-                                  : 'Order #$orderNum',
+                              orderNum.isNotEmpty
+                                  ? 'Order #$orderNum'
+                                  : (isPenaltyCharged
+                                      ? (item.adjustmentReason.isNotEmpty ? item.adjustmentReason : 'Daraz Fine / Penalty')
+                                      : (isPenaltyReturned
+                                          ? (item.adjustmentReason.isNotEmpty ? item.adjustmentReason : 'Penalty Reversal Credit')
+                                          : (isAdjustment
+                                              ? (item.adjustmentReason.isNotEmpty ? item.adjustmentReason : 'Financial Adjustment')
+                                              : 'Order #$orderNum'))),
                               overflow: TextOverflow.ellipsis,
                               style: TextStyle(
                                 fontWeight: FontWeight.w900,
@@ -1352,7 +1363,43 @@ class _FinanceScreenState extends State<FinanceScreen> {
                               ),
                             ),
                           ),
-                          if (isReturned) ...<Widget>[
+                          if (isPenaltyCharged) ...<Widget>[
+                            const SizedBox(width: 6),
+                            Container(
+                              padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 1.5),
+                              decoration: BoxDecoration(
+                                color: AppTheme.dangerSoft,
+                                borderRadius: BorderRadius.circular(6),
+                                border: Border.all(color: AppTheme.danger.withValues(alpha: 0.4)),
+                              ),
+                              child: const Text(
+                                'PENALTY CHARGED',
+                                style: TextStyle(
+                                  fontSize: 8.5,
+                                  fontWeight: FontWeight.w900,
+                                  color: AppTheme.danger,
+                                ),
+                              ),
+                            ),
+                          ] else if (isPenaltyReturned) ...<Widget>[
+                            const SizedBox(width: 6),
+                            Container(
+                              padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 1.5),
+                              decoration: BoxDecoration(
+                                color: AppTheme.success.withValues(alpha: 0.12),
+                                borderRadius: BorderRadius.circular(6),
+                                border: Border.all(color: AppTheme.success.withValues(alpha: 0.4)),
+                              ),
+                              child: const Text(
+                                'PENALTY REFUNDED',
+                                style: TextStyle(
+                                  fontSize: 8.5,
+                                  fontWeight: FontWeight.w900,
+                                  color: AppTheme.success,
+                                ),
+                              ),
+                            ),
+                          ] else if (isReturned) ...<Widget>[
                             const SizedBox(width: 6),
                             Container(
                               padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 1.5),
@@ -1415,30 +1462,38 @@ class _FinanceScreenState extends State<FinanceScreen> {
                 Column(
                   crossAxisAlignment: CrossAxisAlignment.end,
                   children: <Widget>[
-                    // Final Received Sold Amount
+                    // Final Received Sold / Deducted Amount
                     Text(
-                      '${netSettlement >= 0 ? '' : '-'}PKR ${Formatters.money(netSettlement.abs())}',
+                      isPenaltyReturned
+                          ? '+PKR ${Formatters.money(netSettlement.abs())}'
+                          : (netSettlement < 0 || isPenaltyCharged
+                              ? '-PKR ${Formatters.money(netSettlement.abs())}'
+                              : 'PKR ${Formatters.money(netSettlement)}'),
                       style: TextStyle(
                         fontWeight: FontWeight.w900,
                         fontSize: 15,
-                        color: netSettlement >= 0 ? AppTheme.success : AppTheme.danger,
+                        color: (isPenaltyCharged || netSettlement < 0) ? AppTheme.danger : AppTheme.success,
                         letterSpacing: -0.3,
                       ),
                     ),
                     const SizedBox(height: 1),
                     Text(
-                      isReturned
-                          ? 'Net Return Settlement'
-                          : (isAdjustment ? 'Adjustment Net' : 'Final Received Payout'),
+                      isPenaltyCharged
+                          ? 'Penalty Deducted'
+                          : (isPenaltyReturned
+                              ? 'Penalty Refunded'
+                              : (isReturned
+                                  ? 'Net Return Settlement'
+                                  : (isAdjustment ? 'Adjustment Net' : 'Final Received Payout'))),
                       style: TextStyle(
-                        color: netSettlement >= 0 ? AppTheme.success : AppTheme.danger,
+                        color: (isPenaltyCharged || netSettlement < 0) ? AppTheme.danger : AppTheme.success,
                         fontSize: 9.5,
                         fontWeight: FontWeight.w800,
                       ),
                     ),
                     const SizedBox(height: 4),
                     // Purchasing Price
-                    if (!isAdjustment) ...<Widget>[
+                    if (!isAdjustment && !isPenaltyCharged && !isPenaltyReturned) ...<Widget>[
                       if (isReturned)
                         const Text(
                           'Stock: PKR 0 (Restocked)',
@@ -1488,7 +1543,7 @@ class _FinanceScreenState extends State<FinanceScreen> {
                 ),
               ],
             ),
-            if (!isAdjustment && isProfitReady && netProfit != null) ...<Widget>[
+            if ((!isAdjustment || isPenaltyCharged || isPenaltyReturned) && isProfitReady && netProfit != null) ...<Widget>[
               const SizedBox(height: 10),
               Container(
                 padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 7),
@@ -1506,7 +1561,11 @@ class _FinanceScreenState extends State<FinanceScreen> {
                       mainAxisSize: MainAxisSize.min,
                       children: <Widget>[
                         Text(
-                          isReturned ? 'Net Return Loss: ' : 'Exact True Profit: ',
+                          isPenaltyCharged
+                              ? 'Penalty Impact: '
+                              : (isPenaltyReturned
+                                  ? 'Penalty Reversal: '
+                                  : (isReturned ? 'Net Return Loss: ' : 'Exact True Profit: ')),
                           style: TextStyle(
                             fontSize: 11,
                             fontWeight: FontWeight.w700,
@@ -1516,7 +1575,7 @@ class _FinanceScreenState extends State<FinanceScreen> {
                         Text(
                           '${netProfit >= 0 ? '+' : ''}PKR ${Formatters.money(netProfit)}',
                           style: TextStyle(
-                            fontSize: 12.5,
+                            fontSize: 12,
                             fontWeight: FontWeight.w900,
                             color: netProfit >= 0 ? AppTheme.success : AppTheme.danger,
                           ),
