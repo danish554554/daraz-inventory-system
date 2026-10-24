@@ -700,7 +700,9 @@ async function buildEntryFromGroup(group, defaultStore = null, preloadedCache = 
       adjustmentMeta.entryType === "order" ? costDetails.matched_product_id : null,
     matched_product_name:
       adjustmentMeta.entryType === "order" ? costDetails.matched_product_name : "",
-    matched_by: isReturnedOrCancelled ? "returned_restocked" : (costDetails.matched_by || "file_imported"),
+    cost_match_type: costDetails.matched_by || "none",
+    matched_by: isReturnedOrCancelled ? "returned_restocked" : "file_imported",
+    source: "statement_file",
     profit_ready: profitReady,
 
     fee_breakdown: feeBreakdown,
@@ -862,80 +864,120 @@ router.get("/periods", async (req, res) => {
 // Auto-heal outdated finance records that used deprecated rates or phantom fee deductions
 async function autoHealOutdatedFinanceEntries() {
   try {
+    const CentralOrderItem = require("../models/CentralOrderItem");
+    const CentralOrder = require("../models/CentralOrder");
+
+    // Heal all entries generated via sync/fallback (identified by STMT- in statement_number or source !== 'statement_file')
+    // that have outdated fees (e.g. handling_fee != 17.40, phantom fees, or stale net_settlement like 545.16, 362.10, 452.16)
     const outdated = await FinanceEntry.find({
       entry_type: "order",
-      matched_by: { $in: ["store_order_sync", "store_order_sync_estimated", "file_imported_estimated", null, ""] },
+      statement_number: { $regex: /^STMT-/i },
       $or: [
-        { handling_fee: 23 },
+        { handling_fee: { $ne: 17.40 } },
         { free_shipping_max_fee: { $gt: 0 } },
         { cofunded_voucher_fee: { $gt: 0 } },
-        { shipping_paid_by_buyer: { $in: [0, null] } }
+        { shipping_paid_by_buyer: { $in: [0, null] } },
+        { net_settlement: { $in: [545.16, 362.10, 452.16, 0] } }
       ]
-    }).limit(150);
+    }).limit(300);
 
     for (const entry of outdated) {
-      const base = entry.product_price || 0;
-      if (base <= 0) continue;
-      const buyerShipping = entry.shipping_paid_by_buyer > 0 ? entry.shipping_paid_by_buyer : 210.00;
-      const carrierShipping = Number((buyerShipping * 1.16).toFixed(2));
-      const grossAmount = Number((base + buyerShipping).toFixed(2));
-      const commissionFee = Number((base * 0.186062).toFixed(2));
-      const paymentFee = Number((base * 0.026107).toFixed(2));
-      const handlingFee = 17.40;
-      const coinsDiscountFee = (entry.coins_discount_fee > 0)
-        ? entry.coins_discount_fee
-        : (base >= 800 ? Number((base * 0.01032).toFixed(2)) : 0);
-      const incomeTaxWithholding = Number(Math.round(base * 0.02).toFixed(2));
-      const salesTaxWithholding = Number(Math.round(base * 0.02).toFixed(2));
-      const totalFees = Number((commissionFee + paymentFee + handlingFee + carrierShipping + coinsDiscountFee).toFixed(2));
-      const totalTaxes = Number((incomeTaxWithholding + salesTaxWithholding).toFixed(2));
-      const totalDeductions = Number((totalFees + totalTaxes).toFixed(2));
-      const netSettlement = Number(Math.max(0, grossAmount - totalDeductions).toFixed(2));
+      const orderItem = await CentralOrderItem.findOne({ external_order_item_id: entry.order_line_id }).lean();
+      let parentOrder = {};
+      if (orderItem?.order_id) {
+        parentOrder = (await CentralOrder.findById(orderItem.order_id).lean()) || {};
+      }
+
+      let calc;
+      if (orderItem) {
+        calc = calculateDarazSettlementForOrderItem(orderItem, parentOrder);
+      } else {
+        const base = entry.product_price || entry.gross_amount || 0;
+        if (base <= 0) continue;
+        const buyerShipping = 210.00;
+        const carrierShipping = 243.60;
+        const grossAmount = Number((base + buyerShipping).toFixed(2));
+        const commissionFee = Number((base * 0.186062).toFixed(2));
+        const paymentFee = Number((base * 0.026107).toFixed(2));
+        const handlingFee = 17.40;
+        const coinsDiscountFee = (entry.coins_discount_fee > 0)
+          ? entry.coins_discount_fee
+          : (base >= 800 ? Number((base * 0.01032).toFixed(2)) : 0);
+        const incomeTaxWithholding = Number(Math.round(base * 0.02).toFixed(2));
+        const salesTaxWithholding = Number(Math.round(base * 0.02).toFixed(2));
+        const totalFees = Number((commissionFee + paymentFee + handlingFee + carrierShipping + coinsDiscountFee).toFixed(2));
+        const totalTaxes = Number((incomeTaxWithholding + salesTaxWithholding).toFixed(2));
+        const totalDeductions = Number((totalFees + totalTaxes).toFixed(2));
+        const netSettlement = Number(Math.max(0, grossAmount - totalDeductions).toFixed(2));
+        calc = {
+          itemGross: base,
+          buyerShipping,
+          carrierShipping,
+          grossAmount,
+          commissionFee,
+          paymentFee,
+          freeShippingMaxFee: 0,
+          cofundedVoucherFee: 0,
+          handlingFee,
+          coinsDiscountFee,
+          incomeTaxWithholding,
+          salesTaxWithholding,
+          totalFees,
+          totalTaxes,
+          totalDeductions,
+          netSettlement
+        };
+      }
+
       const qty = entry.quantity > 0 ? entry.quantity : 1;
       const costPrice = entry.cost_price || 0;
       const totalCost = Number((costPrice * qty).toFixed(2));
-      const netProfit = entry.profit_ready && costPrice > 0 ? Number((netSettlement - totalCost).toFixed(2)) : null;
+      const netProfit = entry.profit_ready && costPrice > 0 ? Number((calc.netSettlement - totalCost).toFixed(2)) : null;
 
       await FinanceEntry.updateOne(
         { _id: entry._id },
         {
           $set: {
-            product_price: base,
-            shipping_paid_by_buyer: buyerShipping,
-            gross_amount: grossAmount,
-            shipping_fee: carrierShipping,
-            commission_fee: commissionFee,
-            payment_fee: paymentFee,
-            handling_fee: handlingFee,
+            product_price: calc.itemGross,
+            shipping_paid_by_buyer: calc.buyerShipping,
+            gross_amount: calc.grossAmount,
+            shipping_fee: calc.carrierShipping,
+            commission_fee: calc.commissionFee,
+            payment_fee: calc.paymentFee,
+            handling_fee: calc.handlingFee,
             free_shipping_max_fee: 0,
             cofunded_voucher_fee: 0,
-            coins_discount_fee: coinsDiscountFee,
-            income_tax_withholding: incomeTaxWithholding,
-            sales_tax_withholding: salesTaxWithholding,
-            wht_amount: incomeTaxWithholding,
-            vat_total: salesTaxWithholding,
-            total_fees: totalFees,
-            total_taxes: totalTaxes,
-            total_deductions: totalDeductions,
-            net_settlement: netSettlement,
+            coins_discount_fee: calc.coinsDiscountFee,
+            income_tax_withholding: calc.incomeTaxWithholding,
+            sales_tax_withholding: calc.salesTaxWithholding,
+            wht_amount: calc.incomeTaxWithholding,
+            vat_total: calc.salesTaxWithholding,
+            total_fees: calc.totalFees,
+            total_taxes: calc.totalTaxes,
+            total_deductions: calc.totalDeductions,
+            net_settlement: calc.netSettlement,
             total_cost: totalCost,
             net_profit: netProfit,
+            matched_by: "store_order_sync",
+            source: "store_order_sync",
             fee_breakdown: {
-              "Product Price Paid by Buyer": base,
-              "Shipping Fee Paid by Buyer": buyerShipping,
-              "Commission Fee": -commissionFee,
-              "Payment Fee": -paymentFee,
-              "Shipping Fee": -carrierShipping,
-              "Handling Fee": -handlingFee,
-              ...(coinsDiscountFee > 0 ? { "Daraz Coins Discount Participation Fee": -coinsDiscountFee } : {}),
-              "Income Tax Withholding": -incomeTaxWithholding,
-              "Sales Tax Withholding": -salesTaxWithholding
+              "Product Price Paid by Buyer": calc.itemGross,
+              "Shipping Fee Paid by Buyer": calc.buyerShipping,
+              "Commission Fee": -calc.commissionFee,
+              "Payment Fee": -calc.paymentFee,
+              "Shipping Fee": -calc.carrierShipping,
+              "Handling Fee": -calc.handlingFee,
+              ...(calc.coinsDiscountFee > 0 ? { "Daraz Coins Discount Participation Fee": -calc.coinsDiscountFee } : {}),
+              "Income Tax Withholding": -calc.incomeTaxWithholding,
+              "Sales Tax Withholding": -calc.salesTaxWithholding
             }
           }
         }
       );
     }
-  } catch (_) {}
+  } catch (err) {
+    console.warn("[autoHealOutdatedFinanceEntries] Notice:", err.message);
+  }
 }
 
 // 2. Finance Summary
@@ -1084,7 +1126,10 @@ router.post("/import-csv", async (req, res) => {
       if (orderNumbers.length > 0) {
         await FinanceEntry.deleteMany({
           order_number: { $in: orderNumbers },
-          matched_by: { $in: ["store_order_sync", "store_order_sync_estimated", "daraz_api_sync"] }
+          $or: [
+            { source: { $ne: "statement_file" } },
+            { statement_number: { $regex: /^STMT-/i } }
+          ]
         });
       }
 
@@ -1218,10 +1263,18 @@ function calculateDarazSettlementForOrderItem(item, parentOrder = {}) {
   // In Daraz Seller Statements, when a buyer pays for shipping (e.g. PKR 210.00):
   // - Daraz credits "Shipping Fee Paid by Buyer" (+PKR 210.00) to seller gross revenue
   // - Daraz charges carrier "Shipping Fee" (-PKR 243.60 = PKR 210 + 16% GST) to seller deductions
-  // Net difference borne by seller is only the tax/freight gap (-PKR 33.60).
+  // In multi-item orders, shipping is shared equally across all items in the package.
+  const itemsCount = Math.max(1, Number(parentOrder.item_count) || Number(parentOrder.items_count) || Number(raw.package_item_count) || 1);
   const rawBuyerShipping = Number(raw.shipping_fee) || Number(raw.shipping_amount) || Number(parentOrder.shipping_fee) || 0;
   const isFreeShipping = raw.shipping_fee_discount_platform > 0 || raw.is_free_shipping === true;
-  const buyerShipping = isFreeShipping ? 0 : (rawBuyerShipping > 0 ? rawBuyerShipping : 210.00);
+  let buyerShipping = 0;
+  if (!isFreeShipping) {
+    if (rawBuyerShipping > 0) {
+      buyerShipping = Number((rawBuyerShipping / itemsCount).toFixed(2));
+    } else {
+      buyerShipping = Number((210.00 / itemsCount).toFixed(2));
+    }
+  }
   const carrierShipping = buyerShipping > 0 ? Number((buyerShipping * 1.16).toFixed(2)) : 0;
   const netShipping = Math.max(0, Number((carrierShipping - buyerShipping).toFixed(2)));
 
@@ -1247,9 +1300,12 @@ function calculateDarazSettlementForOrderItem(item, parentOrder = {}) {
 
   // Daraz Coins Participation Fee: Only when buyer used Daraz coins on the order (e.g. PKR 9.28 on PKR 899)
   const hasCoins = Number(raw.coins) > 0 || Number(raw.coin_discount) > 0 || Number(raw.coins_discount) > 0 || Number(raw.daraz_coins) > 0 || raw.coin_applied === true;
-  const coinsDiscountFee = hasCoins
-    ? (Number(raw.coin_discount) || Number(raw.coins) || Number((itemGross * 0.01032).toFixed(2)))
-    : (itemGross >= 800 ? Number((itemGross * 0.01032).toFixed(2)) : 0.00);
+  let coinsDiscountFee = 0;
+  if (hasCoins) {
+    coinsDiscountFee = Number(raw.coin_discount) || Number(raw.coins) || Number((itemGross * 0.01032).toFixed(2));
+  } else if (itemsCount === 1 && itemGross >= 800) {
+    coinsDiscountFee = Number((itemGross * 0.01032).toFixed(2));
+  }
 
   // 4. Withholding Taxes (Official Pakistan FBR / PRA rates):
   // Active Filer / Platform Income Tax Withholding (Section 236V WHT): 2.0% (PKR 18.00 on PKR 899.00)
@@ -1300,10 +1356,8 @@ router.post("/recalculate", async (req, res) => {
       // If this entry was imported from a real Daraz statement file, NEVER overwrite its
       // official statement fee amounts and net settlement with heuristic estimates!
       const isFileImported =
-        entry.matched_by === "file_imported" ||
-        entry.matched_by === "returned_restocked" ||
-        (entry.matched_by && entry.matched_by.startsWith("user_override")) ||
-        (entry.matched_by && !["store_order_sync", "store_order_sync_estimated", "daraz_api_sync"].includes(entry.matched_by) && entry.fee_breakdown && Object.keys(entry.fee_breakdown).length > 0);
+        entry.source === "statement_file" ||
+        (entry.statement_number && !entry.statement_number.startsWith("STMT-") && entry.matched_by === "file_imported");
 
       if (isFileImported) {
         // Only update total_cost and net_profit based on cost_price
@@ -1336,8 +1390,14 @@ router.post("/recalculate", async (req, res) => {
         orderItem = await CentralOrderItem.findOne({ order_number: entry.order_number }).lean();
       }
 
+      let parentOrder = {};
+      if (orderItem?.order_id) {
+        const CentralOrder = require("../models/CentralOrder");
+        parentOrder = (await CentralOrder.findById(orderItem.order_id).lean()) || {};
+      }
+
       if (orderItem) {
-        const calc = calculateDarazSettlementForOrderItem(orderItem);
+        const calc = calculateDarazSettlementForOrderItem(orderItem, parentOrder);
         const qty = entry.quantity > 0 ? entry.quantity : 1;
         const costPrice = entry.cost_price || 0;
         const totalCost = Number((costPrice * qty).toFixed(2));
@@ -1631,10 +1691,11 @@ router.post("/sync", async (req, res) => {
               const itemStatus = (item.status || parentOrder.status || "").toLowerCase();
               if (!itemStatus.includes("delivered") && !itemStatus.includes("return")) continue;
 
-              // Skip if a real CSV-imported entry already exists for this order
+              // Skip only if a real CSV/Excel statement file has already been uploaded for this order
               const existingCsvEntry = await FinanceEntry.findOne({
                 order_number: orderNum,
-                matched_by: { $nin: ["store_order_sync", "store_order_sync_estimated", "pending_statement"] }
+                statement_number: { $not: /^STMT-/i },
+                source: "statement_file"
               }).lean();
               if (existingCsvEntry) continue;
 
@@ -1687,7 +1748,9 @@ router.post("/sync", async (req, res) => {
                 net_profit: costPrice > 0 ? Number((calc.netSettlement - totalCost).toFixed(2)) : null,
                 matched_product_id: costDetails.matched_product_id,
                 matched_product_name: costDetails.matched_product_name || item.product_name,
-                matched_by: costDetails.matched_by || "store_order_sync",
+                matched_by: "store_order_sync",
+                source: "store_order_sync",
+                cost_match_type: costDetails.matched_by || "none",
                 profit_ready: costPrice > 0,
                 fee_breakdown: {
                   "Product Price Paid by Buyer": calc.itemGross,

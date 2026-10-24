@@ -69,6 +69,8 @@ const financeEntrySchema = new mongoose.Schema({
     },
     matched_product_name: { type: String, default: "" },
     matched_by: { type: String, default: "" },
+    cost_match_type: { type: String, default: "" },
+    source: { type: String, enum: ["statement_file", "live_api_transaction", "store_order_sync"], default: "store_order_sync" },
     profit_ready: { type: Boolean, default: false },
 
     fee_breakdown: {

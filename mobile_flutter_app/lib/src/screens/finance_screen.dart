@@ -41,7 +41,7 @@ class _FinanceScreenState extends State<FinanceScreen> {
     _load();
   }
 
-  Future<void> _load({bool silent = false}) async {
+  Future<void> _load({bool silent = false, bool forceRefresh = false}) async {
     if (!silent) {
       setState(() {
         _loading = true;
@@ -53,14 +53,14 @@ class _FinanceScreenState extends State<FinanceScreen> {
       final periodParam = _selectedPeriod == 'all' ? '' : _selectedPeriod;
       final storeParam = _selectedStoreId == 'all' ? '' : _selectedStoreId;
 
-      final results = await Future.wait<dynamic>(<Future<dynamic>>[
+      final futures = <Future<dynamic>>[
         ApiClient.instance.get(
           '/finance/summary',
           queryParameters: <String, dynamic>{
             if (periodParam.isNotEmpty) 'statement_period': periodParam,
             if (storeParam.isNotEmpty) 'store_id': storeParam,
           },
-          bypassCache: true,
+          bypassCache: forceRefresh,
         ),
         ApiClient.instance.get(
           '/finance',
@@ -68,27 +68,38 @@ class _FinanceScreenState extends State<FinanceScreen> {
             if (periodParam.isNotEmpty) 'statement_period': periodParam,
             if (storeParam.isNotEmpty) 'store_id': storeParam,
           },
-          bypassCache: true,
+          bypassCache: forceRefresh,
         ),
-        ApiClient.instance.get('/finance/periods'),
-        ApiClient.instance.get('/stores'),
-        ApiClient.instance.get('/central-inventory'),
-      ]);
+      ];
+
+      final needPeriods = _periods.isEmpty || forceRefresh;
+      final needStores = _stores.isEmpty || forceRefresh;
+
+      if (needPeriods) futures.add(ApiClient.instance.get('/finance/periods', bypassCache: forceRefresh));
+      if (needStores) futures.add(ApiClient.instance.get('/stores', bypassCache: forceRefresh));
+
+      final results = await Future.wait<dynamic>(futures);
 
       final summaryMap = JsonReaders.map(results[0]);
       final entriesList = JsonReaders.list(results[1]).map((e) => FinanceEntry.fromJson(JsonReaders.map(e))).toList();
-      final periodsData = JsonReaders.map(results[2]);
-      final periodsList = JsonReaders.list(periodsData['periods']).map((p) => StatementPeriodModel.fromJson(JsonReaders.map(p))).toList();
-      final storesList = JsonReaders.list(results[3]).map((s) => StoreModel.fromJson(JsonReaders.map(s))).toList();
-      final invList = JsonReaders.list(results[4]).map((e) => InventoryItem.fromJson(JsonReaders.map(e))).toList();
+
+      var nextIdx = 2;
+      List<StatementPeriodModel>? periodsList;
+      if (needPeriods) {
+        final periodsData = JsonReaders.map(results[nextIdx++]);
+        periodsList = JsonReaders.list(periodsData['periods']).map((p) => StatementPeriodModel.fromJson(JsonReaders.map(p))).toList();
+      }
+      List<StoreModel>? storesList;
+      if (needStores) {
+        storesList = JsonReaders.list(results[nextIdx++]).map((s) => StoreModel.fromJson(JsonReaders.map(s))).toList();
+      }
 
       if (mounted) {
         setState(() {
           _summary = FinanceSummary.fromJson(summaryMap);
           _entries = entriesList;
-          _periods = periodsList;
-          _stores = storesList;
-          _inventory = invList;
+          if (periodsList != null) _periods = periodsList;
+          if (storesList != null) _stores = storesList;
         });
       }
     } on ApiException catch (e) {
@@ -335,6 +346,15 @@ class _FinanceScreenState extends State<FinanceScreen> {
     final sku = entry.sellerSku.trim();
     final name = entry.productName.isNotEmpty ? entry.productName : sku;
     final costController = TextEditingController();
+
+    if (_inventory.isEmpty) {
+      try {
+        final invRes = await ApiClient.instance.get('/central-inventory');
+        _inventory = JsonReaders.list(invRes).map((e) => InventoryItem.fromJson(JsonReaders.map(e))).toList();
+      } catch (_) {}
+    }
+
+    if (!mounted) return;
 
     // Look for matching inventory item
     final matched = _inventory.where((i) => i.sellerSku.toLowerCase() == sku.toLowerCase()).firstOrNull;

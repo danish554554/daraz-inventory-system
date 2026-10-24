@@ -46,7 +46,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
         if (mounted) _triggerBackgroundLiveSync();
       });
     });
-    _refreshTimer = Timer.periodic(const Duration(seconds: 30), (_) {
+    _refreshTimer = Timer.periodic(const Duration(seconds: 90), (_) {
       if (mounted && !_loading) _load(silent: true);
     });
   }
@@ -57,8 +57,15 @@ class _DashboardScreenState extends State<DashboardScreen> {
     super.dispose();
   }
 
+  static DateTime? _lastLiveSyncAt;
+
   Future<void> _triggerBackgroundLiveSync() async {
     if (_isLiveSyncing) return;
+    final now = DateTime.now();
+    if (_lastLiveSyncAt != null && now.difference(_lastLiveSyncAt!).inMinutes < 15) {
+      return; // Already synced within last 15 minutes, keep app fast and lightweight
+    }
+    _lastLiveSyncAt = now;
     if (mounted) setState(() => _isLiveSyncing = true);
     try {
       await ApiClient.instance.post('/daraz-sync/run-all');
