@@ -136,7 +136,7 @@ class _ReturnsAndFailedDeliveryScreenState extends State<ReturnsAndFailedDeliver
   }
 
   DateTime? _getReturnEventDate(CentralOrderItem item) {
-    return item.claimDate ?? item.hubArrivedAt ?? item.logisticFacilityAt ?? item.createdAt;
+    return item.claimDate ?? item.hubArrivedAt ?? item.logisticFacilityAt ?? item.orderCreatedAt ?? item.createdAt;
   }
 
   bool _isWithinLast40Days(CentralOrderItem item) {

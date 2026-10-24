@@ -251,6 +251,7 @@ function itemPayload(item) {
       order_id: order._id || item.order_id || "",
       order_number: order.order_number || item.order_number || "-",
       order_status: order.status || item.order_status || "-",
+      order_created_at: order.order_created_at || order.created_at || item.createdAt || null,
       external_order_item_id: item.external_order_item_id || "",
       seller_sku: item.seller_sku || "",
       product_name: item.product_name || "",

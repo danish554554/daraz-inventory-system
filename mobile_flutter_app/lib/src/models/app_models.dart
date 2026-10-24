@@ -981,6 +981,7 @@ class CentralOrderItem {
     required this.stockRestored,
     required this.errorMessage,
     required this.createdAt,
+    this.orderCreatedAt,
     this.originalDarazStatus = '',
     this.originalDarazReason = '',
     this.reasonCode = '',
@@ -1031,6 +1032,7 @@ class CentralOrderItem {
   final bool stockRestored;
   final String errorMessage;
   final DateTime? createdAt;
+  final DateTime? orderCreatedAt;
   final String originalDarazStatus;
   final String originalDarazReason;
   final String reasonCode;
@@ -1117,6 +1119,7 @@ class CentralOrderItem {
     bool? stockRestored,
     String? errorMessage,
     DateTime? createdAt,
+    DateTime? orderCreatedAt,
     String? originalDarazStatus,
     String? originalDarazReason,
     String? reasonCode,
@@ -1167,6 +1170,7 @@ class CentralOrderItem {
       stockRestored: stockRestored ?? this.stockRestored,
       errorMessage: errorMessage ?? this.errorMessage,
       createdAt: createdAt ?? this.createdAt,
+      orderCreatedAt: orderCreatedAt ?? this.orderCreatedAt,
       originalDarazStatus: originalDarazStatus ?? this.originalDarazStatus,
       originalDarazReason: originalDarazReason ?? this.originalDarazReason,
       reasonCode: reasonCode ?? this.reasonCode,
@@ -1228,6 +1232,7 @@ class CentralOrderItem {
       stockRestored: JsonReaders.boolean(json, 'stock_restored'),
       errorMessage: JsonReaders.string(json, 'error_message'),
       createdAt: JsonReaders.date(json, 'createdAt'),
+      orderCreatedAt: JsonReaders.date(json, 'order_created_at'),
       originalDarazStatus: JsonReaders.string(json, 'original_daraz_status', JsonReaders.string(json, 'status')),
       originalDarazReason: JsonReaders.string(json, 'original_daraz_reason', JsonReaders.string(json, 'return_reason')),
       reasonCode: JsonReaders.string(json, 'reason_code'),
