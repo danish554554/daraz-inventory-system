@@ -23,7 +23,7 @@ class ApiClient {
   final http.Client _httpClient = http.Client();
   final Map<String, _CachedApiResponse> _memoryCache = <String, _CachedApiResponse>{};
   final Map<String, Future<dynamic>> _inFlightGets = <String, Future<dynamic>>{};
-  static const Duration _defaultCacheTtl = Duration(seconds: 30);
+  static const Duration _defaultCacheTtl = Duration(minutes: 5);
   static const Duration _defaultTimeout = Duration(seconds: 45);
 
   Future<dynamic> get(
@@ -161,7 +161,7 @@ class ApiClient {
 
       if (isCacheableGet) {
         _memoryCache[cacheKey] = _CachedApiResponse(decoded, DateTime.now());
-      } else {
+      } else if (method.toUpperCase() != 'GET') {
         _memoryCache.clear();
       }
 
