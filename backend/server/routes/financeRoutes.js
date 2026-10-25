@@ -992,8 +992,14 @@ async function autoHealOutdatedFinanceEntries() {
       $or: [
         { net_settlement: { $in: [557.06, 513.93, 571.94, 545.16, 362.10, 452.16] } },
         { handling_fee: { $ne: 17.40 } },
-        { free_shipping_max_fee: { $gt: 0 } },
-        { cofunded_voucher_fee: { $gt: 0 } },
+        {
+          store_name: { $regex: /accessories|hub/i },
+          free_shipping_max_fee: { $in: [0, null] }
+        },
+        {
+          store_name: { $regex: /tk|dkart|d-kart/i },
+          free_shipping_max_fee: { $gt: 0 }
+        },
         { commission_fee: { $in: [165.83, 147.39] } }
       ]
     }).limit(500);
@@ -1008,7 +1014,7 @@ async function autoHealOutdatedFinanceEntries() {
 
       let calc;
       if (orderItem) {
-        calc = calculateDarazSettlementForOrderItem(orderItem, parentOrder);
+        calc = calculateDarazSettlementForOrderItem(orderItem, parentOrder, entry);
       } else {
         const base = entry.product_price || entry.gross_amount || 0;
         if (base <= 0) continue;
@@ -1019,7 +1025,12 @@ async function autoHealOutdatedFinanceEntries() {
         const paymentFee = Number((base * 0.026107).toFixed(2));
         const handlingFee = 17.40;
         const coinsDiscountFee = Number((base * 0.0103226).toFixed(2));
-        const freeShippingMaxFee = 0.00;
+        
+        const storeIdentifier = (entry.store_name || entry.store_code || "").toLowerCase();
+        const isAccessoriesHub = storeIdentifier.includes("accessories") || storeIdentifier.includes("hub");
+        const isDkartOrTkart = storeIdentifier.includes("tk") || storeIdentifier.includes("dkart") || storeIdentifier.includes("d-kart") || storeIdentifier.includes("tk-kart");
+        const isFsm = !isDkartOrTkart && (isAccessoriesHub || (entry.free_shipping_max_fee > 0 && entry.matched_by === "file_imported"));
+        const freeShippingMaxFee = isFsm ? Number((base * 0.0690).toFixed(2)) : 0.00;
         const cofundedVoucherFee = 0.00;
         const incomeTaxWithholding = Number(Math.round(base * 0.02).toFixed(2));
         const salesTaxWithholding = Number(Math.round(base * 0.02).toFixed(2));
@@ -1355,7 +1366,7 @@ router.delete("/clear", async (req, res) => {
 });
 
 // Helper to calculate exact real-world Daraz settlement for an order item
-function calculateDarazSettlementForOrderItem(item, parentOrder = {}) {
+function calculateDarazSettlementForOrderItem(item, parentOrder = {}, store = null) {
   const raw = item.raw_payload || {};
 
   // 1. Seller Product Price (Seller's Catalog Price minus Seller's own Voucher)
@@ -1436,8 +1447,51 @@ function calculateDarazSettlementForOrderItem(item, parentOrder = {}) {
     ? Number(raw.handling_fee)
     : Number((15.00 * (1 + pstServiceTaxRate)).toFixed(2));
 
-  // Free Shipping Max Fee: 0.00 unless explicitly enrolled in FSM promotion program
-  const isFsm = raw.free_shipping_max === true && raw.free_shipping_max !== false;
+  // Store-specific Free Shipping Max (FSM) Promotion:
+  // - Accessories Hub 76: Enrolled in FSM promotion (6.90% fee subtracted from total)
+  // - TK-kart & D-kart: Seller choice NOT to use FSM (freeShippingMaxFee = 0.00 assigned)
+  // - Other stores: check explicit payload flag
+  const storeName = (
+    store?.name ||
+    store?.store_name ||
+    item.store_name ||
+    parentOrder.store_name ||
+    parentOrder.seller_name ||
+    ""
+  ).toLowerCase();
+
+  const storeCode = (
+    store?.code ||
+    store?.store_code ||
+    item.store_code ||
+    parentOrder.store_code ||
+    ""
+  ).toLowerCase();
+
+  const isAccessoriesHub =
+    storeName.includes("accessories") ||
+    storeName.includes("hub") ||
+    storeCode.includes("accessories") ||
+    storeCode.includes("hub");
+
+  const isDkartOrTkart =
+    storeName.includes("tk") ||
+    storeName.includes("dkart") ||
+    storeName.includes("d-kart") ||
+    storeName.includes("tk-kart") ||
+    storeCode.includes("tk") ||
+    storeCode.includes("dkart");
+
+  let isFsm = false;
+  if (isAccessoriesHub) {
+    isFsm = raw.free_shipping_max !== false;
+  } else if (isDkartOrTkart) {
+    isFsm = false;
+  } else {
+    isFsm = (raw.free_shipping_max === true || raw.fsm === true || parentOrder.free_shipping_max === true) && raw.free_shipping_max !== false;
+  }
+
+  // If FSM is applied, store its 6.90% value; if not applied, keep variable and assign 0.00 to it
   const freeShippingMaxFee = isFsm ? Number((itemGross * 0.0690).toFixed(2)) : 0.00;
 
   // Co-funded Voucher Fee: 0.00 unless co-funded voucher was actually used on this order
@@ -1549,7 +1603,7 @@ router.post("/recalculate", async (req, res) => {
       }
 
       if (orderItem) {
-        const calc = calculateDarazSettlementForOrderItem(orderItem, parentOrder);
+        const calc = calculateDarazSettlementForOrderItem(orderItem, parentOrder, entry);
         const qty = entry.quantity > 0 ? entry.quantity : 1;
         const costPrice = entry.cost_price || 0;
         const totalCost = Number((costPrice * qty).toFixed(2));
@@ -1608,9 +1662,11 @@ router.post("/recalculate", async (req, res) => {
         const paymentFee = Number((base * 0.026107).toFixed(2));
         const handlingFee = 17.40;
         const coinsDiscountFee = Number((base * 0.0103226).toFixed(2));
-        const freeShippingMaxFee = (entry.free_shipping_max_fee > 0 && entry.matched_by === "file_imported")
-          ? entry.free_shipping_max_fee
-          : 0.00;
+        const storeIdentifier = (entry.store_name || entry.store_code || "").toLowerCase();
+        const isAccessoriesHub = storeIdentifier.includes("accessories") || storeIdentifier.includes("hub");
+        const isDkartOrTkart = storeIdentifier.includes("tk") || storeIdentifier.includes("dkart") || storeIdentifier.includes("d-kart") || storeIdentifier.includes("tk-kart");
+        const isFsm = !isDkartOrTkart && (isAccessoriesHub || (entry.free_shipping_max_fee > 0 && entry.matched_by === "file_imported"));
+        const freeShippingMaxFee = isFsm ? Number((base * 0.0690).toFixed(2)) : 0.00;
         const cofundedVoucherFee = (entry.cofunded_voucher_fee > 0 && entry.matched_by === "file_imported")
           ? entry.cofunded_voucher_fee
           : 0.00;
@@ -1852,7 +1908,7 @@ router.post("/sync", async (req, res) => {
               if (existingCsvEntry) continue;
 
               // Use exact real-world Daraz settlement calculation
-              const calc = calculateDarazSettlementForOrderItem(item, parentOrder);
+              const calc = calculateDarazSettlementForOrderItem(item, parentOrder, store);
               const qty = Number(item.quantity) || 1;
 
               const costDetails = await findCostDetails([{
