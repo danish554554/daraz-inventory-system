@@ -131,7 +131,8 @@ class _FinanceScreenState extends State<FinanceScreen> {
       if (mounted) {
         showAppSnackBar(context, msg);
       }
-      await _load(silent: true);
+      ApiClient.instance.clearCache();
+      await _load(silent: true, forceRefresh: true);
     } catch (e) {
       if (mounted) {
         showAppSnackBar(context, 'Failed to sync from Daraz API: $e', error: true);
@@ -832,7 +833,8 @@ class _FinanceScreenState extends State<FinanceScreen> {
         final respMap = JsonReaders.map(response);
         final msg = JsonReaders.string(respMap, 'message', 'Records recalculated.');
         if (mounted) showAppSnackBar(context, msg);
-        await _load(silent: true);
+        ApiClient.instance.clearCache();
+        await _load(silent: true, forceRefresh: true);
       } catch (e) {
         if (mounted) showAppSnackBar(context, 'Recalculation failed: $e', error: true);
       }
@@ -856,7 +858,10 @@ class _FinanceScreenState extends State<FinanceScreen> {
                   ),
                 )
               : AppShell(
-                  onRefresh: () => _load(silent: true),
+                  onRefresh: () async {
+                    ApiClient.instance.clearCache();
+                    await _load(silent: true, forceRefresh: true);
+                  },
                   child: Column(
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: <Widget>[
