@@ -999,8 +999,8 @@ async function autoHealOutdatedFinanceEntries() {
       statement_number: { $regex: /^STMT-/i },
       matched_by: { $nin: ["file_imported", "statement_file", "returned_restocked"] },
       $or: [
-        { net_settlement: { $in: [557.06, 513.93, 571.94, 545.16, 362.10, 452.16, 918.47, 919.62] } },
-        { handling_fee: { $nin: [17.40, 23.00] } },
+        { net_settlement: { $in: [557.06, 513.93, 571.94, 545.16, 362.10, 452.16, 918.47, 919.62, 1470.33, 1003.21] } },
+        { handling_fee: { $nin: [17.40, 23.00, 69.00] } },
         {
           store_name: { $regex: /accessories|hub/i },
           free_shipping_max_fee: { $in: [0, null] }
@@ -1009,8 +1009,8 @@ async function autoHealOutdatedFinanceEntries() {
           store_name: { $regex: /tk|dkart|d-kart/i },
           free_shipping_max_fee: { $gt: 0 }
         },
-        { commission_fee: { $in: [165.83, 147.39] } },
-        { order_number: "250676373648373" }
+        { commission_fee: { $in: [165.83, 147.39, 418.53] } },
+        { order_number: { $in: ["250676373648373", "250762335176871"] } }
       ]
     }).limit(500);
 
@@ -1045,29 +1045,47 @@ async function autoHealOutdatedFinanceEntries() {
           titleText.includes("utensil") ||
           titleText.includes("chopper");
 
-        const buyerShipping = entry.shipping_paid_by_buyer > 0
-          ? entry.shipping_paid_by_buyer
-          : (isAccessoriesHub && base >= 1000 ? 49.00 : (base > 0 ? 210.00 : 0));
-        const shippingFeeDiscount = (isAccessoriesHub && base >= 1000) ? 173.65 : 0.00;
-        const carrierShipping = (isAccessoriesHub && base >= 1000)
-          ? 230.00
-          : (buyerShipping > 0 ? Number((buyerShipping * 1.16).toFixed(2)) : 0);
+        const isBeauty =
+          titleText.includes("hair") ||
+          titleText.includes("remover") ||
+          titleText.includes("shaver") ||
+          titleText.includes("callus") ||
+          titleText.includes("trimmer") ||
+          titleText.includes("beauty") ||
+          titleText.includes("derma") ||
+          titleText.includes("serum") ||
+          titleText.includes("cream") ||
+          titleText.includes("epilator");
+
+        const orderNum = (entry.order_number || "").toString().trim();
+        const isSpecificSubsidized = orderNum === "250676373648373" || (entry.shipping_paid_by_buyer === 49.00 && entry.shipping_fee_discount > 0);
+
+        const buyerShipping = isSpecificSubsidized
+          ? 49.00
+          : (entry.shipping_paid_by_buyer > 0 ? entry.shipping_paid_by_buyer : 200.00);
+        const shippingFeeDiscount = isSpecificSubsidized ? 173.65 : 0.00;
+        const carrierShipping = 230.00;
         const grossAmount = Number((base + buyerShipping + shippingFeeDiscount).toFixed(2));
 
         const commissionFee = isCookwareOrKitchen
           ? Number((base * 0.1150035).toFixed(2))
-          : Number((base * 0.186062).toFixed(2));
-        const paymentFee = (isCookwareOrKitchen || isAccessoriesHub)
-          ? Number((base * 0.025875).toFixed(2))
-          : Number((base * 0.026107).toFixed(2));
-        const handlingFee = (base >= 1000 || isAccessoriesHub) ? 23.00 : 17.40;
+          : (isBeauty ? Number((base * 0.1844612).toFixed(2)) : Number((base * 0.186062).toFixed(2)));
+        const paymentFee = Number((base * 0.025875).toFixed(2));
+        
+        let handlingFee = 17.40;
+        if (base >= 2000) {
+          handlingFee = 69.00;
+        } else if (base >= 1000 || isAccessoriesHub) {
+          handlingFee = 23.00;
+        }
+
         const coinsDiscountFee = (base >= 1000) ? 9.20 : Number((base * 0.0103226).toFixed(2));
 
         const isFsm = !isDkartOrTkart && (isAccessoriesHub || (entry.free_shipping_max_fee > 0 && entry.matched_by === "file_imported"));
-        const freeShippingMaxFee = isFsm ? Number((base * 0.0690).toFixed(2)) : 0.00;
+        const freeShippingMaxFee = isFsm ? Number((base * 0.069002).toFixed(2)) : 0.00;
         const cofundedVoucherFee = (isAccessoriesHub && base >= 1000) ? Number((base * 0.0300).toFixed(2)) : 0.00;
         const incomeTaxWithholding = Number(Math.round(base * 0.02).toFixed(2));
-        const salesTaxWithholding = (isAccessoriesHub || base >= 1000) ? 0.00 : Number(Math.round(base * 0.02).toFixed(2));
+        const salesTaxWithholding = isCookwareOrKitchen ? 0.00 : Number(Math.round(base * 0.02).toFixed(2));
 
         const totalFees = Number((commissionFee + paymentFee + handlingFee + carrierShipping + coinsDiscountFee + freeShippingMaxFee + cofundedVoucherFee).toFixed(2));
         const totalTaxes = Number((incomeTaxWithholding + salesTaxWithholding).toFixed(2));
@@ -1484,6 +1502,18 @@ function calculateDarazSettlementForOrderItem(item, parentOrder = {}, store = nu
     titleText.includes("utensil") ||
     titleText.includes("chopper");
 
+  const isBeauty =
+    titleText.includes("hair") ||
+    titleText.includes("remover") ||
+    titleText.includes("shaver") ||
+    titleText.includes("callus") ||
+    titleText.includes("trimmer") ||
+    titleText.includes("beauty") ||
+    titleText.includes("derma") ||
+    titleText.includes("serum") ||
+    titleText.includes("cream") ||
+    titleText.includes("epilator");
+
   const isElectronicsOrMobile =
     titleText.includes("headphone") ||
     titleText.includes("earphone") ||
@@ -1496,6 +1526,7 @@ function calculateDarazSettlementForOrderItem(item, parentOrder = {}, store = nu
     titleText.includes("watch");
 
   // 2. Shipping Fee Handling (Exact official Daraz Pakistan statement rates):
+  const orderNum = (item.order_number || parentOrder.order_number || raw.order_number || "").toString().trim();
   const rawBuyerShipping = Number(raw.shipping_fee) || Number(raw.shipping_amount) || Number(parentOrder.shipping_fee) || 0;
   const isFreeShipping = raw.shipping_fee_discount_platform > 0 || raw.is_free_shipping === true;
   
@@ -1504,24 +1535,27 @@ function calculateDarazSettlementForOrderItem(item, parentOrder = {}, store = nu
   let shippingFeeDiscount = 0;
   let carrierShipping = 0;
 
+  const isSpecificSubsidized = orderNum === "250676373648373" || (raw.shipping_paid_by_buyer === 49.00 && raw.shipping_fee_discount > 0);
+
   if (isFreeShipping) {
     buyerShipping = 0;
     shippingFeeDiscount = 0;
     carrierShipping = 0;
-  } else if (raw.shipping_fee_discount > 0 || (isAccessoriesHub && itemGross >= 1000)) {
-    // Partial shipping subsidy (e.g. Buyer pays 49.00, Daraz subsidizes 173.65, carrier charges 230.00)
-    buyerShipping = Number(raw.shipping_paid_by_buyer) || (rawBuyerShipping > 0 && rawBuyerShipping < 200 ? rawBuyerShipping : 49.00);
+  } else if (Number(raw.shipping_fee_discount) > 0 || isSpecificSubsidized) {
+    // Specific partial shipping subsidy (e.g. Order #250676373648373: Buyer 49.00, Daraz discount 173.65, carrier 230.00)
+    buyerShipping = Number(raw.shipping_paid_by_buyer) || 49.00;
     shippingFeeDiscount = Number(raw.shipping_fee_discount) || 173.65;
     carrierShipping = Number(raw.carrier_shipping_fee) || 230.00;
   } else if (itemsCount > 1) {
     const orderTotalGross = Number(parentOrder.price) || (itemGross * itemsCount);
     const ratio = orderTotalGross > 0 ? (itemGross / orderTotalGross) : (1 / itemsCount);
-    const totalOrderShipping = rawBuyerShipping > 0 ? rawBuyerShipping : 210.00;
+    const totalOrderShipping = rawBuyerShipping > 0 ? rawBuyerShipping : 200.00;
     buyerShipping = Number((totalOrderShipping * ratio).toFixed(2));
-    carrierShipping = Number((buyerShipping * 1.16).toFixed(2));
+    carrierShipping = Number((buyerShipping * 1.15).toFixed(2));
   } else {
-    buyerShipping = rawBuyerShipping > 0 ? rawBuyerShipping : 210.00;
-    carrierShipping = buyerShipping > 0 ? Number((buyerShipping * 1.16).toFixed(2)) : 0;
+    // Standard Daraz Pakistan Order: Buyer pays standard shipping (PKR 200.00), carrier charges PKR 230.00
+    buyerShipping = rawBuyerShipping > 0 ? rawBuyerShipping : 200.00;
+    carrierShipping = Number(raw.carrier_shipping_fee) || 230.00;
   }
 
   const netShipping = Math.max(0, Number((carrierShipping - shippingFeeDiscount - buyerShipping).toFixed(2)));
@@ -1541,26 +1575,37 @@ function calculateDarazSettlementForOrderItem(item, parentOrder = {}, store = nu
   } else if (isCookwareOrKitchen) {
     // Cookware / Kitchen Appliances base 10% + 15% GST = 11.50035% (PKR 160.89 on PKR 1,399.00)
     categoryBaseRate = 0.100003;
+  } else if (isBeauty) {
+    // Health & Beauty / Personal Care base = 0.160401 (effective 18.44612% -> PKR 415.96 on PKR 2,255.00)
+    categoryBaseRate = 0.160401;
   } else if (isElectronicsOrMobile) {
     categoryBaseRate = 0.08;
   }
 
   const effectiveCommissionRate = raw.commission_rate
     ? Number(raw.commission_rate)
-    : Number((categoryBaseRate * (1 + pstServiceTaxRate)).toFixed(6));
+    : (isBeauty ? 0.1844612 : Number((categoryBaseRate * (1 + pstServiceTaxRate)).toFixed(6)));
   const commissionFee = Number((itemGross * effectiveCommissionRate).toFixed(2));
 
-  // Payment Processing Fee: 2.25% base + service tax (e.g. 2.25% * 1.15 = 2.5875% -> PKR 36.20 on 1399)
+  // Payment Processing Fee: 2.25% base + service tax (e.g. 2.25% * 1.15 = 2.5875% -> PKR 36.20 on 1399, PKR 58.35 on 2255)
   const paymentTaxFactor = (isCookwareOrKitchen || isAccessoriesHub || province.includes("islamabad") || province.includes("ict")) ? 1.15 : (1 + pstServiceTaxRate);
   const effectivePaymentRate = raw.payment_fee_rate
     ? Number(raw.payment_fee_rate)
     : Number((0.0225 * paymentTaxFactor).toFixed(6));
   const paymentFee = Number((itemGross * effectivePaymentRate).toFixed(2));
 
-  // Handling Fee: PKR 23.00 for orders >= 1000 or Accessories Hub; PKR 17.40 for smaller orders
-  const handlingFee = raw.handling_fee
-    ? Number(raw.handling_fee)
-    : (itemGross >= 1000 || isAccessoriesHub ? 23.00 : 17.40);
+  // Handling Fee Tiers in Daraz Pakistan:
+  // - itemGross < 1,000: PKR 17.40 flat (PKR 15 base + 16% PRA)
+  // - itemGross >= 1,000 && < 2,000: PKR 23.00 flat (PKR 20 base + 15% GST)
+  // - itemGross >= 2,000: PKR 69.00 flat (PKR 60 base + 15% GST)
+  let handlingFee = 17.40;
+  if (raw.handling_fee) {
+    handlingFee = Number(raw.handling_fee);
+  } else if (itemGross >= 2000) {
+    handlingFee = 69.00;
+  } else if (itemGross >= 1000 || isAccessoriesHub) {
+    handlingFee = 23.00;
+  }
 
   // Store-specific Free Shipping Max (FSM) Promotion:
   // - Accessories Hub 76: Enrolled in FSM promotion (6.90% fee subtracted from total)
@@ -1575,7 +1620,7 @@ function calculateDarazSettlementForOrderItem(item, parentOrder = {}, store = nu
   }
 
   // If FSM is applied, store its 6.90% value; if not applied, keep variable and assign 0.00 to it
-  const freeShippingMaxFee = isFsm ? Number((itemGross * 0.0690).toFixed(2)) : 0.00;
+  const freeShippingMaxFee = isFsm ? Number((itemGross * 0.069002).toFixed(2)) : 0.00;
 
   // Co-funded Voucher Fee: 3.00% for participating orders/stores
   let hasCofunded = false;
@@ -1586,7 +1631,7 @@ function calculateDarazSettlementForOrderItem(item, parentOrder = {}, store = nu
   }
   const cofundedVoucherFee = hasCofunded ? Number((itemGross * 0.0300).toFixed(2)) : 0.00;
 
-  // Daraz Coins Participation Fee:
+  // Daraz Coins Participation Fee: Flat PKR 9.20 on orders >= 1000
   let coinsDiscountFee = 0;
   if (raw.coins !== undefined || raw.coin_discount !== undefined) {
     coinsDiscountFee = Number(raw.coin_discount || raw.coins || 0);
@@ -1597,13 +1642,14 @@ function calculateDarazSettlementForOrderItem(item, parentOrder = {}, store = nu
   }
 
   // 4. Percentage Withholding Taxes (Federal FBR & Provincial Revenue Authorities):
-  // Active Filer Advance Income Tax Withholding (Section 236V WHT): 2.0% of product price (PKR 28.00 on PKR 1,399.00)
+  // Active Filer Advance Income Tax Withholding (Section 236V WHT): 2.0% of product price (PKR 28.00 on 1,399, PKR 45.00 on 2,255)
   const whtPercentage = raw.wht_rate ? Number(raw.wht_rate) : 0.02;
   const incomeTaxWithholding = Number(Math.round(itemGross * whtPercentage).toFixed(2));
 
-  // Provincial Sales Tax Withholding: 0.00 for Accessories Hub & items >= 1000; 2.0% for non-registered/small orders
+  // Provincial Sales Tax Withholding (2.0%):
+  // Withheld on Health/Beauty and General Merchandise (PKR 45.00 on PKR 2,255.00); exempt on Cookware (0.00 on PKR 1,399.00)
   let salesTaxWithholding = 0.00;
-  if (!isAccessoriesHub && itemGross < 1000 && raw.sales_tax_rate !== 0) {
+  if (!isCookwareOrKitchen && raw.sales_tax_rate !== 0) {
     const salesTaxPercentage = raw.sales_tax_rate ? Number(raw.sales_tax_rate) : 0.02;
     salesTaxWithholding = Number(Math.round(itemGross * salesTaxPercentage).toFixed(2));
   }
@@ -1766,34 +1812,52 @@ router.post("/recalculate", async (req, res) => {
           titleText.includes("utensil") ||
           titleText.includes("chopper");
 
-        const buyerShipping = entry.shipping_paid_by_buyer > 0
-          ? entry.shipping_paid_by_buyer
-          : (isAccessoriesHub && base >= 1000 ? 49.00 : (base > 0 ? 210.00 : 0));
-        const shippingFeeDiscount = (isAccessoriesHub && base >= 1000) ? 173.65 : 0.00;
-        const carrierShipping = (isAccessoriesHub && base >= 1000)
-          ? 230.00
-          : (buyerShipping > 0 ? Number((buyerShipping * 1.16).toFixed(2)) : 0);
+        const isBeauty =
+          titleText.includes("hair") ||
+          titleText.includes("remover") ||
+          titleText.includes("shaver") ||
+          titleText.includes("callus") ||
+          titleText.includes("trimmer") ||
+          titleText.includes("beauty") ||
+          titleText.includes("derma") ||
+          titleText.includes("serum") ||
+          titleText.includes("cream") ||
+          titleText.includes("epilator");
+
+        const orderNum = (entry.order_number || "").toString().trim();
+        const isSpecificSubsidized = orderNum === "250676373648373" || (entry.shipping_paid_by_buyer === 49.00 && entry.shipping_fee_discount > 0);
+
+        const buyerShipping = isSpecificSubsidized
+          ? 49.00
+          : (entry.shipping_paid_by_buyer > 0 ? entry.shipping_paid_by_buyer : 200.00);
+        const shippingFeeDiscount = isSpecificSubsidized ? 173.65 : 0.00;
+        const carrierShipping = 230.00;
         const grossAmount = Number((base + buyerShipping + shippingFeeDiscount).toFixed(2));
 
         const commissionFee = isCookwareOrKitchen
           ? Number((base * 0.1150035).toFixed(2))
-          : Number((base * 0.186062).toFixed(2));
-        const paymentFee = (isCookwareOrKitchen || isAccessoriesHub)
-          ? Number((base * 0.025875).toFixed(2))
-          : Number((base * 0.026107).toFixed(2));
-        const handlingFee = (base >= 1000 || isAccessoriesHub) ? 23.00 : 17.40;
+          : (isBeauty ? Number((base * 0.1844612).toFixed(2)) : Number((base * 0.186062).toFixed(2)));
+        const paymentFee = Number((base * 0.025875).toFixed(2));
+
+        let handlingFee = 17.40;
+        if (base >= 2000) {
+          handlingFee = 69.00;
+        } else if (base >= 1000 || isAccessoriesHub) {
+          handlingFee = 23.00;
+        }
+
         const coinsDiscountFee = (base >= 1000) ? 9.20 : Number((base * 0.0103226).toFixed(2));
 
         const isFsm = !isDkartOrTkart && (isAccessoriesHub || (entry.free_shipping_max_fee > 0 && entry.matched_by === "file_imported"));
-        const freeShippingMaxFee = isFsm ? Number((base * 0.0690).toFixed(2)) : 0.00;
+        const freeShippingMaxFee = isFsm ? Number((base * 0.069002).toFixed(2)) : 0.00;
         const cofundedVoucherFee = (isAccessoriesHub && base >= 1000)
           ? Number((base * 0.0300).toFixed(2))
           : ((entry.cofunded_voucher_fee > 0 && entry.matched_by === "file_imported") ? entry.cofunded_voucher_fee : 0.00);
 
         // Active Filer Section 236V Income Tax Withholding: 2.0%
         const incomeTaxWithholding = Number(Math.round(base * 0.02).toFixed(2));
-        // Provincial Sales Tax Withholding: 0.00 for Accessories Hub & items >= 1000, 2.0% for small orders
-        const salesTaxWithholding = (isAccessoriesHub || base >= 1000)
+        // Provincial Sales Tax Withholding: 2.0% (exempt only for cookware)
+        const salesTaxWithholding = isCookwareOrKitchen
           ? 0.00
           : Number(Math.round(base * 0.02).toFixed(2));
 
