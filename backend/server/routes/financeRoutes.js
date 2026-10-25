@@ -657,7 +657,16 @@ async function buildEntryFromGroup(group, defaultStore = null, preloadedCache = 
     otherFees
   ).toFixed(2));
 
-  // Taxes: Income Tax Withholding (1% ATL Section 236V) + Sales Tax Withholding (2%) + any other tax
+  // If incomeTaxWithholding was not itemized as a separate row in the CSV transaction lines,
+  // apply the mandatory Daraz Pakistan Section 236V Active Filer Income Tax Withholding (2.0%)
+  if (incomeTaxWithholding === 0 && productPrice > 0 && adjustmentMeta.entryType === "order") {
+    incomeTaxWithholding = Number(Math.round(productPrice * 0.02).toFixed(2));
+    if (!feeBreakdown["Income Tax Withholding"]) {
+      feeBreakdown["Income Tax Withholding"] = -incomeTaxWithholding;
+    }
+  }
+
+  // Taxes: Income Tax Withholding (2% ATL Section 236V) + Sales Tax Withholding (2%) + any other tax
   const totalTaxes = Number((incomeTaxWithholding + salesTaxWithholding + otherTaxes).toFixed(2));
   const totalDeductions = Number((totalFees + totalTaxes).toFixed(2));
 
