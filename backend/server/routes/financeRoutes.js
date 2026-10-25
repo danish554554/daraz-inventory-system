@@ -1407,15 +1407,34 @@ function calculateDarazSettlementForOrderItem(item, parentOrder = {}) {
   const netShipping = Math.max(0, Number((carrierShipping - buyerShipping).toFixed(2)));
   const grossAmount = Number((itemGross + buyerShipping).toFixed(2));
 
-  // 3. Daraz Marketplace Fees (Official Pakistan Percentage Rates from Verified Statement):
-  // Commission: 16% base category commission + 16% PRA/ICT GST = 18.6062% (PKR 167.27 on PKR 899.00)
-  const commissionFee = Number((itemGross * 0.186062).toFixed(2));
+  // 3. Dynamic Daraz Marketplace Percentage Fees & Provincial Tax Hierarchy:
+  // State/Province Sales Tax on platform services:
+  // Punjab (PRA): 16% (0.16) | Islamabad (ICT): 15% (0.15) | Sindh (SRB): 13% (0.13) | KP (KPRA): 15% (0.15)
+  const province = (raw.province || parentOrder.customer_address_state || parentOrder.delivery_state || "").toLowerCase();
+  const pstServiceTaxRate = raw.pst_rate
+    ? Number(raw.pst_rate)
+    : (province.includes("sindh") ? 0.13 : (province.includes("islamabad") || province.includes("ict") ? 0.15 : 0.16));
 
-  // Payment Fee: 2.25% base + 16% PRA/ICT GST = 2.6107% (PKR 23.47 on PKR 899.00)
-  const paymentFee = Number((itemGross * 0.026107).toFixed(2));
+  // Category Commission Rate: dynamic category percentage + provincial service tax on services
+  // Default base category commission is 16.0% (e.g. 16% * 1.16 = 18.6062% under PRA)
+  const categoryBaseRate = raw.commission_base_rate
+    ? Number(raw.commission_base_rate)
+    : (raw.commission_rate ? Number(raw.commission_rate) / (1 + pstServiceTaxRate) : 0.16);
+  const effectiveCommissionRate = raw.commission_rate
+    ? Number(raw.commission_rate)
+    : Number((categoryBaseRate * (1 + pstServiceTaxRate)).toFixed(6));
+  const commissionFee = Number((itemGross * effectiveCommissionRate).toFixed(2));
 
-  // Handling Fee: PKR 15.00 base + 16% GST = PKR 17.40 flat per order line (Official verified Daraz statement fee)
-  const handlingFee = 17.40;
+  // Payment Processing Fee: 2.25% base + provincial sales tax on services (e.g. 2.25% * 1.16 = 2.6107% under PRA)
+  const effectivePaymentRate = raw.payment_fee_rate
+    ? Number(raw.payment_fee_rate)
+    : Number((0.0225 * (1 + pstServiceTaxRate)).toFixed(6));
+  const paymentFee = Number((itemGross * effectivePaymentRate).toFixed(2));
+
+  // Handling Fee: PKR 15.00 base + provincial sales tax on services (e.g. PKR 15.00 * 1.16 = PKR 17.40 flat under PRA)
+  const handlingFee = raw.handling_fee
+    ? Number(raw.handling_fee)
+    : Number((15.00 * (1 + pstServiceTaxRate)).toFixed(2));
 
   // Free Shipping Max Fee: 0.00 unless explicitly enrolled in FSM promotion program
   const isFsm = raw.free_shipping_max === true && raw.free_shipping_max !== false;
@@ -1425,7 +1444,7 @@ function calculateDarazSettlementForOrderItem(item, parentOrder = {}) {
   const hasCofunded = raw.cofunded_voucher === true && Number(raw.voucher_platform) > 0 && Number(raw.voucher_seller) > 0;
   const cofundedVoucherFee = hasCofunded ? Number((itemGross * 0.0300).toFixed(2)) : 0.00;
 
-  // Daraz Coins Participation Fee: 1.0323% (PKR 9.28 on PKR 899.00)
+  // Daraz Coins Participation Fee: Percentage of item price (1.0323% on PKR 899 = PKR 9.28)
   const hasCoins = Number(raw.coins) > 0 || Number(raw.coin_discount) > 0 || Number(raw.coins_discount) > 0 || Number(raw.daraz_coins) > 0 || raw.coin_applied === true;
   let coinsDiscountFee = 0;
   if (hasCoins) {
@@ -1434,12 +1453,14 @@ function calculateDarazSettlementForOrderItem(item, parentOrder = {}) {
     coinsDiscountFee = Number((itemGross * 0.0103226).toFixed(2));
   }
 
-  // 4. Withholding Taxes (Official Pakistan FBR / PRA Percentage Rates):
+  // 4. Percentage Withholding Taxes (Federal FBR & Provincial Revenue Authorities):
   // Active Filer Advance Income Tax Withholding (Section 236V WHT): 2.0% of product price (PKR 18.00 on PKR 899.00)
-  const incomeTaxWithholding = Number(Math.round(itemGross * 0.02).toFixed(2));
+  const whtPercentage = raw.wht_rate ? Number(raw.wht_rate) : 0.02;
+  const incomeTaxWithholding = Number(Math.round(itemGross * whtPercentage).toFixed(2));
 
   // Provincial Sales Tax Withholding: 2.0% of product price (PKR 18.00 on PKR 899.00)
-  const salesTaxWithholding = Number(Math.round(itemGross * 0.02).toFixed(2));
+  const salesTaxPercentage = raw.sales_tax_rate ? Number(raw.sales_tax_rate) : 0.02;
+  const salesTaxWithholding = Number(Math.round(itemGross * salesTaxPercentage).toFixed(2));
 
   const totalFees = Number((commissionFee + paymentFee + handlingFee + carrierShipping + coinsDiscountFee + freeShippingMaxFee + cofundedVoucherFee).toFixed(2));
   const totalTaxes = Number((incomeTaxWithholding + salesTaxWithholding).toFixed(2));
