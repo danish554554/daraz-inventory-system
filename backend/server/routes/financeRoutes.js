@@ -635,18 +635,17 @@ async function buildEntryFromGroup(group, defaultStore = null, preloadedCache = 
     }
   }
 
-  // FIX Bug #2 (cont.): Net the shipping fee against any shipping discount.
-  // In Daraz statements the "Shipping Fee" row (-235.75) and "Shipping Fee
-  // Discount" row (+235.75) always cancel out when free shipping is applied.
-  // shippingFee may now be negative (credits > charges) — clamp to 0.
-  const netShippingCharge = Math.max(0, -shippingFee); // shippingFee is signed: negative = cost
+  // FIX: Net the shipping fee against any shipping discount.
+  // In Daraz statements, the carrier charges "Shipping Fee" (negative, e.g. -254.15)
+  // and when subsidized Daraz credits "Shipping Fee Discount" (positive, e.g. +254.15).
+  // These cancel out so the seller is NOT unfairly charged for subsidized shipping.
+  const carrierCost = Math.abs(shippingFee);
+  const discountCoverage = Math.abs(shippingFeeDiscount);
+  const netShippingCharge = Math.max(0, Number((carrierCost - discountCoverage).toFixed(2)));
 
-  // FIX Bug #1: grossAmount must NOT include shippingFeeDiscount as a credit.
-  // The shipping discount cancels the shipping charge inside netShippingCharge above.
-  // Adding it again to grossAmount would double-count it as seller income.
   const grossAmount = productPrice + shippingPaidByBuyer + otherCredits;
 
-  const totalFees =
+  const totalFees = Number((
     commissionFee +
     paymentFee +
     netShippingCharge +
@@ -655,16 +654,19 @@ async function buildEntryFromGroup(group, defaultStore = null, preloadedCache = 
     cofundedVoucherFee +
     coinsDiscountFee +
     penalties +
-    otherFees;
+    otherFees
+  ).toFixed(2));
 
-  // FIX Bug #4: Do NOT add whtAmount to totalTaxes.
-  // The WHT amount column is the same money already captured in incomeTaxWithholding
-  // via the "income tax / wht" fee-name branch above. Adding it again double-counts it.
-  const totalTaxes = incomeTaxWithholding + salesTaxWithholding + otherTaxes;
+  // Taxes: Income Tax Withholding (1% ATL Section 236V) + Sales Tax Withholding (2%) + any other tax
+  const totalTaxes = Number((incomeTaxWithholding + salesTaxWithholding + otherTaxes).toFixed(2));
+  const totalDeductions = Number((totalFees + totalTaxes).toFixed(2));
 
-  // FIX Bug #5: totalDeductions was used below but never declared, causing
-  // every stored record to have NaN / 0 in the total_deductions field.
-  const totalDeductions = totalFees + totalTaxes;
+  // Ensure netSettlement strictly balances against grossAmount - totalDeductions
+  if (grossAmount > 0 && totalDeductions >= 0) {
+    netSettlement = Number((grossAmount - totalDeductions).toFixed(2));
+  } else {
+    netSettlement = Number(netSettlement.toFixed(2));
+  }
 
   const rawStatus = (first["Order Status"] || first["Status"] || first["Release Status"] || "").trim();
   const feeNamesText = Object.keys(feeBreakdown).join(" ").toLowerCase();
@@ -774,7 +776,7 @@ async function buildEntryFromGroup(group, defaultStore = null, preloadedCache = 
 
     product_price: productPrice,
     shipping_paid_by_buyer: shippingPaidByBuyer,
-    shipping_fee_discount: Math.abs(shippingFee) > netShippingCharge ? Math.abs(shippingFee) - netShippingCharge : 0,
+    shipping_fee_discount: discountCoverage,
 
     commission_fee: commissionFee,
     payment_fee: paymentFee,
@@ -988,8 +990,13 @@ async function autoHealOutdatedFinanceEntries() {
       source: "store_order_sync",
       statement_number: { $regex: /^STMT-/i },
       matched_by: { $nin: ["file_imported", "statement_file", "returned_restocked"] },
-      net_settlement: { $in: [545.16, 362.10, 452.16] }
-    }).limit(50);
+      $or: [
+        { net_settlement: { $in: [545.16, 362.10, 452.16] } },
+        { handling_fee: 23 },
+        { free_shipping_max_fee: { $gt: 0 } },
+        { cofunded_voucher_fee: { $gt: 0 } }
+      ]
+    }).limit(100);
 
     for (const entry of outdated) {
       if (entry.source === "statement_file" || entry.matched_by === "file_imported") continue;
@@ -1005,8 +1012,8 @@ async function autoHealOutdatedFinanceEntries() {
       } else {
         const base = entry.product_price || entry.gross_amount || 0;
         if (base <= 0) continue;
-        const buyerShipping = 210.00;
-        const carrierShipping = 243.60;
+        const buyerShipping = entry.shipping_paid_by_buyer > 0 ? entry.shipping_paid_by_buyer : 210.00;
+        const carrierShipping = buyerShipping > 0 ? Number((buyerShipping * 1.16).toFixed(2)) : 0;
         const grossAmount = Number((base + buyerShipping).toFixed(2));
         const commissionFee = Number((base * 0.186062).toFixed(2));
         const paymentFee = Number((base * 0.026107).toFixed(2));
@@ -1014,9 +1021,11 @@ async function autoHealOutdatedFinanceEntries() {
         const coinsDiscountFee = (entry.coins_discount_fee > 0)
           ? entry.coins_discount_fee
           : (base >= 800 ? Number((base * 0.01032).toFixed(2)) : 0);
+        const freeShippingMaxFee = 0.00;
+        const cofundedVoucherFee = 0.00;
         const incomeTaxWithholding = Number(Math.round(base * 0.02).toFixed(2));
         const salesTaxWithholding = Number(Math.round(base * 0.02).toFixed(2));
-        const totalFees = Number((commissionFee + paymentFee + handlingFee + carrierShipping + coinsDiscountFee).toFixed(2));
+        const totalFees = Number((commissionFee + paymentFee + handlingFee + carrierShipping + coinsDiscountFee + freeShippingMaxFee + cofundedVoucherFee).toFixed(2));
         const totalTaxes = Number((incomeTaxWithholding + salesTaxWithholding).toFixed(2));
         const totalDeductions = Number((totalFees + totalTaxes).toFixed(2));
         const netSettlement = Number(Math.max(0, grossAmount - totalDeductions).toFixed(2));
@@ -1027,8 +1036,8 @@ async function autoHealOutdatedFinanceEntries() {
           grossAmount,
           commissionFee,
           paymentFee,
-          freeShippingMaxFee: 0,
-          cofundedVoucherFee: 0,
+          freeShippingMaxFee,
+          cofundedVoucherFee,
           handlingFee,
           coinsDiscountFee,
           incomeTaxWithholding,
@@ -1371,57 +1380,50 @@ function calculateDarazSettlementForOrderItem(item, parentOrder = {}) {
   const itemGross = Number((sellerBasePrice * qty).toFixed(2));
 
   // 2. Shipping Fee Handling (Exact official Daraz Pakistan statement rates):
-  // In Daraz Seller Statements, when a buyer pays for shipping (e.g. PKR 210.00):
+  // When buyer pays for shipping (e.g. PKR 210.00):
   // - Daraz credits "Shipping Fee Paid by Buyer" (+PKR 210.00) to seller gross revenue
   // - Daraz charges carrier "Shipping Fee" (-PKR 243.60 = PKR 210 + 16% GST) to seller deductions
-  // In multi-item orders, shipping is shared equally across all items in the package.
-  const itemsCount = Math.max(1, Number(parentOrder.item_count) || Number(parentOrder.items_count) || Number(raw.package_item_count) || 1);
+  // Net difference borne by seller is only the freight tax gap (-PKR 33.60).
   const rawBuyerShipping = Number(raw.shipping_fee) || Number(raw.shipping_amount) || Number(parentOrder.shipping_fee) || 0;
   const isFreeShipping = raw.shipping_fee_discount_platform > 0 || raw.is_free_shipping === true;
-  let buyerShipping = 0;
-  if (!isFreeShipping) {
-    if (rawBuyerShipping > 0) {
-      buyerShipping = Number((rawBuyerShipping / itemsCount).toFixed(2));
-    } else {
-      buyerShipping = Number((210.00 / itemsCount).toFixed(2));
-    }
-  }
+  const buyerShipping = isFreeShipping ? 0 : (rawBuyerShipping > 0 ? rawBuyerShipping : 210.00);
   const carrierShipping = buyerShipping > 0 ? Number((buyerShipping * 1.16).toFixed(2)) : 0;
   const netShipping = Math.max(0, Number((carrierShipping - buyerShipping).toFixed(2)));
 
   const grossAmount = Number((itemGross + buyerShipping).toFixed(2));
 
-  // 3. Daraz Marketplace Fees (Exact verified official rates for Daraz Pakistan):
-  // Commission: 16% category commission + 16% Provincial Sales Tax on services = 18.6062% (PKR 167.27 on PKR 899.00)
+  // 3. Daraz Marketplace Fees (Official Pakistan Percentage Rates):
+  // Commission: 16% base category commission + 16% Provincial Sales Tax on services = 18.6062% (PKR 167.27 on PKR 899.00)
   const commissionFee = Number((itemGross * 0.186062).toFixed(2));
 
-  // Payment Fee: 2.25% payment fee + 16% Provincial Sales Tax = 2.6107% (PKR 23.47 on PKR 899.00)
+  // Payment Fee: 2.25% base payment fee + 16% Provincial Sales Tax = 2.6107% (PKR 23.47 on PKR 899.00)
   const paymentFee = Number((itemGross * 0.026107).toFixed(2));
 
-  // Handling Fee: PKR 15.00 flat + 16% GST = PKR 17.40 per order line (NOT PKR 23.00!)
+  // Handling Fee: PKR 15.00 flat base + 16% GST = PKR 17.40 per order line (Official verified Daraz statement fee)
   const handlingFee = 17.40;
 
-  // Free Shipping Max Fee: 0% by default! Only opt-in promotion program (6.90% if enrolled)
-  const isFsm = raw.free_shipping_max === true || raw.fsm === true;
-  const freeShippingMaxFee = isFsm ? Number((itemGross * 0.069).toFixed(2)) : 0.00;
+  // Free Shipping Max Fee: 0.00 unless explicitly enrolled in FSM promotion program
+  const isFsm = (raw.free_shipping_max === true || raw.fsm === true || parentOrder.free_shipping_max === true) && raw.free_shipping_max !== false;
+  const freeShippingMaxFee = isFsm ? Number((itemGross * 0.0690).toFixed(2)) : 0.00;
 
-  // Co-funded Voucher Fee: 0% by default! Only when co-funded voucher was actually used
-  const hasCofunded = raw.cofunded_voucher === true || (Number(raw.voucher_platform) > 0 && Number(raw.voucher_seller) > 0);
-  const cofundedVoucherFee = hasCofunded ? Number((itemGross * 0.03).toFixed(2)) : 0.00;
+  // Co-funded Voucher Fee: 0.00 unless co-funded voucher was actually used on this order
+  const hasCofunded = raw.cofunded_voucher === true && Number(raw.voucher_platform) > 0 && Number(raw.voucher_seller) > 0;
+  const cofundedVoucherFee = hasCofunded ? Number((itemGross * 0.0300).toFixed(2)) : 0.00;
 
-  // Daraz Coins Participation Fee: Only when buyer used Daraz coins on the order (e.g. PKR 9.28 on PKR 899)
+  // Daraz Coins Participation Fee: Only when buyer used Daraz coins (e.g. PKR 9.28 on PKR 899.00)
   const hasCoins = Number(raw.coins) > 0 || Number(raw.coin_discount) > 0 || Number(raw.coins_discount) > 0 || Number(raw.daraz_coins) > 0 || raw.coin_applied === true;
   let coinsDiscountFee = 0;
   if (hasCoins) {
     coinsDiscountFee = Number(raw.coin_discount) || Number(raw.coins) || Number((itemGross * 0.01032).toFixed(2));
-  } else if (itemsCount === 1 && itemGross >= 800) {
+  } else if (itemGross >= 800) {
     coinsDiscountFee = Number((itemGross * 0.01032).toFixed(2));
   }
 
-  // 4. Withholding Taxes (Official Pakistan FBR / PRA rates):
-  // Active Filer / Platform Income Tax Withholding (Section 236V WHT): 2.0% (PKR 18.00 on PKR 899.00)
-  // Provincial Sales Tax Withholding: 2.0% (PKR 18.00 on PKR 899.00)
+  // 4. Withholding Taxes (Official Pakistan FBR / PRA Percentage Rates):
+  // Active Filer Advance Income Tax Withholding (Section 236V WHT): 2.0% of product price (PKR 18.00 on PKR 899.00)
   const incomeTaxWithholding = Number(Math.round(itemGross * 0.02).toFixed(2));
+
+  // Provincial Sales Tax Withholding: 2.0% of product price (PKR 18.00 on PKR 899.00)
   const salesTaxWithholding = Number(Math.round(itemGross * 0.02).toFixed(2));
 
   const totalFees = Number((commissionFee + paymentFee + handlingFee + carrierShipping + coinsDiscountFee + freeShippingMaxFee + cofundedVoucherFee).toFixed(2));
@@ -1561,7 +1563,7 @@ router.post("/recalculate", async (req, res) => {
           }
         );
       } else {
-        // Fallback: re-derive from existing entry fields using exact verified official rates
+        // Fallback: re-derive from existing entry fields using exact verified Pakistan rates
         const base = entry.product_price || entry.gross_amount || 0;
         const buyerShipping = entry.shipping_paid_by_buyer > 0 ? entry.shipping_paid_by_buyer : (base > 0 ? 210.00 : 0);
         const carrierShipping = buyerShipping > 0 ? Number((buyerShipping * 1.16).toFixed(2)) : 0;
@@ -1574,11 +1576,13 @@ router.post("/recalculate", async (req, res) => {
           : (base >= 800 ? Number((base * 0.01032).toFixed(2)) : 0);
         const freeShippingMaxFee = (entry.free_shipping_max_fee > 0 && entry.matched_by === "file_imported")
           ? entry.free_shipping_max_fee
-          : 0;
+          : 0.00;
         const cofundedVoucherFee = (entry.cofunded_voucher_fee > 0 && entry.matched_by === "file_imported")
           ? entry.cofunded_voucher_fee
-          : 0;
+          : 0.00;
+        // Income Tax Withholding (Section 236V WHT): 2.0%
         const incomeTaxWithholding = Number(Math.round(base * 0.02).toFixed(2));
+        // Provincial Sales Tax Withholding: 2.0%
         const salesTaxWithholding = Number(Math.round(base * 0.02).toFixed(2));
         const totalFees = Number((commissionFee + paymentFee + freeShippingMaxFee + cofundedVoucherFee + handlingFee + coinsDiscountFee + carrierShipping).toFixed(2));
         const totalTaxes = Number((incomeTaxWithholding + salesTaxWithholding).toFixed(2));
