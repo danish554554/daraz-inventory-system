@@ -626,21 +626,23 @@ class _FinanceScreenState extends State<FinanceScreen> {
                         _breakdownRow('Product Price Paid by Buyer', '+PKR ${Formatters.money(item.productPrice)}', color: AppTheme.success),
                       if (item.shippingPaidByBuyer > 0)
                         _breakdownRow('Shipping Fee (Paid by Buyer)', '+PKR ${Formatters.money(item.shippingPaidByBuyer)}', color: AppTheme.success),
+                      if (item.shippingFeeDiscount > 0)
+                        _breakdownRow('Shipping Fee Discount', '+PKR ${Formatters.money(item.shippingFeeDiscount)}', color: AppTheme.success),
                       // Daraz Fees
                       if (item.commissionFee > 0)
                         _breakdownRow('Commission Fee', 'PKR -${Formatters.money(item.commissionFee)}', color: AppTheme.danger),
                       if (item.paymentFee > 0)
                         _breakdownRow('Payment Fee', 'PKR -${Formatters.money(item.paymentFee)}', color: AppTheme.danger),
                       if (item.shippingFee > 0)
-                        _breakdownRow('Shipping Fee (Net)', 'PKR -${Formatters.money(item.shippingFee)}', color: AppTheme.danger)
+                        _breakdownRow('Shipping Fee', 'PKR -${Formatters.money(item.shippingFee)}', color: AppTheme.danger)
                       else if (item.shippingFeeDiscount > 0)
                         _breakdownRow('Shipping Fee (Subsidized)', 'PKR 0.00', color: AppTheme.info),
                       if (item.freeShippingMaxFee > 0)
                         _breakdownRow('Free Shipping Max Fee', 'PKR -${Formatters.money(item.freeShippingMaxFee)}', color: AppTheme.danger),
                       if (item.cofundedVoucherFee > 0)
-                        _breakdownRow('Co-funded Voucher', 'PKR -${Formatters.money(item.cofundedVoucherFee)}', color: AppTheme.danger),
+                        _breakdownRow('Co-funded Voucher Max', 'PKR -${Formatters.money(item.cofundedVoucherFee)}', color: AppTheme.danger),
                       if (item.handlingFee > 0)
-                        _breakdownRow('Handling / Seller Discount', 'PKR -${Formatters.money(item.handlingFee)}', color: AppTheme.danger),
+                        _breakdownRow('Handling Fee', 'PKR -${Formatters.money(item.handlingFee)}', color: AppTheme.danger),
                       if (item.coinsDiscountFee > 0)
                         _breakdownRow('Daraz Coins Discount', 'PKR -${Formatters.money(item.coinsDiscountFee)}', color: AppTheme.danger),
                       if (item.penalties > 0)
