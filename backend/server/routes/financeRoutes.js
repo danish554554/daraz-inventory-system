@@ -191,6 +191,120 @@ function absNumber(value) {
   return Math.abs(toNumber(value));
 }
 
+// Precision monetary rounding (2 decimal places)
+function roundMoney(num) {
+  if (typeof num !== "number" || Number.isNaN(num)) return 0;
+  return Math.round((num + Number.EPSILON) * 100) / 100;
+}
+
+// Authoritative Daraz Pakistan Handling Fee Tiers
+// Tier 1: Package Price < PKR 1,000 -> Base PKR 15.00 + 16% PST = PKR 17.40
+// Tier 2: Package Price PKR 1,000 - 1,999.99 -> Base PKR 20.00 + 15% PST = PKR 23.00
+// Tier 3: Package Price >= PKR 2,000 -> Base PKR 60.00 + 15% PST = PKR 69.00
+function getDarazHandlingFee(packagePrice) {
+  const price = Number(packagePrice) || 0;
+  if (price >= 2000) {
+    return 69.00;
+  }
+  if (price >= 1000) {
+    return 23.00;
+  }
+  return 17.40;
+}
+
+// Category Commission Rules & Tax Rates
+const DARAZ_CATEGORY_RULES = {
+  cookware: {
+    name: "Cookware / Kitchen Appliances",
+    baseRate: 0.100003,
+    taxRate: 0.15,
+    effectiveRate: 0.1150035, // ~11.50% (PKR 160.89 on PKR 1,399.00)
+    whtExempt: true           // Section 236V income tax WHT exempt
+  },
+  beauty: {
+    name: "Health & Beauty / Personal Care",
+    baseRate: 0.160401,
+    taxRate: 0.15,
+    effectiveRate: 0.1844612, // ~18.45% (PKR 415.96 on PKR 2,255.00)
+    whtExempt: false          // 2.0% Section 236V income tax WHT on >= 1000
+  },
+  electronics: {
+    name: "Mobile Accessories & Electronics",
+    baseRate: 0.1450,
+    taxRate: 0.16,
+    effectiveRate: 0.1682,    // ~16.82% (14.5% base + 16% PST)
+    whtExempt: true
+  },
+  default: {
+    name: "General Merchandise",
+    baseRate: 0.1500,
+    taxRate: 0.16,
+    effectiveRate: 0.1740,    // ~17.40%
+    whtExempt: false
+  }
+};
+
+function resolveCategoryRule(titleText = "") {
+  const text = (titleText || "").toLowerCase();
+  if (
+    text.includes("fryer") ||
+    text.includes("pot") ||
+    text.includes("pan") ||
+    text.includes("kitchen") ||
+    text.includes("cookware") ||
+    text.includes("kettle") ||
+    text.includes("blender") ||
+    text.includes("cooker") ||
+    text.includes("utensil") ||
+    text.includes("chopper")
+  ) {
+    return DARAZ_CATEGORY_RULES.cookware;
+  }
+  if (
+    text.includes("hair") ||
+    text.includes("remover") ||
+    text.includes("shaver") ||
+    text.includes("callus") ||
+    text.includes("trimmer") ||
+    text.includes("beauty") ||
+    text.includes("derma") ||
+    text.includes("serum") ||
+    text.includes("cream") ||
+    text.includes("epilator")
+  ) {
+    return DARAZ_CATEGORY_RULES.beauty;
+  }
+  if (
+    text.includes("headphone") ||
+    text.includes("earphone") ||
+    text.includes("earbuds") ||
+    text.includes("charger") ||
+    text.includes("cable") ||
+    text.includes("adapter") ||
+    text.includes("speaker") ||
+    text.includes("smart watch") ||
+    text.includes("watch")
+  ) {
+    return DARAZ_CATEGORY_RULES.electronics;
+  }
+  return DARAZ_CATEGORY_RULES.default;
+}
+
+// Store Free Shipping Max (FSM) Enrollment Determination
+function isStoreEnrolledInFSM(store = null, storeName = "", storeCode = "") {
+  if (store?.fsm_enrolled !== undefined) return Boolean(store.fsm_enrolled);
+  if (store?.free_shipping_max !== undefined) return Boolean(store.free_shipping_max);
+  const name = (store?.name || store?.store_name || storeName || "").toLowerCase();
+  const code = (store?.code || store?.store_code || storeCode || "").toLowerCase();
+  if (name.includes("tk") || name.includes("dkart") || name.includes("d-kart") || code.includes("tk") || code.includes("dkart")) {
+    return false;
+  }
+  if (name.includes("accessories") || name.includes("hub") || code.includes("accessories") || code.includes("hub")) {
+    return true;
+  }
+  return false;
+}
+
 function normalizeFeeName(name = "") {
   return name.toString().trim().toLowerCase();
 }
@@ -258,9 +372,11 @@ function groupRowsByOrder(rows) {
     const orderLineId = (row["Order Line ID"] || row["Order Item ID"] || row["Item ID"] || "").toString().trim();
     if (!orderNumber && !orderLineId) continue;
 
-    const skuOrFee = (row["Seller SKU"] || row["Fee Name"] || "line").toString().trim();
-    const lineKey = orderLineId || `${orderNumber || "adj"}_${skuOrFee}`;
-    const key = `${orderNumber || "unknown"}__${lineKey}`;
+    // Group all transaction rows by order_line_id when present; else by order_number
+    const key = orderLineId
+      ? `${orderNumber || "no_order"}__${orderLineId}`
+      : `${orderNumber}__main`;
+
     if (!grouped[key]) {
       grouped[key] = [];
     }
@@ -515,7 +631,8 @@ async function buildEntryFromGroup(group, defaultStore = null, preloadedCache = 
   let whtAmount = 0;
   let vatTotal = 0;
 
-  let netSettlement = 0;
+  // The official signed sum from Daraz statement
+  let rawSignedSum = 0;
   const feeBreakdown = {};
 
   for (const row of group) {
@@ -526,13 +643,13 @@ async function buildEntryFromGroup(group, defaultStore = null, preloadedCache = 
     const vat = absNumber(row["VAT Amount"] || row["VAT"] || 0);
     const wht = absNumber(row["WHT Amount"] || row["WHT"] || 0);
 
-    netSettlement += amount;
+    // Sum every signed transaction amount from Daraz official statement
+    rawSignedSum += amount;
     vatTotal += vat;
     whtAmount += wht;
 
-    feeBreakdown[rawFeeName || "Uncategorized"] = (feeBreakdown[rawFeeName || "Uncategorized"] || 0) + amount;
+    feeBreakdown[rawFeeName || "Uncategorized"] = roundMoney((feeBreakdown[rawFeeName || "Uncategorized"] || 0) + amount);
 
-    // Check for Penalty Reversals / Refunds / Credits vs Penalty Charges
     const isPenaltyReversal =
       feeNameKey.includes("reversal") ||
       feeNameKey.includes("refund") ||
@@ -540,27 +657,25 @@ async function buildEntryFromGroup(group, defaultStore = null, preloadedCache = 
       feeNameKey.includes("compensation") ||
       (feeNameKey.includes("penalt") && amount > 0);
 
-    // 1. Check Taxes (Income Tax Withholding, Sales Tax Withholding, WHT, VAT, GST)
+    // 1. Taxes (Explicit statement lines only)
     if (
       feeNameKey.includes("income tax") ||
       feeNameKey.includes("withholding income tax") ||
+      feeNameKey.includes("236v") ||
       feeNameKey.includes("wht")
     ) {
       incomeTaxWithholding += absNumber(amount);
     } else if (
       feeNameKey.includes("sales tax") ||
-      feeNameKey.includes("withholding sales tax") ||
-      feeNameKey.includes("vat") ||
-      feeNameKey.includes("gst")
+      feeNameKey.includes("withholding sales tax")
     ) {
       salesTaxWithholding += absNumber(amount);
     } else if (
-      feeNameKey.includes("tax") ||
-      feeNameKey.includes("withholding")
+      feeNameKey.includes("tax") && !feeNameKey.includes("include tax") && !feeNameKey.includes("incl tax")
     ) {
       otherTaxes += absNumber(amount);
     }
-    // 2. Check Credits & Buyer Payments
+    // 2. Credits & Buyer Payments
     else if (
       feeNameKey.includes("product price") ||
       feeNameKey.includes("item price") ||
@@ -569,15 +684,17 @@ async function buildEntryFromGroup(group, defaultStore = null, preloadedCache = 
       productPrice += amount;
     } else if (
       feeNameKey.includes("shipping fee paid by buyer") ||
-      feeNameKey.includes("shipping fee (paid by buyer)")
+      feeNameKey.includes("shipping fee (paid by buyer)") ||
+      feeNameKey.includes("buyer shipping")
     ) {
       shippingPaidByBuyer += amount;
     } else if (
-      feeNameKey.includes("shipping fee discount")
+      feeNameKey.includes("shipping fee discount") ||
+      feeNameKey.includes("shipping discount")
     ) {
       shippingFeeDiscount += amount;
     }
-    // 3. Check Platform Fees & Deductions
+    // 3. Platform Fees & Deductions
     else if (feeNameKey.includes("commission")) {
       commissionFee += absNumber(amount);
     } else if (
@@ -600,7 +717,8 @@ async function buildEntryFromGroup(group, defaultStore = null, preloadedCache = 
       cofundedVoucherFee += absNumber(amount);
     } else if (
       feeNameKey.includes("free shipping max") ||
-      feeNameKey.includes("free shipping promotion")
+      feeNameKey.includes("free shipping promotion") ||
+      feeNameKey.includes("fsm")
     ) {
       freeShippingMaxFee += absNumber(amount);
     } else if (
@@ -635,15 +753,18 @@ async function buildEntryFromGroup(group, defaultStore = null, preloadedCache = 
     }
   }
 
+  // Authoritative official Daraz net settlement = exact sum of all signed transaction rows
+  const netSettlement = roundMoney(rawSignedSum);
+
   // Carrier shipping fee (negative deduction in statement) and Daraz subsidy credit
   const carrierCost = Math.abs(shippingFee);
   const discountCoverage = Math.abs(shippingFeeDiscount);
 
   // Gross credited to seller: product price + buyer-paid shipping + shipping discount subsidy + credits
-  const finalGrossAmount = Number((productPrice + shippingPaidByBuyer + discountCoverage + otherCredits).toFixed(2));
+  let finalGrossAmount = roundMoney(productPrice + shippingPaidByBuyer + discountCoverage + otherCredits);
 
   // Platform fees
-  const totalFees = Number((
+  let totalFees = roundMoney(
     commissionFee +
     paymentFee +
     carrierCost +
@@ -653,17 +774,22 @@ async function buildEntryFromGroup(group, defaultStore = null, preloadedCache = 
     coinsDiscountFee +
     penalties +
     otherFees
-  ).toFixed(2));
+  );
 
-  // Taxes: only itemize if present in the statement (e.g. non-filers or taxable categories)
-  const totalTaxes = Number((incomeTaxWithholding + salesTaxWithholding + otherTaxes).toFixed(2));
-  const totalDeductions = Number((totalFees + totalTaxes).toFixed(2));
+  const totalTaxes = roundMoney(incomeTaxWithholding + salesTaxWithholding + otherTaxes);
+  let totalDeductions = roundMoney(totalFees + totalTaxes);
 
-  // Ensure netSettlement strictly balances against finalGrossAmount - totalDeductions
-  if (finalGrossAmount > 0 && totalDeductions >= 0) {
-    netSettlement = Number((finalGrossAmount - totalDeductions).toFixed(2));
-  } else {
-    netSettlement = Number(netSettlement.toFixed(2));
+  // Exact balance reconciliation: ensure gross - deductions matches netSettlement with 0.00 drift
+  if (finalGrossAmount > 0) {
+    const drift = roundMoney(finalGrossAmount - totalDeductions - netSettlement);
+    if (drift > 0) {
+      otherFees = roundMoney(otherFees + drift);
+      totalFees = roundMoney(totalFees + drift);
+      totalDeductions = roundMoney(totalFees + totalTaxes);
+    } else if (drift < 0) {
+      otherCredits = roundMoney(otherCredits + Math.abs(drift));
+      finalGrossAmount = roundMoney(finalGrossAmount + Math.abs(drift));
+    }
   }
 
   const rawStatus = (first["Order Status"] || first["Status"] || first["Release Status"] || "").trim();
@@ -692,7 +818,7 @@ async function buildEntryFromGroup(group, defaultStore = null, preloadedCache = 
 
   let effectiveGross = finalGrossAmount;
   if (effectiveGross === 0 && netSettlement > 0) {
-    effectiveGross = Number((netSettlement + totalDeductions).toFixed(2));
+    effectiveGross = roundMoney(netSettlement + totalDeductions);
   }
 
   const finalStatus = isPenaltyCharged
@@ -721,15 +847,15 @@ async function buildEntryFromGroup(group, defaultStore = null, preloadedCache = 
   // If order was delivered, inventory was sold -> COGS = cost_price * quantity
   const totalCost =
     (adjustmentMeta.entryType === "order" && !isReturnedOrCancelled && !isPenaltyCharged && !isPenaltyReturned)
-      ? (costDetails.cost_price || 0) * quantity
+      ? roundMoney((costDetails.cost_price || 0) * quantity)
       : 0;
 
   const netProfit =
     (isReturnedOrCancelled || isPenaltyCharged || isPenaltyReturned)
-      ? Number(netSettlement.toFixed(2))
+      ? netSettlement
       : (adjustmentMeta.entryType === "order"
           ? (costDetails.profit_ready && quantity > 0
-              ? Number((netSettlement - totalCost).toFixed(2))
+              ? roundMoney(netSettlement - totalCost)
               : null)
           : null);
 
@@ -783,8 +909,8 @@ async function buildEntryFromGroup(group, defaultStore = null, preloadedCache = 
     free_shipping_max_fee: freeShippingMaxFee,
     cofunded_voucher_fee: cofundedVoucherFee,
     coins_discount_fee: coinsDiscountFee,
-    penalties: Number((penalties + otherFees).toFixed(2)),
-    penalties_refunded: Number(penaltiesRefunded.toFixed(2)),
+    penalties: roundMoney(penalties + otherFees),
+    penalties_refunded: roundMoney(penaltiesRefunded),
     is_penalty: isPenaltyCharged,
     is_penalty_refund: isPenaltyReturned,
 
@@ -793,15 +919,15 @@ async function buildEntryFromGroup(group, defaultStore = null, preloadedCache = 
     wht_amount: whtAmount,
     vat_total: vatTotal,
 
-    gross_amount: Number(effectiveGross.toFixed(2)),
-    total_fees: Number(totalFees.toFixed(2)),
-    total_taxes: Number(totalTaxes.toFixed(2)),
-    total_deductions: Number(totalDeductions.toFixed(2)),
-    net_settlement: Number(netSettlement.toFixed(2)),
+    gross_amount: effectiveGross,
+    total_fees: totalFees,
+    total_taxes: totalTaxes,
+    total_deductions: totalDeductions,
+    net_settlement: netSettlement,
 
     cost_price: (isReturnedOrCancelled || isPenaltyCharged || isPenaltyReturned) ? 0 : (costDetails.cost_price || 0),
     quantity,
-    total_cost: Number(totalCost.toFixed(2)),
+    total_cost: totalCost,
     net_profit: netProfit,
 
     matched_product_id:
@@ -812,6 +938,7 @@ async function buildEntryFromGroup(group, defaultStore = null, preloadedCache = 
     matched_by: isReturnedOrCancelled ? "returned_restocked" : "file_imported",
     source: "statement_file",
     profit_ready: profitReady,
+    is_estimate: false,
 
     fee_breakdown: feeBreakdown,
     imported_at: new Date()
@@ -982,214 +1109,41 @@ async function autoHealOutdatedFinanceEntries() {
     const CentralOrderItem = require("../models/CentralOrderItem");
     const CentralOrder = require("../models/CentralOrder");
 
-    // Heal all records that have wrong numbers or outdated calculation gaps
-    const outdated = await FinanceEntry.find({
-      $or: [
-        { net_settlement: { $in: [557.06, 513.93, 571.94, 545.16, 362.10, 452.16, 918.47, 919.62, 1470.33, 1003.21, 995.86] } },
-        { handling_fee: 23.00, product_price: { $lt: 1000 } },
-        {
-          store_name: { $regex: /accessories|hub/i },
-          free_shipping_max_fee: { $in: [0, null] }
-        },
-        {
-          store_name: { $regex: /tk|dkart|d-kart/i },
-          free_shipping_max_fee: { $gt: 0 }
-        },
-        { commission_fee: { $in: [165.83, 147.39, 418.53] } },
-        { order_number: { $in: ["250676373648373", "250762335176871"] } }
-      ]
+    // Precedence rule: Only refresh API estimates; NEVER overwrite official statement records!
+    const estimatedEntries = await FinanceEntry.find({
+      source: "store_order_sync",
+      entry_type: "order"
     }).limit(500);
 
-    for (const entry of outdated) {
-      const orderNum = (entry.order_number || "").toString().trim();
-
-      // Specifically heal demo order #250676373648373 to exact official statement figures
-      if (orderNum === "250676373648373") {
-        const itemGross = 1399.00;
-        const buyerShipping = 49.00;
-        const shippingFeeDiscount = 173.65;
-        const carrierShipping = 230.00;
-        const grossAmount = 1621.65;
-        const commissionFee = 160.89;
-        const paymentFee = 36.20;
-        const handlingFee = 23.00;
-        const freeShippingMaxFee = 96.53;
-        const cofundedVoucherFee = 41.97;
-        const coinsDiscountFee = 9.20;
-        const incomeTaxWithholding = 0.00;
-        const salesTaxWithholding = 0.00;
-        const totalFees = 597.79;
-        const totalTaxes = 0.00;
-        const totalDeductions = 597.79;
-        const netSettlement = 1023.86;
-
-        const qty = entry.quantity > 0 ? entry.quantity : 1;
-        const costPrice = entry.cost_price || 0;
-        const totalCost = Number((costPrice * qty).toFixed(2));
-        const netProfit = entry.profit_ready && costPrice > 0 ? Number((netSettlement - totalCost).toFixed(2)) : null;
-
-        await FinanceEntry.updateOne(
-          { _id: entry._id },
-          {
-            $set: {
-              product_price: itemGross,
-              shipping_paid_by_buyer: buyerShipping,
-              shipping_fee_discount: shippingFeeDiscount,
-              gross_amount: grossAmount,
-              shipping_fee: carrierShipping,
-              commission_fee: commissionFee,
-              payment_fee: paymentFee,
-              handling_fee: handlingFee,
-              free_shipping_max_fee: freeShippingMaxFee,
-              cofunded_voucher_fee: cofundedVoucherFee,
-              coins_discount_fee: coinsDiscountFee,
-              income_tax_withholding: incomeTaxWithholding,
-              sales_tax_withholding: salesTaxWithholding,
-              wht_amount: 0,
-              vat_total: 0,
-              total_fees: totalFees,
-              total_taxes: totalTaxes,
-              total_deductions: totalDeductions,
-              net_settlement: netSettlement,
-              total_cost: totalCost,
-              net_profit: netProfit,
-              fee_breakdown: {
-                "Product Price Paid by Buyer": itemGross,
-                "Shipping Fee Paid by Buyer": buyerShipping,
-                "Shipping Fee Discount": shippingFeeDiscount,
-                "Commission Fee": -commissionFee,
-                "Payment Fee": -paymentFee,
-                "Shipping Fee": -carrierShipping,
-                "Free Shipping Max Fee": -freeShippingMaxFee,
-                "Co-funded Voucher Max": -cofundedVoucherFee,
-                "Handling Fee": -handlingFee,
-                "Daraz Coins Discount": -coinsDiscountFee
-              }
-            }
-          }
-        );
-        continue;
+    for (const entry of estimatedEntries) {
+      let orderItem = null;
+      if (entry.order_line_id) {
+        orderItem = await CentralOrderItem.findOne({ external_order_item_id: entry.order_line_id }).lean();
+      }
+      if (!orderItem && entry.order_number) {
+        orderItem = await CentralOrderItem.findOne({ order_number: entry.order_number }).lean();
       }
 
-      if (entry.source === "statement_file" || entry.matched_by === "file_imported") {
-        // If file imported, check if netSettlement can be derived from existing fee breakdown sum
-        if (entry.fee_breakdown && Object.keys(entry.fee_breakdown).length > 2) {
-          const breakdownSum = Number(Object.values(entry.fee_breakdown).reduce((sum, v) => sum + (Number(v) || 0), 0).toFixed(2));
-          if (breakdownSum > 0 && Math.abs(breakdownSum - entry.net_settlement) > 0.05) {
-            const qty = entry.quantity > 0 ? entry.quantity : 1;
-            const costPrice = entry.cost_price || 0;
-            const totalCost = Number((costPrice * qty).toFixed(2));
-            const netProfit = entry.profit_ready && costPrice > 0 ? Number((breakdownSum - totalCost).toFixed(2)) : null;
-
-            await FinanceEntry.updateOne(
-              { _id: entry._id },
-              { $set: { net_settlement: breakdownSum, total_cost: totalCost, net_profit: netProfit } }
-            );
-          }
-        }
-        continue;
-      }
-
-      const orderItem = await CentralOrderItem.findOne({ external_order_item_id: entry.order_line_id }).lean();
       let parentOrder = {};
       if (orderItem?.order_id) {
         parentOrder = (await CentralOrder.findById(orderItem.order_id).lean()) || {};
       }
 
-      let calc;
-      if (orderItem) {
-        calc = calculateDarazSettlementForOrderItem(orderItem, parentOrder, entry);
-      } else {
-        const base = entry.product_price || entry.gross_amount || 0;
-        if (base <= 0) continue;
-        const storeIdentifier = (entry.store_name || entry.store_code || "").toLowerCase();
-        const isAccessoriesHub = storeIdentifier.includes("accessories") || storeIdentifier.includes("hub");
-        const isDkartOrTkart = storeIdentifier.includes("tk") || storeIdentifier.includes("dkart") || storeIdentifier.includes("d-kart") || storeIdentifier.includes("tk-kart");
+      const itemRef = orderItem || {
+        unit_price: entry.product_price || entry.gross_amount || 0,
+        quantity: entry.quantity || 1,
+        name: entry.product_name || "",
+        seller_sku: entry.seller_sku || "",
+        shipping_paid_by_buyer: entry.shipping_paid_by_buyer || 0,
+        store_name: entry.store_name || "",
+        store_code: entry.store_code || ""
+      };
 
-        const titleText = (entry.product_name || entry.seller_sku || "").toLowerCase();
-        const isCookwareOrKitchen =
-          titleText.includes("fryer") ||
-          titleText.includes("pot") ||
-          titleText.includes("pan") ||
-          titleText.includes("kitchen") ||
-          titleText.includes("cookware") ||
-          titleText.includes("kettle") ||
-          titleText.includes("blender") ||
-          titleText.includes("cooker") ||
-          titleText.includes("utensil") ||
-          titleText.includes("chopper");
-
-        const isBeauty =
-          titleText.includes("hair") ||
-          titleText.includes("remover") ||
-          titleText.includes("shaver") ||
-          titleText.includes("callus") ||
-          titleText.includes("trimmer") ||
-          titleText.includes("beauty") ||
-          titleText.includes("derma") ||
-          titleText.includes("serum") ||
-          titleText.includes("cream") ||
-          titleText.includes("epilator");
-
-        const isSpecificSubsidized = orderNum === "250676373648373" || (entry.shipping_paid_by_buyer === 49.00 && entry.shipping_fee_discount > 0);
-
-        const buyerShipping = isSpecificSubsidized
-          ? 49.00
-          : (entry.shipping_paid_by_buyer > 0 ? entry.shipping_paid_by_buyer : 200.00);
-        const shippingFeeDiscount = isSpecificSubsidized ? 173.65 : 0.00;
-        const carrierShipping = 230.00;
-        const grossAmount = Number((base + buyerShipping + shippingFeeDiscount).toFixed(2));
-
-        const commissionFee = isCookwareOrKitchen
-          ? Number((base * 0.1150035).toFixed(2))
-          : (isBeauty ? Number((base * 0.1844612).toFixed(2)) : Number((base * 0.186062).toFixed(2)));
-        const paymentFee = Number((base * 0.025875).toFixed(2));
-        
-        // Handling fee tiers: strictly tiered by item price (PKR 17.40 for < 1000)
-        let handlingFee = 17.40;
-        if (base >= 2000) {
-          handlingFee = 69.00;
-        } else if (base >= 1000) {
-          handlingFee = 23.00;
-        }
-
-        const coinsDiscountFee = (base >= 1000) ? 9.20 : (base >= 800 ? 9.28 : Number((base * 0.0103226).toFixed(2)));
-
-        const isFsm = !isDkartOrTkart && (isAccessoriesHub || (entry.free_shipping_max_fee > 0 && entry.matched_by === "file_imported"));
-        const freeShippingMaxFee = isFsm ? Number((base * 0.069002).toFixed(2)) : 0.00;
-        const cofundedVoucherFee = (isAccessoriesHub && base >= 1000) ? Number((base * 0.0300).toFixed(2)) : 0.00;
-        const incomeTaxWithholding = isCookwareOrKitchen ? 0.00 : (isBeauty && base >= 1000 ? Number(Math.round(base * 0.02).toFixed(2)) : 0.00);
-        const salesTaxWithholding = isCookwareOrKitchen ? 0.00 : (isBeauty && base >= 1000 ? Number(Math.round(base * 0.02).toFixed(2)) : 0.00);
-
-        const totalFees = Number((commissionFee + paymentFee + handlingFee + carrierShipping + coinsDiscountFee + freeShippingMaxFee + cofundedVoucherFee).toFixed(2));
-        const totalTaxes = Number((incomeTaxWithholding + salesTaxWithholding).toFixed(2));
-        const totalDeductions = Number((totalFees + totalTaxes).toFixed(2));
-        const netSettlement = Number(Math.max(0, grossAmount - totalDeductions).toFixed(2));
-        calc = {
-          itemGross: base,
-          buyerShipping,
-          shippingFeeDiscount,
-          carrierShipping,
-          grossAmount,
-          commissionFee,
-          paymentFee,
-          freeShippingMaxFee,
-          cofundedVoucherFee,
-          handlingFee,
-          coinsDiscountFee,
-          incomeTaxWithholding,
-          salesTaxWithholding,
-          totalFees,
-          totalTaxes,
-          totalDeductions,
-          netSettlement
-        };
-      }
-
+      const calc = calculateDarazSettlementForOrderItem(itemRef, parentOrder, entry);
       const qty = entry.quantity > 0 ? entry.quantity : 1;
       const costPrice = entry.cost_price || 0;
-      const totalCost = Number((costPrice * qty).toFixed(2));
-      const netProfit = entry.profit_ready && costPrice > 0 ? Number((calc.netSettlement - totalCost).toFixed(2)) : null;
+      const totalCost = roundMoney(costPrice * qty);
+      const netProfit = entry.profit_ready && costPrice > 0 ? roundMoney(calc.netSettlement - totalCost) : null;
 
       await FinanceEntry.updateOne(
         { _id: entry._id },
@@ -1197,7 +1151,7 @@ async function autoHealOutdatedFinanceEntries() {
           $set: {
             product_price: calc.itemGross,
             shipping_paid_by_buyer: calc.buyerShipping,
-            shipping_fee_discount: calc.shippingFeeDiscount || 0,
+            shipping_fee_discount: calc.shippingFeeDiscount,
             gross_amount: calc.grossAmount,
             shipping_fee: calc.carrierShipping,
             commission_fee: calc.commissionFee,
@@ -1218,6 +1172,7 @@ async function autoHealOutdatedFinanceEntries() {
             net_profit: netProfit,
             matched_by: "store_order_sync",
             source: "store_order_sync",
+            is_estimate: true,
             fee_breakdown: {
               "Product Price Paid by Buyer": calc.itemGross,
               ...(calc.buyerShipping > 0 ? { "Shipping Fee Paid by Buyer": calc.buyerShipping } : {}),
@@ -1497,12 +1452,11 @@ router.delete("/clear", async (req, res) => {
   }
 });
 
-// Helper to calculate exact real-world Daraz settlement for an order item
+// Helper to calculate estimated Daraz settlement for an order item (when official statement is not yet released)
 function calculateDarazSettlementForOrderItem(item, parentOrder = {}, store = null) {
   const raw = item.raw_payload || {};
 
-  // 1. Seller Product Price (Seller's Catalog Price minus Seller's own Voucher)
-  // Daraz platform discounts/vouchers are funded by Daraz, so they are part of seller revenue!
+  // 1. Base Item Price
   const itemPrice = Number(raw.item_price) || Number(item.item_price) || Number(item.unit_price) || 0;
   const sellerVoucher = Number(raw.voucher_seller) || Number(raw.seller_discount) || 0;
   let sellerBasePrice = 0;
@@ -1514,237 +1468,90 @@ function calculateDarazSettlementForOrderItem(item, parentOrder = {}, store = nu
     sellerBasePrice = paidPrice + platformVoucher;
   }
   if (sellerBasePrice <= 0) {
-    sellerBasePrice = Number(item.unit_price) || Number(item.paid_price) || 0;
+    sellerBasePrice = Number(item.unit_price) || Number(item.paid_price) || Number(item.product_price) || 0;
   }
 
   const qty = Number(item.quantity) || 1;
-  const itemGross = Number((sellerBasePrice * qty).toFixed(2));
+  const itemGross = roundMoney(sellerBasePrice * qty);
 
-  // Store identity checks
-  const storeName = (
-    store?.name ||
-    store?.store_name ||
-    item.store_name ||
-    parentOrder.store_name ||
-    parentOrder.seller_name ||
-    ""
-  ).toLowerCase();
+  // Store identity & FSM enrollment check
+  const storeName = (store?.name || store?.store_name || item.store_name || parentOrder.store_name || parentOrder.seller_name || "").toString();
+  const storeCode = (store?.code || store?.store_code || item.store_code || parentOrder.store_code || "").toString();
+  const isFsm = isStoreEnrolledInFSM(store, storeName, storeCode);
 
-  const storeCode = (
-    store?.code ||
-    store?.store_code ||
-    item.store_code ||
-    parentOrder.store_code ||
-    ""
-  ).toLowerCase();
+  // Category identification & Commission Rule
+  const titleText = (item.name || item.product_name || item.display_title || raw.product_name || raw.name || raw.title || item.seller_sku || "").toString();
+  const categoryRule = resolveCategoryRule(titleText);
 
-  const isAccessoriesHub =
-    storeName.includes("accessories") ||
-    storeName.includes("hub") ||
-    storeCode.includes("accessories") ||
-    storeCode.includes("hub");
+  // 1. Commission Fee
+  const commissionFee = roundMoney(itemGross * categoryRule.effectiveRate);
 
-  const isDkartOrTkart =
-    storeName.includes("tk") ||
-    storeName.includes("dkart") ||
-    storeName.includes("d-kart") ||
-    storeName.includes("tk-kart") ||
-    storeCode.includes("tk") ||
-    storeCode.includes("dkart");
+  // 2. Payment Fee (2.25% base + 15% PST = 2.5875%)
+  const paymentFee = roundMoney(itemGross * 0.025875);
 
-  // Title / SKU text for category-based commission rates
-  const titleText = (
-    item.name ||
-    item.product_name ||
-    item.display_title ||
-    raw.product_name ||
-    raw.name ||
-    raw.title ||
-    item.seller_sku ||
-    ""
-  ).toLowerCase();
+  // 3. Handling Fee (Strict Dynamic Tiers: <1000 => 17.40, 1000-1999 => 23.00, >=2000 => 69.00)
+  const handlingFee = getDarazHandlingFee(itemGross);
 
-  const isCookwareOrKitchen =
-    titleText.includes("fryer") ||
-    titleText.includes("pot") ||
-    titleText.includes("pan") ||
-    titleText.includes("kitchen") ||
-    titleText.includes("cookware") ||
-    titleText.includes("kettle") ||
-    titleText.includes("blender") ||
-    titleText.includes("cooker") ||
-    titleText.includes("utensil") ||
-    titleText.includes("chopper");
+  // 4. Free Shipping Max (FSM) Fee: ~6.9002% on gross for FSM enrolled stores; 0.00 for non-FSM stores
+  const freeShippingMaxFee = isFsm ? roundMoney(itemGross * 0.069002) : 0.00;
 
-  const isBeauty =
-    titleText.includes("hair") ||
-    titleText.includes("remover") ||
-    titleText.includes("shaver") ||
-    titleText.includes("callus") ||
-    titleText.includes("trimmer") ||
-    titleText.includes("beauty") ||
-    titleText.includes("derma") ||
-    titleText.includes("serum") ||
-    titleText.includes("cream") ||
-    titleText.includes("epilator");
-
-  const isElectronicsOrMobile =
-    titleText.includes("headphone") ||
-    titleText.includes("earphone") ||
-    titleText.includes("earbuds") ||
-    titleText.includes("charger") ||
-    titleText.includes("cable") ||
-    titleText.includes("adapter") ||
-    titleText.includes("speaker") ||
-    titleText.includes("smart watch") ||
-    titleText.includes("watch");
-
-  // 2. Shipping Fee Handling (Exact official Daraz Pakistan statement rates):
-  const orderNum = (item.order_number || parentOrder.order_number || raw.order_number || "").toString().trim();
-  const rawBuyerShipping = Number(raw.shipping_fee) || Number(raw.shipping_amount) || Number(parentOrder.shipping_fee) || 0;
-  const isFreeShipping = raw.shipping_fee_discount_platform > 0 || raw.is_free_shipping === true;
-  
-  const itemsCount = Number(parentOrder.item_count) || Number(parentOrder.items_count) || (parentOrder.order_items ? parentOrder.order_items.length : 1);
+  // 5. Shipping calculations
+  const carrierShipping = Number(raw.carrier_shipping_fee) || 230.00;
   let buyerShipping = 0;
   let shippingFeeDiscount = 0;
-  let carrierShipping = 0;
 
-  const isSpecificSubsidized = orderNum === "250676373648373" || (raw.shipping_paid_by_buyer === 49.00 && raw.shipping_fee_discount > 0);
-
-  if (isFreeShipping) {
-    buyerShipping = 0;
-    shippingFeeDiscount = 0;
-    carrierShipping = 0;
-  } else if (Number(raw.shipping_fee_discount) > 0 || isSpecificSubsidized) {
-    // Specific partial shipping subsidy (e.g. Order #250676373648373: Buyer 49.00, Daraz discount 173.65, carrier 230.00)
-    buyerShipping = Number(raw.shipping_paid_by_buyer) || 49.00;
-    shippingFeeDiscount = Number(raw.shipping_fee_discount) || 173.65;
-    carrierShipping = Number(raw.carrier_shipping_fee) || 230.00;
-  } else if (itemsCount > 1) {
-    const orderTotalGross = Number(parentOrder.price) || (itemGross * itemsCount);
-    const ratio = orderTotalGross > 0 ? (itemGross / orderTotalGross) : (1 / itemsCount);
-    const totalOrderShipping = rawBuyerShipping > 0 ? rawBuyerShipping : 200.00;
-    buyerShipping = Number((totalOrderShipping * ratio).toFixed(2));
-    carrierShipping = Number((buyerShipping * 1.15).toFixed(2));
+  if (raw.shipping_paid_by_buyer !== undefined) {
+    buyerShipping = Number(raw.shipping_paid_by_buyer) || 0;
+  } else if (raw.shipping_fee !== undefined) {
+    buyerShipping = Number(raw.shipping_fee) || 0;
+  } else if (item.shipping_paid_by_buyer !== undefined && item.shipping_paid_by_buyer > 0) {
+    buyerShipping = Number(item.shipping_paid_by_buyer);
   } else {
-    // Standard Daraz Pakistan Order: Buyer pays standard shipping (PKR 200.00), carrier charges PKR 230.00
-    buyerShipping = rawBuyerShipping > 0 ? rawBuyerShipping : 200.00;
-    carrierShipping = Number(raw.carrier_shipping_fee) || 230.00;
+    buyerShipping = isFsm ? 49.00 : 200.00;
   }
 
-  const netShipping = Math.max(0, Number((carrierShipping - shippingFeeDiscount - buyerShipping).toFixed(2)));
-  // Gross amount credited to seller: Product Price + Buyer Shipping + Shipping Fee Discount
-  const grossAmount = Number((itemGross + buyerShipping + shippingFeeDiscount).toFixed(2));
-
-  // 3. Dynamic Daraz Marketplace Percentage Fees & Provincial Tax Hierarchy:
-  const province = (raw.province || parentOrder.customer_address_state || parentOrder.delivery_state || "").toLowerCase();
-  const pstServiceTaxRate = raw.pst_rate
-    ? Number(raw.pst_rate)
-    : (province.includes("sindh") ? 0.13 : (province.includes("islamabad") || province.includes("ict") || isCookwareOrKitchen ? 0.15 : 0.16));
-
-  // Category Commission Rate:
-  let categoryBaseRate = 0.16;
-  if (raw.commission_base_rate) {
-    categoryBaseRate = Number(raw.commission_base_rate);
-  } else if (isCookwareOrKitchen) {
-    // Cookware / Kitchen Appliances base 10% + 15% GST = 11.50035% (PKR 160.89 on PKR 1,399.00)
-    categoryBaseRate = 0.100003;
-  } else if (isBeauty) {
-    // Health & Beauty / Personal Care base = 0.160401 (effective 18.44612% -> PKR 415.96 on PKR 2,255.00)
-    categoryBaseRate = 0.160401;
-  } else if (isElectronicsOrMobile) {
-    categoryBaseRate = 0.08;
-  }
-
-  const effectiveCommissionRate = raw.commission_rate
-    ? Number(raw.commission_rate)
-    : (isBeauty ? 0.1844612 : Number((categoryBaseRate * (1 + pstServiceTaxRate)).toFixed(6)));
-  const commissionFee = Number((itemGross * effectiveCommissionRate).toFixed(2));
-
-  // Payment Processing Fee: 2.25% base + service tax (e.g. 2.25% * 1.15 = 2.5875% -> PKR 36.20 on 1399, PKR 58.35 on 2255)
-  const paymentTaxFactor = (isCookwareOrKitchen || isAccessoriesHub || province.includes("islamabad") || province.includes("ict")) ? 1.15 : (1 + pstServiceTaxRate);
-  const effectivePaymentRate = raw.payment_fee_rate
-    ? Number(raw.payment_fee_rate)
-    : Number((0.0225 * paymentTaxFactor).toFixed(6));
-  const paymentFee = Number((itemGross * effectivePaymentRate).toFixed(2));
-
-  // Handling Fee Tiers in Daraz Pakistan:
-  // - itemGross < 1,000: PKR 17.40 flat (PKR 15 base + 16% PRA)
-  // - itemGross >= 1,000 && < 2,000: PKR 23.00 flat (PKR 20 base + 15% GST)
-  // - itemGross >= 2,000: PKR 69.00 flat (PKR 60 base + 15% GST)
-  let handlingFee = 17.40;
-  if (raw.handling_fee) {
-    handlingFee = Number(raw.handling_fee);
-  } else if (itemGross >= 2000) {
-    handlingFee = 69.00;
-  } else if (itemGross >= 1000) {
-    handlingFee = 23.00;
-  }
-
-  // Store-specific Free Shipping Max (FSM) Promotion:
-  // - Accessories Hub 76: Enrolled in FSM promotion (6.90% fee subtracted from total)
-  // - TK-kart & D-kart: Seller choice NOT to use FSM (freeShippingMaxFee = 0.00 assigned)
-  let isFsm = false;
-  if (isAccessoriesHub) {
-    isFsm = raw.free_shipping_max !== false && raw.fsm !== false;
-  } else if (isDkartOrTkart) {
-    isFsm = false;
+  if (raw.shipping_fee_discount !== undefined && Number(raw.shipping_fee_discount) > 0) {
+    shippingFeeDiscount = Number(raw.shipping_fee_discount);
+  } else if (isFsm) {
+    // Under FSM, Daraz subsidizes the carrier shipping difference above seller's small net liability (~7.35 PKR)
+    shippingFeeDiscount = Math.max(0, roundMoney(carrierShipping - buyerShipping - 7.35));
   } else {
-    isFsm = (raw.free_shipping_max === true || raw.fsm === true || parentOrder.free_shipping_max === true) && raw.free_shipping_max !== false;
+    shippingFeeDiscount = 0.00;
   }
 
-  // If FSM is applied, store its 6.90% value; if not applied, keep variable and assign 0.00 to it
-  const freeShippingMaxFee = isFsm ? Number((itemGross * 0.069002).toFixed(2)) : 0.00;
+  const grossAmount = roundMoney(itemGross + buyerShipping + shippingFeeDiscount);
 
-  // Co-funded Voucher Fee: 3.00% for participating orders/stores
-  let hasCofunded = false;
-  if (raw.cofunded_voucher !== undefined) {
-    hasCofunded = raw.cofunded_voucher === true;
-  } else if (isAccessoriesHub && itemGross >= 1000) {
-    hasCofunded = true;
-  }
-  const cofundedVoucherFee = hasCofunded ? Number((itemGross * 0.0300).toFixed(2)) : 0.00;
+  // 6. Co-funded Voucher Fee (3% for participating stores on orders >= 1000)
+  const hasCofunded = raw.cofunded_voucher !== undefined
+    ? Boolean(raw.cofunded_voucher)
+    : (isFsm && itemGross >= 1000);
+  const cofundedVoucherFee = hasCofunded ? roundMoney(itemGross * 0.0300) : 0.00;
 
-  // Daraz Coins Participation Fee: Flat PKR 9.20 on orders >= 1000
-  let coinsDiscountFee = 0;
+  // 7. Daraz Coins Discount Fee
+  let coinsDiscountFee = 0.00;
   if (raw.coins !== undefined || raw.coin_discount !== undefined) {
-    coinsDiscountFee = Number(raw.coin_discount || raw.coins || 0);
+    coinsDiscountFee = roundMoney(Number(raw.coin_discount || raw.coins || 0));
   } else if (itemGross >= 1000) {
-    coinsDiscountFee = 9.20; // Exact Daraz statement coin discount for orders >= 1000
+    coinsDiscountFee = 9.20;
   } else if (itemGross >= 800) {
     coinsDiscountFee = 9.28;
   }
 
-  // 4. Percentage Withholding Taxes (Federal FBR & Provincial Revenue Authorities):
+  // 8. Section 236V Income Tax Withholding & Sales Tax Withholding
   let incomeTaxWithholding = 0.00;
-  if (isCookwareOrKitchen) {
-    incomeTaxWithholding = 0.00;
-  } else if (raw.wht_amount) {
-    incomeTaxWithholding = Number(raw.wht_amount);
-  } else if (raw.wht_rate) {
-    incomeTaxWithholding = Number(Math.round(itemGross * Number(raw.wht_rate)).toFixed(2));
-  } else if (isBeauty && itemGross >= 1000) {
-    incomeTaxWithholding = Number(Math.round(itemGross * 0.02).toFixed(2));
-  }
-
-  // Provincial Sales Tax Withholding (2.0%):
   let salesTaxWithholding = 0.00;
-  if (isCookwareOrKitchen) {
-    salesTaxWithholding = 0.00;
-  } else if (raw.sales_tax_amount) {
-    salesTaxWithholding = Number(raw.sales_tax_amount);
-  } else if (raw.sales_tax_rate) {
-    salesTaxWithholding = Number(Math.round(itemGross * Number(raw.sales_tax_rate)).toFixed(2));
-  } else if (isBeauty && itemGross >= 1000) {
-    salesTaxWithholding = Number(Math.round(itemGross * 0.02).toFixed(2));
+  if (!categoryRule.whtExempt && itemGross >= 1000) {
+    incomeTaxWithholding = roundMoney(itemGross * 0.02);
+    salesTaxWithholding = roundMoney(itemGross * 0.02);
   }
 
-  const totalFees = Number((commissionFee + paymentFee + handlingFee + carrierShipping + coinsDiscountFee + freeShippingMaxFee + cofundedVoucherFee).toFixed(2));
-  const totalTaxes = Number((incomeTaxWithholding + salesTaxWithholding).toFixed(2));
-  const totalDeductions = Number((totalFees + totalTaxes).toFixed(2));
-  const netSettlement = Number(Math.max(0, grossAmount - totalDeductions).toFixed(2));
+  const totalFees = roundMoney(commissionFee + paymentFee + handlingFee + carrierShipping + coinsDiscountFee + freeShippingMaxFee + cofundedVoucherFee);
+  const totalTaxes = roundMoney(incomeTaxWithholding + salesTaxWithholding);
+  const totalDeductions = roundMoney(totalFees + totalTaxes);
+  const netSettlement = Math.max(0, roundMoney(grossAmount - totalDeductions));
 
   return {
+    is_estimate: true,
     itemGross,
     buyerShipping,
     shippingFeeDiscount,
@@ -1756,7 +1563,6 @@ function calculateDarazSettlementForOrderItem(item, parentOrder = {}, store = nu
     cofundedVoucherFee,
     handlingFee,
     coinsDiscountFee,
-    netShipping,
     incomeTaxWithholding,
     salesTaxWithholding,
     totalFees,
@@ -1766,7 +1572,7 @@ function calculateDarazSettlementForOrderItem(item, parentOrder = {}, store = nu
   };
 }
 
-// 6b. Recalculate all stored FinanceEntry records using the corrected engine.
+// 6b. Recalculate Finance Entries (respecting statement precedence)
 router.post("/recalculate", async (req, res) => {
   try {
     const { statement_period } = req.body;
@@ -1776,6 +1582,7 @@ router.post("/recalculate", async (req, res) => {
     }
 
     const CentralOrderItem = require("../models/CentralOrderItem");
+    const CentralOrder = require("../models/CentralOrder");
     const entries = await FinanceEntry.find(query);
     let updated = 0;
 
@@ -1784,98 +1591,20 @@ router.post("/recalculate", async (req, res) => {
         entry.source === "statement_file" ||
         entry.matched_by === "file_imported";
 
-      const orderNum = (entry.order_number || "").toString().trim();
-
-      // Specifically heal demo order #250676373648373
-      if (orderNum === "250676373648373") {
-        const itemGross = 1399.00;
-        const buyerShipping = 49.00;
-        const shippingFeeDiscount = 173.65;
-        const carrierShipping = 230.00;
-        const grossAmount = 1621.65;
-        const commissionFee = 160.89;
-        const paymentFee = 36.20;
-        const handlingFee = 23.00;
-        const freeShippingMaxFee = 96.53;
-        const cofundedVoucherFee = 41.97;
-        const coinsDiscountFee = 9.20;
-        const incomeTaxWithholding = 0.00;
-        const salesTaxWithholding = 0.00;
-        const totalFees = 597.79;
-        const totalTaxes = 0.00;
-        const totalDeductions = 597.79;
-        const netSettlement = 1023.86;
-
-        const qty = entry.quantity > 0 ? entry.quantity : 1;
-        const costPrice = entry.cost_price || 0;
-        const totalCost = Number((costPrice * qty).toFixed(2));
-        const netProfit = entry.profit_ready && costPrice > 0 ? Number((netSettlement - totalCost).toFixed(2)) : null;
-
-        await FinanceEntry.updateOne(
-          { _id: entry._id },
-          {
-            $set: {
-              product_price: itemGross,
-              shipping_paid_by_buyer: buyerShipping,
-              shipping_fee_discount: shippingFeeDiscount,
-              gross_amount: grossAmount,
-              shipping_fee: carrierShipping,
-              commission_fee: commissionFee,
-              payment_fee: paymentFee,
-              handling_fee: handlingFee,
-              free_shipping_max_fee: freeShippingMaxFee,
-              cofunded_voucher_fee: cofundedVoucherFee,
-              coins_discount_fee: coinsDiscountFee,
-              income_tax_withholding: incomeTaxWithholding,
-              sales_tax_withholding: salesTaxWithholding,
-              wht_amount: 0,
-              vat_total: 0,
-              total_fees: totalFees,
-              total_taxes: totalTaxes,
-              total_deductions: totalDeductions,
-              net_settlement: netSettlement,
-              total_cost: totalCost,
-              net_profit: netProfit,
-              fee_breakdown: {
-                "Product Price Paid by Buyer": itemGross,
-                "Shipping Fee Paid by Buyer": buyerShipping,
-                "Shipping Fee Discount": shippingFeeDiscount,
-                "Commission Fee": -commissionFee,
-                "Payment Fee": -paymentFee,
-                "Shipping Fee": -carrierShipping,
-                "Free Shipping Max Fee": -freeShippingMaxFee,
-                "Co-funded Voucher Max": -cofundedVoucherFee,
-                "Handling Fee": -handlingFee,
-                "Daraz Coins Discount": -coinsDiscountFee
-              }
-            }
-          }
-        );
-        updated += 1;
-        continue;
-      }
-
+      // PRECEDENCE RULE: If imported from an official statement file, DO NOT recalculate or override official Daraz fees!
+      // Only recalculate totalCost and netProfit if product cost changed.
       if (isFileImported) {
-        let netSettlement = entry.net_settlement;
-        if (entry.fee_breakdown && Object.keys(entry.fee_breakdown).length > 2) {
-          const breakdownSum = Number(Object.values(entry.fee_breakdown).reduce((sum, v) => sum + (Number(v) || 0), 0).toFixed(2));
-          if (breakdownSum > 0 && Math.abs(breakdownSum - entry.net_settlement) > 0.05) {
-            netSettlement = breakdownSum;
-          }
-        }
-
         const qty = entry.quantity > 0 ? entry.quantity : 1;
         const costPrice = entry.cost_price || 0;
-        const totalCost = Number((costPrice * qty).toFixed(2));
+        const totalCost = roundMoney(costPrice * qty);
         const netProfit = entry.profit_ready && costPrice > 0
-          ? Number((netSettlement - totalCost).toFixed(2))
-          : (entry.order_status?.toLowerCase().includes("return") ? Number(netSettlement.toFixed(2)) : null);
+          ? roundMoney(entry.net_settlement - totalCost)
+          : (entry.order_status?.toLowerCase().includes("return") ? entry.net_settlement : null);
 
         await FinanceEntry.updateOne(
           { _id: entry._id },
           {
             $set: {
-              net_settlement: netSettlement,
               total_cost: totalCost,
               net_profit: netProfit
             }
@@ -1885,7 +1614,7 @@ router.post("/recalculate", async (req, res) => {
         continue;
       }
 
-      // Find matching CentralOrderItem if available
+      // For API estimated orders (source: "store_order_sync"):
       let orderItem = null;
       if (entry.order_line_id) {
         orderItem = await CentralOrderItem.findOne({ external_order_item_id: entry.order_line_id }).lean();
@@ -1896,184 +1625,76 @@ router.post("/recalculate", async (req, res) => {
 
       let parentOrder = {};
       if (orderItem?.order_id) {
-        const CentralOrder = require("../models/CentralOrder");
         parentOrder = (await CentralOrder.findById(orderItem.order_id).lean()) || {};
       }
 
-      if (orderItem) {
-        const calc = calculateDarazSettlementForOrderItem(orderItem, parentOrder, entry);
-        const qty = entry.quantity > 0 ? entry.quantity : 1;
-        const costPrice = entry.cost_price || 0;
-        const totalCost = Number((costPrice * qty).toFixed(2));
-        const netProfit = entry.profit_ready && costPrice > 0
-          ? Number((calc.netSettlement - totalCost).toFixed(2))
-          : null;
+      const itemRef = orderItem || {
+        unit_price: entry.product_price || entry.gross_amount || 0,
+        quantity: entry.quantity || 1,
+        name: entry.product_name || "",
+        seller_sku: entry.seller_sku || "",
+        shipping_paid_by_buyer: entry.shipping_paid_by_buyer || 0,
+        store_name: entry.store_name || "",
+        store_code: entry.store_code || ""
+      };
 
-        await FinanceEntry.updateOne(
-          { _id: entry._id },
-          {
-            $set: {
-              product_price: calc.itemGross,
-              shipping_paid_by_buyer: calc.buyerShipping,
-              shipping_fee_discount: calc.shippingFeeDiscount || 0,
-              gross_amount: calc.grossAmount,
-              commission_fee: calc.commissionFee,
-              payment_fee: calc.paymentFee,
-              handling_fee: calc.handlingFee,
-              cofunded_voucher_fee: calc.cofundedVoucherFee,
-              free_shipping_max_fee: calc.freeShippingMaxFee,
-              coins_discount_fee: calc.coinsDiscountFee,
-              shipping_fee: calc.carrierShipping,
-              income_tax_withholding: calc.incomeTaxWithholding,
-              sales_tax_withholding: calc.salesTaxWithholding,
-              wht_amount: calc.incomeTaxWithholding,
-              vat_total: calc.salesTaxWithholding,
-              total_fees: calc.totalFees,
-              total_taxes: calc.totalTaxes,
-              total_deductions: calc.totalDeductions,
-              net_settlement: calc.netSettlement,
-              total_cost: totalCost,
-              net_profit: netProfit,
-              fee_breakdown: {
-                "Product Price Paid by Buyer": calc.itemGross,
-                ...(calc.buyerShipping > 0 ? { "Shipping Fee Paid by Buyer": calc.buyerShipping } : {}),
-                ...(calc.shippingFeeDiscount > 0 ? { "Shipping Fee Discount": calc.shippingFeeDiscount } : {}),
-                "Commission Fee": -calc.commissionFee,
-                "Payment Fee": -calc.paymentFee,
-                ...(calc.carrierShipping > 0 ? { "Shipping Fee": -calc.carrierShipping } : {}),
-                ...(calc.freeShippingMaxFee > 0 ? { "Free Shipping Max Fee": -calc.freeShippingMaxFee } : {}),
-                ...(calc.cofundedVoucherFee > 0 ? { "Co-funded Voucher Max": -calc.cofundedVoucherFee } : {}),
-                "Handling Fee": -calc.handlingFee,
-                ...(calc.coinsDiscountFee > 0 ? { "Daraz Coins Discount": -calc.coinsDiscountFee } : {}),
-                "Income Tax Withholding": -calc.incomeTaxWithholding,
-                ...(calc.salesTaxWithholding > 0 ? { "Sales Tax Withholding": -calc.salesTaxWithholding } : {})
-              }
+      const calc = calculateDarazSettlementForOrderItem(itemRef, parentOrder, entry);
+      const qty = entry.quantity > 0 ? entry.quantity : 1;
+      const costPrice = entry.cost_price || 0;
+      const totalCost = roundMoney(costPrice * qty);
+      const netProfit = entry.profit_ready && costPrice > 0
+        ? roundMoney(calc.netSettlement - totalCost)
+        : null;
+
+      await FinanceEntry.updateOne(
+        { _id: entry._id },
+        {
+          $set: {
+            product_price: calc.itemGross,
+            shipping_paid_by_buyer: calc.buyerShipping,
+            shipping_fee_discount: calc.shippingFeeDiscount,
+            gross_amount: calc.grossAmount,
+            commission_fee: calc.commissionFee,
+            payment_fee: calc.paymentFee,
+            handling_fee: calc.handlingFee,
+            cofunded_voucher_fee: calc.cofundedVoucherFee,
+            free_shipping_max_fee: calc.freeShippingMaxFee,
+            coins_discount_fee: calc.coinsDiscountFee,
+            shipping_fee: calc.carrierShipping,
+            income_tax_withholding: calc.incomeTaxWithholding,
+            sales_tax_withholding: calc.salesTaxWithholding,
+            wht_amount: calc.incomeTaxWithholding,
+            vat_total: calc.salesTaxWithholding,
+            total_fees: calc.totalFees,
+            total_taxes: calc.totalTaxes,
+            total_deductions: calc.totalDeductions,
+            net_settlement: calc.netSettlement,
+            total_cost: totalCost,
+            net_profit: netProfit,
+            is_estimate: true,
+            fee_breakdown: {
+              "Product Price Paid by Buyer": calc.itemGross,
+              ...(calc.buyerShipping > 0 ? { "Shipping Fee Paid by Buyer": calc.buyerShipping } : {}),
+              ...(calc.shippingFeeDiscount > 0 ? { "Shipping Fee Discount": calc.shippingFeeDiscount } : {}),
+              "Commission Fee": -calc.commissionFee,
+              "Payment Fee": -calc.paymentFee,
+              ...(calc.carrierShipping > 0 ? { "Shipping Fee": -calc.carrierShipping } : {}),
+              ...(calc.freeShippingMaxFee > 0 ? { "Free Shipping Max Fee": -calc.freeShippingMaxFee } : {}),
+              ...(calc.cofundedVoucherFee > 0 ? { "Co-funded Voucher Max": -calc.cofundedVoucherFee } : {}),
+              "Handling Fee": -calc.handlingFee,
+              ...(calc.coinsDiscountFee > 0 ? { "Daraz Coins Discount": -calc.coinsDiscountFee } : {}),
+              "Income Tax Withholding": -calc.incomeTaxWithholding,
+              ...(calc.salesTaxWithholding > 0 ? { "Sales Tax Withholding": -calc.salesTaxWithholding } : {})
             }
           }
-        );
-      } else {
-        // Fallback: re-derive from existing entry fields using verified Pakistan percentage rates
-        const base = entry.product_price || entry.gross_amount || 0;
-        const storeIdentifier = (entry.store_name || entry.store_code || "").toLowerCase();
-        const isAccessoriesHub = storeIdentifier.includes("accessories") || storeIdentifier.includes("hub");
-        const isDkartOrTkart = storeIdentifier.includes("tk") || storeIdentifier.includes("dkart") || storeIdentifier.includes("d-kart") || storeIdentifier.includes("tk-kart");
-
-        const titleText = (entry.product_name || entry.seller_sku || "").toLowerCase();
-        const isCookwareOrKitchen =
-          titleText.includes("fryer") ||
-          titleText.includes("pot") ||
-          titleText.includes("pan") ||
-          titleText.includes("kitchen") ||
-          titleText.includes("cookware") ||
-          titleText.includes("kettle") ||
-          titleText.includes("blender") ||
-          titleText.includes("cooker") ||
-          titleText.includes("utensil") ||
-          titleText.includes("chopper");
-
-        const isBeauty =
-          titleText.includes("hair") ||
-          titleText.includes("remover") ||
-          titleText.includes("shaver") ||
-          titleText.includes("callus") ||
-          titleText.includes("trimmer") ||
-          titleText.includes("beauty") ||
-          titleText.includes("derma") ||
-          titleText.includes("serum") ||
-          titleText.includes("cream") ||
-          titleText.includes("epilator");
-
-        const orderNum = (entry.order_number || "").toString().trim();
-        const isSpecificSubsidized = orderNum === "250676373648373" || (entry.shipping_paid_by_buyer === 49.00 && entry.shipping_fee_discount > 0);
-
-        const buyerShipping = isSpecificSubsidized
-          ? 49.00
-          : (entry.shipping_paid_by_buyer > 0 ? entry.shipping_paid_by_buyer : 200.00);
-        const shippingFeeDiscount = isSpecificSubsidized ? 173.65 : 0.00;
-        const carrierShipping = 230.00;
-        const grossAmount = Number((base + buyerShipping + shippingFeeDiscount).toFixed(2));
-
-        const commissionFee = isCookwareOrKitchen
-          ? Number((base * 0.1150035).toFixed(2))
-          : (isBeauty ? Number((base * 0.1844612).toFixed(2)) : Number((base * 0.186062).toFixed(2)));
-        const paymentFee = Number((base * 0.025875).toFixed(2));
-
-        let handlingFee = 17.40;
-        if (base >= 2000) {
-          handlingFee = 69.00;
-        } else if (base >= 1000) {
-          handlingFee = 23.00;
         }
-
-        const coinsDiscountFee = (base >= 1000) ? 9.20 : (base >= 800 ? 9.28 : Number((base * 0.0103226).toFixed(2)));
-
-        const isFsm = !isDkartOrTkart && (isAccessoriesHub || (entry.free_shipping_max_fee > 0 && entry.matched_by === "file_imported"));
-        const freeShippingMaxFee = isFsm ? Number((base * 0.069002).toFixed(2)) : 0.00;
-        const cofundedVoucherFee = (isAccessoriesHub && base >= 1000)
-          ? Number((base * 0.0300).toFixed(2))
-          : ((entry.cofunded_voucher_fee > 0 && entry.matched_by === "file_imported") ? entry.cofunded_voucher_fee : 0.00);
-
-        // Taxes: exempt for cookware; 2% for beauty items >= 1000
-        const incomeTaxWithholding = isCookwareOrKitchen ? 0.00 : (isBeauty && base >= 1000 ? Number(Math.round(base * 0.02).toFixed(2)) : 0.00);
-        const salesTaxWithholding = isCookwareOrKitchen ? 0.00 : (isBeauty && base >= 1000 ? Number(Math.round(base * 0.02).toFixed(2)) : 0.00);
-
-        const totalFees = Number((commissionFee + paymentFee + freeShippingMaxFee + cofundedVoucherFee + handlingFee + coinsDiscountFee + carrierShipping).toFixed(2));
-        const totalTaxes = Number((incomeTaxWithholding + salesTaxWithholding).toFixed(2));
-        const totalDeductions = Number((totalFees + totalTaxes).toFixed(2));
-        const netSettlement = Number(Math.max(0, grossAmount - totalDeductions).toFixed(2));
-        const qty = entry.quantity > 0 ? entry.quantity : 1;
-        const costPrice = entry.cost_price || 0;
-        const totalCost = Number((costPrice * qty).toFixed(2));
-        const netProfit = entry.profit_ready && costPrice > 0
-          ? Number((netSettlement - totalCost).toFixed(2))
-          : null;
-
-        await FinanceEntry.updateOne(
-          { _id: entry._id },
-          {
-            $set: {
-              shipping_paid_by_buyer: buyerShipping,
-              shipping_fee_discount: shippingFeeDiscount,
-              gross_amount: grossAmount,
-              shipping_fee: carrierShipping,
-              commission_fee: commissionFee,
-              payment_fee: paymentFee,
-              handling_fee: handlingFee,
-              cofunded_voucher_fee: cofundedVoucherFee,
-              free_shipping_max_fee: freeShippingMaxFee,
-              coins_discount_fee: coinsDiscountFee,
-              income_tax_withholding: incomeTaxWithholding,
-              sales_tax_withholding: salesTaxWithholding,
-              total_fees: totalFees,
-              total_taxes: totalTaxes,
-              total_deductions: totalDeductions,
-              net_settlement: netSettlement,
-              total_cost: totalCost,
-              net_profit: netProfit,
-              fee_breakdown: {
-                "Product Price Paid by Buyer": base,
-                ...(buyerShipping > 0 ? { "Shipping Fee Paid by Buyer": buyerShipping } : {}),
-                ...(shippingFeeDiscount > 0 ? { "Shipping Fee Discount": shippingFeeDiscount } : {}),
-                "Commission Fee": -commissionFee,
-                "Payment Fee": -paymentFee,
-                ...(carrierShipping > 0 ? { "Shipping Fee": -carrierShipping } : {}),
-                ...(freeShippingMaxFee > 0 ? { "Free Shipping Max Fee": -freeShippingMaxFee } : {}),
-                ...(cofundedVoucherFee > 0 ? { "Co-funded Voucher Max": -cofundedVoucherFee } : {}),
-                "Handling Fee": -handlingFee,
-                ...(coinsDiscountFee > 0 ? { "Daraz Coins Discount": -coinsDiscountFee } : {}),
-                "Income Tax Withholding": -incomeTaxWithholding,
-                ...(salesTaxWithholding > 0 ? { "Sales Tax Withholding": -salesTaxWithholding } : {})
-              }
-            }
-          }
-        );
-      }
+      );
       updated += 1;
     }
 
     res.json({
       success: true,
-      message: `Recalculated ${updated} finance order record(s) with exact Daraz settlement rates.`,
+      message: `Recalculated ${updated} finance order record(s).`,
       updated_count: updated
     });
   } catch (error) {
@@ -2366,3 +1987,10 @@ router.post("/sync", async (req, res) => {
 });
 
 module.exports = router;
+module.exports.roundMoney = roundMoney;
+module.exports.getDarazHandlingFee = getDarazHandlingFee;
+module.exports.resolveCategoryRule = resolveCategoryRule;
+module.exports.isStoreEnrolledInFSM = isStoreEnrolledInFSM;
+module.exports.buildEntryFromGroup = buildEntryFromGroup;
+module.exports.calculateDarazSettlementForOrderItem = calculateDarazSettlementForOrderItem;
+module.exports.DARAZ_CATEGORY_RULES = DARAZ_CATEGORY_RULES;
