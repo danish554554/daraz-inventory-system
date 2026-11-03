@@ -1302,6 +1302,8 @@ class FinanceSummary {
     required this.marginPercent,
     required this.profitReadyOrders,
     required this.pendingCostOrders,
+    this.estimatedEntries = 0,
+    this.estimatedNetSettlement = 0,
   });
 
   final int totalOrders;
@@ -1320,6 +1322,8 @@ class FinanceSummary {
   final double marginPercent;
   final int profitReadyOrders;
   final int pendingCostOrders;
+  final int estimatedEntries;
+  final double estimatedNetSettlement;
 
   factory FinanceSummary.fromJson(Map<String, dynamic> json) {
     return FinanceSummary(
@@ -1339,6 +1343,8 @@ class FinanceSummary {
       marginPercent: JsonReaders.number(json, 'margin_percent'),
       profitReadyOrders: JsonReaders.integer(json, 'profit_ready_orders'),
       pendingCostOrders: JsonReaders.integer(json, 'pending_cost_orders'),
+      estimatedEntries: JsonReaders.integer(json, 'estimated_entries'),
+      estimatedNetSettlement: JsonReaders.number(json, 'estimated_net_settlement'),
     );
   }
 
@@ -1416,6 +1422,7 @@ class FinanceEntry {
     required this.profitReady,
     required this.feeBreakdown,
     required this.importedAt,
+    this.source = '',
   });
 
   final String id;
@@ -1470,8 +1477,11 @@ class FinanceEntry {
   final bool profitReady;
   final Map<String, dynamic> feeBreakdown;
   final DateTime? importedAt;
+  final String source;
 
   bool get isOrder => entryType == 'order';
+  /// Computed from fee rules because no Daraz statement / Finance API lines exist yet.
+  bool get isEstimate => source == 'store_order_sync';
   bool get isAdjustment => entryType == 'adjustment';
   bool get isProfitReady => profitReady && netProfit != null;
 
@@ -1570,6 +1580,7 @@ class FinanceEntry {
       profitReady: JsonReaders.boolean(json, 'profit_ready'),
       feeBreakdown: JsonReaders.map(json['fee_breakdown']),
       importedAt: JsonReaders.date(json, 'imported_at'),
+      source: JsonReaders.string(json, 'source'),
     );
   }
 }

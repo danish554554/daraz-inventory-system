@@ -110,6 +110,7 @@ async function validateSkuUniqueness({
 router.get("/low-stock", async (req, res) => {
   try {
     const products = await Product.find({
+      is_active: { $ne: false },
       $expr: { $lte: ["$stock", "$low_stock_limit"] }
     }).sort({ created_at: -1 });
 

@@ -81,6 +81,12 @@ const financeEntrySchema = new mongoose.Schema({
       default: {}
     },
 
+    // Original Daraz statement / transaction lines (with _fp fingerprint) the entry was built from
+    raw_rows: {
+      type: Array,
+      default: []
+    },
+
     imported_at: {
       type: Date,
       default: Date.now

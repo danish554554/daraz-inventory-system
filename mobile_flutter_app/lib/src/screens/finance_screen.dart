@@ -511,7 +511,7 @@ class _FinanceScreenState extends State<FinanceScreen> {
                             mainAxisAlignment: MainAxisAlignment.spaceBetween,
                             children: <Widget>[
                               Text(
-                                item.isAdjustment ? 'ADJUSTMENT IMPACT' : 'TRUE NET PROFIT',
+                                item.isAdjustment ? 'ADJUSTMENT IMPACT' : (item.isEstimate ? 'ESTIMATED NET PROFIT' : 'TRUE NET PROFIT'),
                                 style: const TextStyle(
                                   color: Color(0xFF94A3B8),
                                   fontSize: 11,
@@ -618,9 +618,17 @@ class _FinanceScreenState extends State<FinanceScreen> {
                     // Uses the structured, named fields from the settlement engine
                     // instead of raw CSV column names, so every label is clean and
                     // human-readable — matching Daraz's "My Payment Information" view.
-                    if (item.isOrder) ...<Widget>[
+                    if (item.isOrder && (item.isEstimate || item.feeBreakdown.isEmpty)) ...<Widget>[
                       const SizedBox(height: 16),
-                      _breakdownSectionTitle('Itemized Statement Breakdown'),
+                      _breakdownSectionTitle(item.isEstimate ? 'Estimated Breakdown' : 'Itemized Statement Breakdown'),
+                      if (item.isEstimate)
+                        const Padding(
+                          padding: EdgeInsets.only(bottom: 8),
+                          child: Text(
+                            'Estimated from fee rules. Import the Daraz statement (or run Sync) for the exact payout.',
+                            style: TextStyle(fontSize: 11, fontWeight: FontWeight.w700, color: AppTheme.warning),
+                          ),
+                        ),
                       // Credits
                       if (item.productPrice > 0)
                         _breakdownRow('Product Price Paid by Buyer', '+PKR ${Formatters.money(item.productPrice)}', color: AppTheme.success),
@@ -655,8 +663,9 @@ class _FinanceScreenState extends State<FinanceScreen> {
                       if (item.salesTaxWithholding > 0)
                         _breakdownRow('Sales Tax Withholding', 'PKR -${Formatters.money(item.salesTaxWithholding)}', color: AppTheme.warning),
                     ] else if (item.feeBreakdown.isNotEmpty) ...<Widget>[
+                      // Daraz's own line names and signed amounts: these always sum to the payout
                       const SizedBox(height: 16),
-                      _breakdownSectionTitle('Adjustment Breakdown'),
+                      _breakdownSectionTitle(item.isOrder ? 'Daraz Statement Lines' : 'Adjustment Breakdown'),
                       ...item.feeBreakdown.entries.map((e) {
                         final val = (e.value as num?)?.toDouble() ?? 0.0;
                         return _breakdownRow(
@@ -1168,6 +1177,14 @@ class _FinanceScreenState extends State<FinanceScreen> {
             'True Net Profit: PKR ${Formatters.money(finalProfit)} · Gross: PKR ${Formatters.money(grossAmount)}',
             style: TextStyle(color: Colors.white.withValues(alpha: 0.85), fontSize: 12, fontWeight: FontWeight.w700),
           ),
+          if (_summary.estimatedEntries > 0) ...<Widget>[
+            const SizedBox(height: 4),
+            Text(
+              '${_summary.estimatedEntries} entr${_summary.estimatedEntries == 1 ? 'y is' : 'ies are'} estimated '
+              '(PKR ${Formatters.money(_summary.estimatedNetSettlement)}) · import the Daraz statement for exact totals',
+              style: const TextStyle(color: Color(0xFFFBBF24), fontSize: 11, fontWeight: FontWeight.w800),
+            ),
+          ],
           const SizedBox(height: 14),
           Container(
             padding: const EdgeInsets.all(12),
@@ -1491,7 +1508,7 @@ class _FinanceScreenState extends State<FinanceScreen> {
                               ? 'Penalty Refunded'
                               : (isReturned
                                   ? 'Net Return Settlement'
-                                  : (isAdjustment ? 'Adjustment Net' : 'Final Received Payout'))),
+                                  : (isAdjustment ? 'Adjustment Net' : (item.isEstimate ? 'Estimated Payout' : 'Final Received Payout')))),
                       style: TextStyle(
                         color: (isPenaltyCharged || netSettlement < 0) ? AppTheme.danger : AppTheme.success,
                         fontSize: 9.5,
@@ -1572,7 +1589,7 @@ class _FinanceScreenState extends State<FinanceScreen> {
                               ? 'Penalty Impact: '
                               : (isPenaltyReturned
                                   ? 'Penalty Reversal: '
-                                  : (isReturned ? 'Net Return Loss: ' : 'Exact True Profit: ')),
+                                  : (isReturned ? 'Net Return Loss: ' : (item.isEstimate ? 'Estimated Profit: ' : 'Exact True Profit: '))),
                           style: TextStyle(
                             fontSize: 11,
                             fontWeight: FontWeight.w700,

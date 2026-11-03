@@ -110,12 +110,13 @@ async function runCollectionWatchSnapshot() {
 }
 
 async function runDailyLowStockSnapshot() {
-  if (!inventoryAlertService?.runDailyLowStockAlertSnapshot) {
+  if (!inventoryAlertService?.createDailyLowStockAlert) {
     return;
   }
 
   try {
-    await inventoryAlertService.runDailyLowStockAlertSnapshot();
+    // Idempotent per day: reuses the existing snapshot after the first run
+    await inventoryAlertService.createDailyLowStockAlert();
   } catch (error) {
     console.error(`[Daraz Sync Scheduler] low-stock snapshot failed: ${error.message}`);
   }

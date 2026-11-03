@@ -59,8 +59,9 @@ class _ScannerScreenState extends State<ScannerScreen> {
     try {
       // 1. Search for matching orders/returns first
       final orderRes = await ApiClient.instance.get(
-        '/daraz-sync/live-orders',
+        '/daraz-sync/orders',
         queryParameters: <String, dynamic>{'search': code, 'limit': 5},
+        bypassCache: true,
       );
 
       final ordersList = JsonReaders.list(orderRes is Map ? orderRes['orders'] : null);
@@ -236,20 +237,31 @@ class _ScannerScreenState extends State<ScannerScreen> {
                   onPressed: () async {
                     Navigator.pop(context);
                     try {
-                      await ApiClient.instance.post(
-                        '/daraz-sync/returns/collect-item',
-                        body: <String, dynamic>{
-                          'order_id': order.id,
-                          'tracking_code': scannedCode,
-                          'restore_stock': true,
-                        },
+                      final itemsRes = await ApiClient.instance.get(
+                        '/daraz-sync/order-items',
+                        queryParameters: <String, dynamic>{'order_id': order.id},
+                        bypassCache: true,
                       );
+                      final parcels = JsonReaders.list(itemsRes is Map ? itemsRes['items'] : null)
+                          .map(JsonReaders.map)
+                          .where((item) =>
+                              const <String>['return', 'failed_delivery'].contains(item['parcel_type']) &&
+                              item['collection_status'] != 'collected')
+                          .toList();
+                      for (final item in parcels) {
+                        await ApiClient.instance.post('/daraz-sync/order-items/${item['_id']}/mark-received');
+                      }
                       if (context.mounted) {
-                        showAppSnackBar(context, 'Parcel marked collected and stock restored (+1)!');
+                        showAppSnackBar(
+                          context,
+                          parcels.isEmpty
+                              ? 'No uncollected return parcels found on this order.'
+                              : '${parcels.length} parcel item(s) marked collected and stock restored.',
+                        );
                       }
                     } catch (e) {
                       if (context.mounted) {
-                        showAppSnackBar(context, 'Restoration recorded.');
+                        showAppSnackBar(context, 'Failed to mark collected: $e', error: true);
                       }
                     }
                   },
@@ -411,11 +423,12 @@ class _ScannerScreenState extends State<ScannerScreen> {
   Future<void> _adjustStock(InventoryItem item, int delta) async {
     try {
       await ApiClient.instance.post(
-        '/central-inventory/stock-adjustment',
+        '/central-inventory/adjust',
         body: <String, dynamic>{
           'inventory_id': item.inventoryId.isNotEmpty ? item.inventoryId : item.id,
-          'delta': delta,
-          'reason': 'Barcode Scanner Audit',
+          'type': delta > 0 ? 'increase' : 'decrease',
+          'quantity': delta.abs(),
+          'note': 'Barcode Scanner Audit',
         },
       );
       if (mounted) {

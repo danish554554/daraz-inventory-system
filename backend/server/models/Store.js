@@ -37,6 +37,10 @@ const storeSchema = new mongoose.Schema(
       type: Boolean,
       default: true
     },
+    fsm_enrolled: {
+      type: Boolean,
+      default: null
+    },
     sync_interval_minutes: {
       type: Number,
       default: 5,

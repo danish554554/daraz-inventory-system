@@ -1,4 +1,4 @@
-fl# Daraz Inventory System
+# Daraz Inventory System
 
 This package contains the Node.js backend and Flutter mobile app.
 

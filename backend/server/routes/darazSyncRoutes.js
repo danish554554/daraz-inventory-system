@@ -516,11 +516,15 @@ router.post("/import-products/:storeId", async (req, res) => {
 
 router.get("/orders", async (req, res) => {
   try {
-    const { store_id, status, limit = 50 } = req.query;
+    const { store_id, status, search, limit = 50 } = req.query;
     const query = {};
 
     if (store_id) query.store_id = store_id;
     if (status) query.status = normalizeString(status).toLowerCase();
+    if (normalizeString(search)) {
+      const term = normalizeString(search);
+      query.$or = [{ external_order_id: term }, { order_number: term }];
+    }
 
     const orders = await CentralOrder.find(query)
       .populate("store_id", "name code deduct_stage")
@@ -548,6 +552,7 @@ router.get("/order-items", async (req, res) => {
   try {
     const {
       store_id,
+      order_id,
       seller_sku,
       processing_status,
       status,
@@ -557,6 +562,7 @@ router.get("/order-items", async (req, res) => {
     const query = {};
 
     if (store_id) query.store_id = store_id;
+    if (order_id) query.order_id = order_id;
     if (seller_sku) query.seller_sku = normalizeString(seller_sku);
     if (processing_status) query.processing_status = normalizeString(processing_status).toLowerCase();
     if (status) query.status = normalizeString(status).toLowerCase();

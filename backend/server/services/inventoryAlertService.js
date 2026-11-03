@@ -16,6 +16,7 @@ function getDateKey(date = new Date()) {
 
 async function buildLowStockSnapshot() {
   const products = await Product.find({
+    is_active: { $ne: false },
     $expr: { $lte: ["$stock", "$low_stock_limit"] }
   })
     .sort({ stock: 1, updatedAt: -1 })

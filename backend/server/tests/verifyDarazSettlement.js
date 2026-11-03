@@ -74,8 +74,16 @@ const {
   resolveCategoryRule,
   isStoreEnrolledInFSM,
   buildEntryFromGroup,
-  calculateDarazSettlementForOrderItem
+  calculateDarazSettlementForOrderItem,
+  parseDarazFileToRows,
+  tagRowFingerprints,
+  mergeStatementRows,
+  groupRowsByOrder,
+  buildSummary
 } = require("../routes/financeRoutes");
+
+// In-memory cost lookup so buildEntryFromGroup never touches the database
+const NO_DB = { inventoryList: [], productList: [], skuMapList: [], productMap: new Map() };
 
 let totalTests = 0;
 let passedTests = 0;
@@ -198,7 +206,7 @@ async function runTests() {
     }
   ];
 
-  const benchmarkEntry = await buildEntryFromGroup(benchmarkStatementRows);
+  const benchmarkEntry = await buildEntryFromGroup(benchmarkStatementRows, null, NO_DB);
   reportResult(
     "Test 1: Benchmark Order #250676373648373 (Official Statement Reconciled)",
     1023.86,
@@ -322,6 +330,70 @@ async function runTests() {
     beautyEstimate.incomeTaxWithholding,
     "Non-exempt personal care/beauty order >= 1000 attracts 2.0% WHT (PKR 30.00)"
   );
+
+  // =========================================================================
+  // TEST 8: Whole-word category matching & explicit FSM flag
+  // =========================================================================
+  const categoryOf = (title) => resolveCategoryRule(title).name;
+  reportResult("Test 8a: 'Solar Panel' is not cookware", 1, categoryOf("Solar Panel 100W") === "General Merchandise" ? 1 : 0);
+  reportResult("Test 8b: 'Japan' is not cookware", 1, categoryOf("Made in Japan Mug") === "General Merchandise" ? 1 : 0);
+  reportResult("Test 8c: Plural 'Pans' is cookware", 1, categoryOf("Non-Stick Pans Set") === "Cookware / Kitchen Appliances" ? 1 : 0);
+  reportResult("Test 8d: Explicit fsm_enrolled=false beats name heuristic", 0, isStoreEnrolledInFSM({ name: "Accessories Hub", fsm_enrolled: false }) ? 1 : 0);
+  reportResult("Test 8e: Unset fsm_enrolled falls back to name heuristic", 1, isStoreEnrolledInFSM({ name: "Accessories Hub", fsm_enrolled: null }) ? 1 : 0);
+
+  // =========================================================================
+  // TEST 9: Daraz order page "My Payment Information" (seller app screenshot) -> PKR 725.61
+  // =========================================================================
+  const orderPageLines = [
+    ["Commission Fee", -211.21], ["Income Tax Withholding", -11.0], ["Handling Fee", -23.0],
+    ["Sales Tax Withholding", -22.0], ["Co-funded Voucher Max", -34.35], ["Payment Fee", -29.62],
+    ["Daraz Coins Discount Participation Fee", -9.2], ["Free Shipping Max Fee", -79.01],
+    ["Shipping Fee", -254.15], ["Shipping Fee Discount", 254.15], ["Product Price Paid by Buyer", 1145.0]
+  ].map(([fee, amount]) => ({ "Order Number": "900000000000001", "Order Line ID": "900000000000002", "Order Status": "Delivered", "Fee Name": fee, "Amount(Include Tax)": String(amount) }));
+  const orderPageEntry = await buildEntryFromGroup(orderPageLines, null, NO_DB);
+  reportResult("Test 9: Daraz order page payout reproduced exactly", 725.61, orderPageEntry.net_settlement,
+    `Gross ${orderPageEntry.gross_amount} - Deductions ${orderPageEntry.total_deductions}`);
+  reportResult("Test 9b: Gross - deductions equals payout", 725.61, roundMoney(orderPageEntry.gross_amount - orderPageEntry.total_deductions));
+
+  // =========================================================================
+  // TEST 10: Daraz "Transaction Overview" CSV headers (Order No. / Order Item No.) split per item
+  // =========================================================================
+  const overviewCsv = [
+    "Transaction Date,Transaction Type,Fee Name,Transaction Number,Details,Seller SKU,Lazada SKU,Amount,VAT in Amount,WHT Amount,Statement,Paid Status,Order No.,Order Item No.,Order Item Status",
+    "15 Oct 2026,Orders-Sales,Product Price Paid by Buyer,T1,Item A,SKU-A,,1000,0,0,S-42,Paid,111,1001,Delivered",
+    "15 Oct 2026,Orders-Daraz Fees,Commission Fee,T2,Item A,SKU-A,,-150,19.5,0,S-42,Paid,111,1001,Delivered",
+    "15 Oct 2026,Orders-Sales,Product Price Paid by Buyer,T3,Item B,SKU-B,,500,0,0,S-42,Paid,111,1002,Delivered",
+    "15 Oct 2026,Orders-Daraz Fees,Commission Fee,T4,Item B,SKU-B,,-75,9.75,0,S-42,Paid,111,1002,Delivered"
+  ].join("\n");
+  const overviewGroups = groupRowsByOrder(parseDarazFileToRows(overviewCsv));
+  reportResult("Test 10a: Multi-item order split into one entry per Order Item No.", 2, overviewGroups.length);
+  const itemA = await buildEntryFromGroup(overviewGroups.find((g) => g[0]["Order Line ID"] === "1001"), null, NO_DB);
+  reportResult("Test 10b: Item A payout", 850, itemA.net_settlement, `line ${itemA.order_line_id}, statement ${itemA.statement_number}`);
+
+  // =========================================================================
+  // TEST 11: Lines for one order across two weekly statements accumulate; re-import is a no-op
+  // =========================================================================
+  const week1 = tagRowFingerprints([
+    { "Statement Number": "W1", "Order Number": "222", "Order Line ID": "2001", "Fee Name": "Product Price Paid by Buyer", "Amount(Include Tax)": "1200" },
+    { "Statement Number": "W1", "Order Number": "222", "Order Line ID": "2001", "Fee Name": "Commission Fee", "Amount(Include Tax)": "-180" }
+  ]);
+  const week2 = tagRowFingerprints([
+    { "Statement Number": "W2", "Order Number": "222", "Order Line ID": "2001", "Fee Name": "Shipping Fee", "Amount(Include Tax)": "-30" }
+  ]);
+  const afterWeek2 = mergeStatementRows(week1, week2);
+  const afterReimport = mergeStatementRows(afterWeek2, tagRowFingerprints(week2.map(({ _fp, ...row }) => row)));
+  reportResult("Test 11a: Two statements merged", 990, (await buildEntryFromGroup(afterWeek2, null, NO_DB)).net_settlement);
+  reportResult("Test 11b: Re-importing week 2 does not double count", 990, (await buildEntryFromGroup(afterReimport, null, NO_DB)).net_settlement);
+
+  // =========================================================================
+  // TEST 12: Summary separates estimated entries from exact Daraz figures
+  // =========================================================================
+  const split = buildSummary([
+    { order_line_id: "a", entry_type: "order", source: "statement_file", net_settlement: 725.61 },
+    { order_line_id: "b", entry_type: "order", source: "store_order_sync", net_settlement: 600 }
+  ]);
+  reportResult("Test 12a: Exact net settlement", 725.61, split.exact_net_settlement);
+  reportResult("Test 12b: Estimated entry count", 1, split.estimated_entries);
 
   // =========================================================================
   // SUMMARY

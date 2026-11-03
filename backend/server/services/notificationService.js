@@ -1,9 +1,8 @@
 ﻿const DeviceToken = require("../models/DeviceToken");
-const CentralOrder = require("../models/CentralOrder");
-const CentralInventory = require("../models/CentralInventory");
+const CentralOrderItem = require("../models/CentralOrderItem");
 const Product = require("../models/Product");
 
-// In-memory alert log history for instant access in Flutter mobile app
+// ponytail: in-memory alert history, lost on restart; persist to a model if a client starts reading /notifications/history
 const recentAlerts = [];
 
 class NotificationService {
@@ -53,47 +52,50 @@ class NotificationService {
 
   async runScrapRiskAudit() {
     const now = Date.now();
-    const SIX_DAYS_MS = 6 * 24 * 60 * 60 * 1000;
-    const FOUR_DAYS_MS = 4 * 24 * 60 * 60 * 1000;
+    const TWO_DAYS_MS = 2 * 24 * 60 * 60 * 1000;
 
-    // Find return/failed orders created in last 7 days that are not marked collected
-    const pendingOrders = await CentralOrder.find({
-      classification: { $in: ["customer_return", "failed_delivery"] },
-      collected_at: null
-    }).limit(100);
+    // Return / failed-delivery parcels waiting at the hub whose collection deadline is within 2 days (or passed)
+    const pendingItems = await CentralOrderItem.find({
+      parcel_type: { $in: ["return", "failed_delivery"] },
+      collection_action_required: true,
+      collection_deadline_at: { $ne: null, $lte: new Date(now + TWO_DAYS_MS) }
+    })
+      .populate("order_id", "order_number external_order_id")
+      .populate("store_id", "name")
+      .sort({ collection_deadline_at: 1 })
+      .limit(100)
+      .lean();
 
     const alertsGenerated = [];
 
-    for (const order of pendingOrders) {
-      const orderDate = new Date(order.order_date || order.createdAt).getTime();
-      const elapsed = now - orderDate;
+    for (const item of pendingItems) {
+      const remainingHours = Math.round((new Date(item.collection_deadline_at).getTime() - now) / (1000 * 60 * 60));
+      const orderNumber = item.order_id?.order_number || item.order_id?.external_order_id || "";
+      const title = `🚨 Urgent: Scrap Warning (Order #${orderNumber})`;
+      const body = remainingHours > 0
+        ? `Parcel for "${item.display_title || item.product_name || "Daraz Item"}" is at risk of being scrapped in ~${remainingHours}h. Collect at ${item.hub_name || "the hub"} immediately!`
+        : `Parcel for "${item.display_title || item.product_name || "Daraz Item"}" is past its collection deadline at ${item.hub_name || "the hub"}.`;
 
-      if (elapsed >= FOUR_DAYS_MS && elapsed <= SIX_DAYS_MS + 24 * 3600 * 1000) {
-        const remainingHours = Math.max(0, Math.round((SIX_DAYS_MS - elapsed) / (1000 * 60 * 60)));
-        const title = `🚨 Urgent: 6-Day Scrap Warning (Order #${order.order_number || order.external_order_id})`;
-        const body = `Parcel for "${order.product_title || 'Daraz Item'}" is at risk of being scrapped in ~${remainingHours}h. Collect at hub immediately!`;
+      const alert = await this.recordAlert({
+        type: "scrap_warning",
+        title,
+        body,
+        data: {
+          order_item_id: item._id.toString(),
+          order_number: orderNumber,
+          store_name: item.store_id?.name || "",
+          remaining_hours: Math.max(0, remainingHours)
+        }
+      });
 
-        const alert = await this.recordAlert({
-          type: "scrap_warning",
-          title,
-          body,
-          data: {
-            order_id: order._id.toString(),
-            order_number: order.order_number,
-            store_name: order.store_name,
-            remaining_hours: remainingHours
-          }
-        });
-
-        alertsGenerated.push(alert);
-      }
+      alertsGenerated.push(alert);
     }
 
     return alertsGenerated;
   }
 
   async runLowStockAudit() {
-    const products = await Product.find({ is_active: true });
+    const products = await Product.find({ is_active: { $ne: false } });
     const alertsGenerated = [];
 
     for (const prod of products) {

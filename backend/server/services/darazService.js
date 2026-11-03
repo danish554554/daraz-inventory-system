@@ -487,7 +487,7 @@ async function persistTokenFromPayload({
     {
       store_id: store._id,
       app_key: getRequiredEnv("DARAZ_APP_KEY"),
-      app_secret: getRequiredEnv("DARAZ_APP_SECRET"),
+      app_secret: "",
       redirect_uri: getOauthRedirectUri(),
       api_region: safeString(normalized.country_code || store.country).toLowerCase(),
       seller_account_name: safeString(normalized.account),
@@ -711,7 +711,6 @@ async function createOauthConnectUrl(storeId, options = {}) {
   }
 
   const appKey = getRequiredEnv("DARAZ_APP_KEY");
-  const appSecret = getRequiredEnv("DARAZ_APP_SECRET");
   const redirectUri = getOauthRedirectUri();
   const authorizeBase = countryToAuthorizeBase(store.country);
   const clientRedirectUri = options.clientRedirectUri
@@ -729,7 +728,7 @@ async function createOauthConnectUrl(storeId, options = {}) {
     {
       store_id: store._id,
       app_key: appKey,
-      app_secret: appSecret,
+      app_secret: "",
       redirect_uri: redirectUri,
       api_region: safeString(store.country).toLowerCase(),
       auth_state: state,

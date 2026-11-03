@@ -68,6 +68,8 @@ function parseDarazFileToRows(bufferOrText) {
     if (
       lower === "order line id" ||
       lower === "order item id" ||
+      lower === "order item no" ||
+      lower === "order item no." ||
       lower === "order line no" ||
       lower === "item id" ||
       lower === "order line" ||
@@ -105,8 +107,20 @@ function parseDarazFileToRows(bufferOrText) {
     ) {
       return "Amount(Include Tax)";
     }
-    if (lower === "vat amount" || lower === "vat") {
+    if (lower === "vat amount" || lower === "vat" || lower === "vat in amount") {
       return "VAT Amount";
+    }
+    if (lower === "transaction number" || lower === "transaction no" || lower === "transaction no.") {
+      return "Transaction Number";
+    }
+    if (lower === "statement") {
+      return "Statement Number";
+    }
+    if (lower === "paid status") {
+      return "Release Status";
+    }
+    if (lower === "order item status") {
+      return "Order Status";
     }
     if (lower === "wht amount" || lower === "wht") {
       return "WHT Amount";
@@ -244,56 +258,28 @@ const DARAZ_CATEGORY_RULES = {
   }
 };
 
+// Whole-word keyword matching (optional plural) so "pan" does not match "panel" or "Japan"
+function keywordRegex(words) {
+  return new RegExp(`\\b(?:${words.join("|")})(?:e?s)?\\b`, "i");
+}
+
+const CATEGORY_KEYWORDS = [
+  [keywordRegex(["fryer", "pot", "pan", "kitchen", "cookware", "kettle", "blender", "cooker", "utensil", "chopper"]), "cookware"],
+  [keywordRegex(["hair", "remover", "shaver", "callus", "trimmer", "beauty", "derma", "serum", "cream", "epilator"]), "beauty"],
+  [keywordRegex(["headphone", "earphone", "earbud", "charger", "cable", "adapter", "speaker", "smart watch", "watch"]), "electronics"]
+];
+
 function resolveCategoryRule(titleText = "") {
-  const text = (titleText || "").toLowerCase();
-  if (
-    text.includes("fryer") ||
-    text.includes("pot") ||
-    text.includes("pan") ||
-    text.includes("kitchen") ||
-    text.includes("cookware") ||
-    text.includes("kettle") ||
-    text.includes("blender") ||
-    text.includes("cooker") ||
-    text.includes("utensil") ||
-    text.includes("chopper")
-  ) {
-    return DARAZ_CATEGORY_RULES.cookware;
-  }
-  if (
-    text.includes("hair") ||
-    text.includes("remover") ||
-    text.includes("shaver") ||
-    text.includes("callus") ||
-    text.includes("trimmer") ||
-    text.includes("beauty") ||
-    text.includes("derma") ||
-    text.includes("serum") ||
-    text.includes("cream") ||
-    text.includes("epilator")
-  ) {
-    return DARAZ_CATEGORY_RULES.beauty;
-  }
-  if (
-    text.includes("headphone") ||
-    text.includes("earphone") ||
-    text.includes("earbuds") ||
-    text.includes("charger") ||
-    text.includes("cable") ||
-    text.includes("adapter") ||
-    text.includes("speaker") ||
-    text.includes("smart watch") ||
-    text.includes("watch")
-  ) {
-    return DARAZ_CATEGORY_RULES.electronics;
-  }
-  return DARAZ_CATEGORY_RULES.default;
+  const text = titleText || "";
+  const match = CATEGORY_KEYWORDS.find(([regex]) => regex.test(text));
+  return DARAZ_CATEGORY_RULES[match ? match[1] : "default"];
 }
 
 // Store Free Shipping Max (FSM) Enrollment Determination
 function isStoreEnrolledInFSM(store = null, storeName = "", storeCode = "") {
-  if (store?.fsm_enrolled !== undefined) return Boolean(store.fsm_enrolled);
-  if (store?.free_shipping_max !== undefined) return Boolean(store.free_shipping_max);
+  // Explicit Store.fsm_enrolled wins; the name heuristic below is only a fallback for unset stores
+  if (store?.fsm_enrolled != null) return Boolean(store.fsm_enrolled);
+  if (store?.free_shipping_max != null) return Boolean(store.free_shipping_max);
   const name = (store?.name || store?.store_name || storeName || "").toLowerCase();
   const code = (store?.code || store?.store_code || storeCode || "").toLowerCase();
   if (name.includes("tk") || name.includes("dkart") || name.includes("d-kart") || code.includes("tk") || code.includes("dkart")) {
@@ -383,6 +369,39 @@ function groupRowsByOrder(rows) {
     grouped[key].push(row);
   }
   return Object.values(grouped);
+}
+
+function entryLineId(first = {}) {
+  const orderNum = (first["Order Number"] || first["Order No"] || first["Order ID"] || "").toString().trim();
+  const rawLineId = (first["Order Line ID"] || first["Order Item ID"] || first["Item ID"] || "").toString().trim();
+  return rawLineId || `${orderNum || "adj"}_${first["Seller SKU"] || first["Fee Name"] || "line"}`;
+}
+
+// Stable identity for one Daraz statement line. Daraz's Transaction Number when present;
+// otherwise statement + date + fee + amount, plus an occurrence index so two genuinely identical
+// lines in one batch both survive while re-importing the same batch is a no-op.
+function tagRowFingerprints(rows = []) {
+  const counts = new Map();
+  return rows.map((row) => {
+    const txn = String(row["Transaction Number"] || "").trim();
+    const base = txn
+      ? `txn:${txn}`
+      : [row["Statement Number"], row["Transaction Date"], row["Fee Name"], toNumber(row["Amount(Include Tax)"])]
+          .map((value) => String(value ?? "").trim().toLowerCase())
+          .join("|");
+    const n = (counts.get(base) || 0) + 1;
+    counts.set(base, n);
+    return { ...row, _fp: `${base}#${n}` };
+  });
+}
+
+// Union of previously stored statement lines and newly imported ones, deduplicated by fingerprint
+function mergeStatementRows(existingRows = [], newRows = []) {
+  const merged = new Map();
+  for (const row of [...existingRows, ...newRows]) {
+    if (row?._fp && !merged.has(row._fp)) merged.set(row._fp, row);
+  }
+  return Array.from(merged.values());
 }
 
 function detectAdjustmentType(group) {
@@ -865,8 +884,7 @@ async function buildEntryFromGroup(group, defaultStore = null, preloadedCache = 
       : (adjustmentMeta.entryType === "order" ? costDetails.profit_ready : false);
 
   const orderNum = (first["Order Number"] || first["Order No"] || first["Order ID"] || "").toString().trim();
-  const rawLineId = (first["Order Line ID"] || first["Order Item ID"] || first["Item ID"] || "").toString().trim();
-  const orderLineId = rawLineId || `${orderNum || "adj"}_${first["Seller SKU"] || first["Fee Name"] || "line"}`;
+  const orderLineId = entryLineId(first);
   const shortCode = first["Short Code"] || first["Seller Short Code"] || "";
 
   return {
@@ -971,6 +989,8 @@ function buildSummary(entries = []) {
 
   let totalPenaltiesCharged = 0;
   let totalPenaltiesRefunded = 0;
+  let estimatedEntries = 0;
+  let estimatedNetSettlement = 0;
 
   for (const item of uniqueEntries) {
     grossAmount += Number(item.gross_amount) || 0;
@@ -980,6 +1000,10 @@ function buildSummary(entries = []) {
     netSettlement += Number(item.net_settlement) || 0;
     totalPenaltiesCharged += Number(item.penalties) || 0;
     totalPenaltiesRefunded += Number(item.penalties_refunded) || 0;
+    if (item.source === "store_order_sync") {
+      estimatedEntries += 1;
+      estimatedNetSettlement += Number(item.net_settlement) || 0;
+    }
 
     if (item.entry_type === "adjustment") {
       totalAdjustments += 1;
@@ -1017,7 +1041,11 @@ function buildSummary(entries = []) {
     final_profit_after_adjustments: Number(finalProfit.toFixed(2)),
     margin_percent: marginPercent,
     profit_ready_orders: profitReadyOrders,
-    pending_cost_orders: pendingCostOrders
+    pending_cost_orders: pendingCostOrders,
+    // Entries still computed from fee rules (no Daraz statement/API lines yet) - not exact
+    estimated_entries: estimatedEntries,
+    estimated_net_settlement: Number(estimatedNetSettlement.toFixed(2)),
+    exact_net_settlement: Number((netSettlement - estimatedNetSettlement).toFixed(2))
   };
 }
 
@@ -1103,103 +1131,9 @@ router.get("/periods", async (req, res) => {
   }
 });
 
-// Auto-heal outdated finance records that used deprecated rates or phantom fee deductions
-async function autoHealOutdatedFinanceEntries() {
-  try {
-    const CentralOrderItem = require("../models/CentralOrderItem");
-    const CentralOrder = require("../models/CentralOrder");
-
-    // Precedence rule: Only refresh API estimates; NEVER overwrite official statement records!
-    const estimatedEntries = await FinanceEntry.find({
-      source: "store_order_sync",
-      entry_type: "order"
-    }).limit(500);
-
-    for (const entry of estimatedEntries) {
-      let orderItem = null;
-      if (entry.order_line_id) {
-        orderItem = await CentralOrderItem.findOne({ external_order_item_id: entry.order_line_id }).lean();
-      }
-      if (!orderItem && entry.order_number) {
-        orderItem = await CentralOrderItem.findOne({ order_number: entry.order_number }).lean();
-      }
-
-      let parentOrder = {};
-      if (orderItem?.order_id) {
-        parentOrder = (await CentralOrder.findById(orderItem.order_id).lean()) || {};
-      }
-
-      const itemRef = orderItem || {
-        unit_price: entry.product_price || entry.gross_amount || 0,
-        quantity: entry.quantity || 1,
-        name: entry.product_name || "",
-        seller_sku: entry.seller_sku || "",
-        shipping_paid_by_buyer: entry.shipping_paid_by_buyer || 0,
-        store_name: entry.store_name || "",
-        store_code: entry.store_code || ""
-      };
-
-      const calc = calculateDarazSettlementForOrderItem(itemRef, parentOrder, entry);
-      const qty = entry.quantity > 0 ? entry.quantity : 1;
-      const costPrice = entry.cost_price || 0;
-      const totalCost = roundMoney(costPrice * qty);
-      const netProfit = entry.profit_ready && costPrice > 0 ? roundMoney(calc.netSettlement - totalCost) : null;
-
-      await FinanceEntry.updateOne(
-        { _id: entry._id },
-        {
-          $set: {
-            product_price: calc.itemGross,
-            shipping_paid_by_buyer: calc.buyerShipping,
-            shipping_fee_discount: calc.shippingFeeDiscount,
-            gross_amount: calc.grossAmount,
-            shipping_fee: calc.carrierShipping,
-            commission_fee: calc.commissionFee,
-            payment_fee: calc.paymentFee,
-            handling_fee: calc.handlingFee,
-            free_shipping_max_fee: calc.freeShippingMaxFee,
-            cofunded_voucher_fee: calc.cofundedVoucherFee,
-            coins_discount_fee: calc.coinsDiscountFee,
-            income_tax_withholding: calc.incomeTaxWithholding,
-            sales_tax_withholding: calc.salesTaxWithholding,
-            wht_amount: calc.incomeTaxWithholding,
-            vat_total: calc.salesTaxWithholding,
-            total_fees: calc.totalFees,
-            total_taxes: calc.totalTaxes,
-            total_deductions: calc.totalDeductions,
-            net_settlement: calc.netSettlement,
-            total_cost: totalCost,
-            net_profit: netProfit,
-            matched_by: "store_order_sync",
-            source: "store_order_sync",
-            is_estimate: true,
-            fee_breakdown: {
-              "Product Price Paid by Buyer": calc.itemGross,
-              ...(calc.buyerShipping > 0 ? { "Shipping Fee Paid by Buyer": calc.buyerShipping } : {}),
-              ...(calc.shippingFeeDiscount > 0 ? { "Shipping Fee Discount": calc.shippingFeeDiscount } : {}),
-              "Commission Fee": -calc.commissionFee,
-              "Payment Fee": -calc.paymentFee,
-              ...(calc.carrierShipping > 0 ? { "Shipping Fee": -calc.carrierShipping } : {}),
-              ...(calc.freeShippingMaxFee > 0 ? { "Free Shipping Max Fee": -calc.freeShippingMaxFee } : {}),
-              ...(calc.cofundedVoucherFee > 0 ? { "Co-funded Voucher Max": -calc.cofundedVoucherFee } : {}),
-              "Handling Fee": -calc.handlingFee,
-              ...(calc.coinsDiscountFee > 0 ? { "Daraz Coins Discount": -calc.coinsDiscountFee } : {}),
-              "Income Tax Withholding": -calc.incomeTaxWithholding,
-              ...(calc.salesTaxWithholding > 0 ? { "Sales Tax Withholding": -calc.salesTaxWithholding } : {})
-            }
-          }
-        }
-      );
-    }
-  } catch (err) {
-    console.warn("[autoHealOutdatedFinanceEntries] Notice:", err.message);
-  }
-}
-
 // 2. Finance Summary
 router.get("/summary", async (req, res) => {
   try {
-    await autoHealOutdatedFinanceEntries();
     const { statement_period, store_id, search } = req.query;
     const query = {};
 
@@ -1220,7 +1154,7 @@ router.get("/summary", async (req, res) => {
       ];
     }
 
-    const entries = await FinanceEntry.find(query).lean();
+    const entries = await FinanceEntry.find(query).select("-raw_rows -fee_breakdown").lean();
     const summary = buildSummary(entries);
     res.json(summary);
   } catch (error) {
@@ -1231,7 +1165,6 @@ router.get("/summary", async (req, res) => {
 // 3. Finance Entries List
 router.get("/", async (req, res) => {
   try {
-    await autoHealOutdatedFinanceEntries();
     const { statement_period, store_id, search, entry_type, profit_ready, limit = 500 } = req.query;
     const query = {};
 
@@ -1264,6 +1197,7 @@ router.get("/", async (req, res) => {
     }
 
     const entries = await FinanceEntry.find(query)
+      .select("-raw_rows")
       .populate("store_id", "name code")
       .sort({ createdAt: -1 })
       .limit(Number(limit) || 500)
@@ -1327,11 +1261,20 @@ router.post("/import-csv", async (req, res) => {
     const productMap = new Map(productList.map((p) => [String(p._id), p]));
     const preloadedCache = { inventoryList, productList, skuMapList, productMap };
 
-    const groupedRows = groupRowsByOrder(rows);
+    const groupedRows = groupRowsByOrder(rows).map(tagRowFingerprints);
     const preparedEntries = [];
 
+    // Lines for one order can arrive across several weekly statements: merge with lines already imported
+    const lineIds = groupedRows.map((group) => entryLineId(group[0]));
+    const existingFileEntries = await FinanceEntry.find({ order_line_id: { $in: lineIds }, source: "statement_file" })
+      .select("order_line_id raw_rows")
+      .lean();
+    const existingRowsByLine = new Map(existingFileEntries.map((item) => [item.order_line_id, item.raw_rows || []]));
+
     for (const group of groupedRows) {
-      const entry = await buildEntryFromGroup(group, defaultStore, preloadedCache);
+      const mergedRows = mergeStatementRows(existingRowsByLine.get(entryLineId(group[0])), group);
+      const entry = await buildEntryFromGroup(mergedRows, defaultStore, preloadedCache);
+      entry.raw_rows = mergedRows;
       preparedEntries.push(entry);
     }
 
@@ -1407,6 +1350,8 @@ router.post("/set-cost", async (req, res) => {
 
     let recalculated = 0;
     for (const entry of matchingEntries) {
+      // Returned / cancelled / penalty lines went back to stock: COGS stays 0, profit = settlement
+      if (entry.is_penalty || entry.is_penalty_refund || /return|cancel|penalt/i.test(entry.order_status || "")) continue;
       const qty = entry.quantity > 0 ? entry.quantity : 1;
       const totalCost = Number((cost * qty).toFixed(2));
       const netProfit = Number((entry.net_settlement - totalCost).toFixed(2));
@@ -1587,8 +1532,10 @@ router.post("/recalculate", async (req, res) => {
     let updated = 0;
 
     for (const entry of entries) {
+      // Anything built from official Daraz lines (file or live API) is never re-estimated
       const isFileImported =
         entry.source === "statement_file" ||
+        entry.source === "live_api_transaction" ||
         entry.matched_by === "file_imported";
 
       // PRECEDENCE RULE: If imported from an official statement file, DO NOT recalculate or override official Daraz fees!
@@ -1597,9 +1544,10 @@ router.post("/recalculate", async (req, res) => {
         const qty = entry.quantity > 0 ? entry.quantity : 1;
         const costPrice = entry.cost_price || 0;
         const totalCost = roundMoney(costPrice * qty);
+        // Returns / penalties carry no COGS and already store net_profit = net_settlement; keep it
         const netProfit = entry.profit_ready && costPrice > 0
           ? roundMoney(entry.net_settlement - totalCost)
-          : (entry.order_status?.toLowerCase().includes("return") ? entry.net_settlement : null);
+          : entry.net_profit;
 
         await FinanceEntry.updateOne(
           { _id: entry._id },
@@ -1759,73 +1707,105 @@ router.post("/sync", async (req, res) => {
     for (const store of stores) {
       let storeToken = null;
       try {
-        storeToken = await ensureStoreTokenReadyForSync(store._id);
+        const tokenReady = await ensureStoreTokenReadyForSync(store._id);
+        storeToken = tokenReady?.ok ? tokenReady.token : null;
       } catch (err) {
         storeToken = await StoreToken.findOne({ store_id: store._id });
       }
 
       let storeImported = 0;
 
-      // 1. Live Daraz Open Platform Transaction Details API
+      // 1. Live Daraz Open Platform Transaction Details API (official per-line amounts, all pages)
       if (storeToken?.access_token && dateRange) {
         try {
           const startTimeStr = dateRange.startDate.toISOString().split("T")[0];
           const endTimeStr = dateRange.endDate.toISOString().split("T")[0];
-
-          const txRes = await getTransactionDetails({
-            storeToken,
-            startTime: startTimeStr,
-            endTime: endTimeStr,
-            limit: 100
-          });
-
-          if (txRes.transactions && txRes.transactions.length > 0) {
-            const grouped = {};
-            for (const tx of txRes.transactions) {
-              const orderNum = (tx.order_number || tx.orderNumber || tx.trade_order_id || "").toString().trim();
-              const lineId = (tx.order_line_id || tx.orderLineId || tx.order_item_id || orderNum || `tx_${tx.transaction_id || Date.now()}`).toString().trim();
-              if (!orderNum) continue;
-
-              const key = `${orderNum}__${lineId}`;
-              if (!grouped[key]) grouped[key] = [];
-
-              grouped[key].push({
-                "Statement Period": period,
-                "Statement Number": tx.statement_number || tx.statementNumber || `STMT-${store.code || store.name}-${period.replace(/\s+/g, '_')}`,
-                "Order Number": orderNum,
-                "Order Line ID": lineId,
-                "Seller SKU": tx.seller_sku || tx.sellerSku || "",
-                "Lazada SKU": tx.lazada_sku || tx.lazadaSku || "",
-                "Product Name": tx.product_name || tx.productName || tx.item_name || "",
-                "Fee Name": tx.fee_name || tx.feeName || tx.transaction_type || "",
-                "Amount(Include Tax)": tx.amount || 0,
-                "VAT Amount": tx.vat_amount || tx.vatAmount || 0,
-                "WHT Amount": tx.wht_amount || tx.whtAmount || 0,
-                "Comment": tx.comment || tx.reason || "",
-                "Quantity": tx.quantity || 1
-              });
+          const pick = (tx, keys) => {
+            for (const key of keys) {
+              if (tx[key] !== undefined && tx[key] !== null && String(tx[key]).trim() !== "") return tx[key];
             }
+            return "";
+          };
 
-            const entries = [];
-            for (const group of Object.values(grouped)) {
-              const entry = await buildEntryFromGroup(group, store, preloadedCache);
-              entry.statement_period = period;
-              entries.push(entry);
-              if (entry.entry_type === "order") totalImportedOrders++;
-              else totalImportedAdjustments++;
-              storeImported++;
-            }
+          const transactions = [];
+          const pageSize = 500;
+          // ponytail: 40-page cap (20k lines/week/store); raise if a store exceeds it
+          for (let page = 0, offset = 0; page < 40; page += 1, offset += pageSize) {
+            const txRes = await getTransactionDetails({
+              storeToken,
+              startTime: startTimeStr,
+              endTime: endTimeStr,
+              offset,
+              limit: pageSize
+            });
+            transactions.push(...(txRes.transactions || []));
+            if (!txRes.hasMore) break;
+          }
 
-            if (entries.length > 0) {
-              const bulkOps = entries.map((entry) => ({
-                updateOne: {
-                  filter: { order_line_id: entry.order_line_id },
-                  update: { $set: entry },
-                  upsert: true
-                }
-              }));
-              await FinanceEntry.bulkWrite(bulkOps, { ordered: false });
-            }
+          const grouped = {};
+          for (const tx of transactions) {
+            const orderNum = String(pick(tx, ["order_no", "order_number", "orderNumber", "trade_order_id"])).trim();
+            if (!orderNum) continue;
+            const lineId = String(pick(tx, ["orderItem_no", "order_item_no", "order_line_id", "orderLineId", "order_item_id"]) || orderNum).trim();
+
+            const key = `${orderNum}__${lineId}`;
+            if (!grouped[key]) grouped[key] = [];
+
+            grouped[key].push({
+              "Statement Period": period,
+              "Statement Number": pick(tx, ["statement", "statement_number", "statementNumber"]) || `STMT-${store.code || store.name}-${period.replace(/\s+/g, "_")}`,
+              "Transaction Number": pick(tx, ["transaction_number", "transactionNumber", "transaction_id"]),
+              "Transaction Date": pick(tx, ["transaction_date", "transactionDate"]),
+              "Release Status": pick(tx, ["paid_status", "paidStatus"]),
+              "Order Status": pick(tx, ["orderItem_status", "order_item_status"]),
+              "Order Number": orderNum,
+              "Order Line ID": lineId,
+              "Seller SKU": pick(tx, ["seller_sku", "sellerSku"]),
+              "Lazada SKU": pick(tx, ["lazada_sku", "lazadaSku"]),
+              "Product Name": pick(tx, ["details", "product_name", "productName", "item_name"]),
+              "Fee Name": pick(tx, ["fee_name", "feeName", "transaction_type"]),
+              "Amount(Include Tax)": pick(tx, ["amount"]) || 0,
+              "VAT Amount": pick(tx, ["VAT_in_amount", "vat_in_amount", "vat_amount", "vatAmount"]) || 0,
+              "WHT Amount": pick(tx, ["WHT_amount", "wht_amount", "whtAmount"]) || 0,
+              "Comment": pick(tx, ["comment", "reason"]),
+              "Quantity": pick(tx, ["quantity"]) || 1
+            });
+          }
+
+          const groups = Object.values(grouped).map(tagRowFingerprints);
+          const lineIds = groups.map((group) => entryLineId(group[0]));
+          const existing = await FinanceEntry.find({ order_line_id: { $in: lineIds } })
+            .select("order_line_id source raw_rows")
+            .lean();
+          const existingByLine = new Map(existing.map((item) => [item.order_line_id, item]));
+
+          const entries = [];
+          for (const group of groups) {
+            const lineId = entryLineId(group[0]);
+            const prior = existingByLine.get(lineId);
+            // An imported statement file is authoritative for its lines; never mix API lines into it
+            if (prior?.source === "statement_file") continue;
+
+            const mergedRows = mergeStatementRows(prior?.source === "live_api_transaction" ? prior.raw_rows : [], group);
+            const entry = await buildEntryFromGroup(mergedRows, store, preloadedCache);
+            entry.statement_period = period;
+            entry.source = "live_api_transaction";
+            entry.raw_rows = mergedRows;
+            entries.push(entry);
+            if (entry.entry_type === "order") totalImportedOrders++;
+            else totalImportedAdjustments++;
+            storeImported++;
+          }
+
+          if (entries.length > 0) {
+            const bulkOps = entries.map((entry) => ({
+              updateOne: {
+                filter: { order_line_id: entry.order_line_id },
+                update: { $set: entry },
+                upsert: true
+              }
+            }));
+            await FinanceEntry.bulkWrite(bulkOps, { ordered: false });
           }
         } catch (apiErr) {
           console.warn(`[FinanceSync] Live transaction notice for ${store.name}: ${apiErr.message}`);
@@ -1867,11 +1847,10 @@ router.post("/sync", async (req, res) => {
               const itemStatus = (item.status || parentOrder.status || "").toLowerCase();
               if (!itemStatus.includes("delivered") && !itemStatus.includes("return")) continue;
 
-              // Skip only if a real CSV/Excel statement file has already been uploaded for this order
+              // Skip if official Daraz lines (statement file or live Finance API) already exist for this order
               const existingCsvEntry = await FinanceEntry.findOne({
                 order_number: orderNum,
-                statement_number: { $not: /^STMT-/i },
-                source: "statement_file"
+                source: { $in: ["statement_file", "live_api_transaction"] }
               }).lean();
               if (existingCsvEntry) continue;
 
@@ -1994,3 +1973,8 @@ module.exports.isStoreEnrolledInFSM = isStoreEnrolledInFSM;
 module.exports.buildEntryFromGroup = buildEntryFromGroup;
 module.exports.calculateDarazSettlementForOrderItem = calculateDarazSettlementForOrderItem;
 module.exports.DARAZ_CATEGORY_RULES = DARAZ_CATEGORY_RULES;
+module.exports.parseDarazFileToRows = parseDarazFileToRows;
+module.exports.tagRowFingerprints = tagRowFingerprints;
+module.exports.mergeStatementRows = mergeStatementRows;
+module.exports.groupRowsByOrder = groupRowsByOrder;
+module.exports.buildSummary = buildSummary;

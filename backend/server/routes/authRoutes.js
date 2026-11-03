@@ -16,10 +16,8 @@ const WINDOW_MS = 15 * 60 * 1000;
 const MAX_ATTEMPTS = 7;
 
 function getClientKey(req, username) {
-  const forwarded = req.headers['x-forwarded-for'];
-  const ip = Array.isArray(forwarded)
-    ? forwarded[0]
-    : String(forwarded || req.ip || req.socket?.remoteAddress || 'unknown').split(',')[0].trim();
+  // req.ip honours the `trust proxy` setting, so a client cannot spoof X-Forwarded-For to dodge the limit
+  const ip = req.ip || req.socket?.remoteAddress || 'unknown';
 
   return `${ip}:${normalize(username).toLowerCase()}`;
 }

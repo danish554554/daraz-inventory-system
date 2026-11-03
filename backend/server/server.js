@@ -67,6 +67,10 @@ function startupChecks() {
     warnings.push('ADMIN_PASSWORD_HASH is not configured. Use a password hash instead of storing ADMIN_PASSWORD in plain text.');
   }
 
+  if (getAllowedOrigins().length === 0) {
+    warnings.push('CORS_ALLOWED_ORIGINS is not set. Browser requests from any origin are accepted (API still requires a bearer token).');
+  }
+
   if (!security.plainPasswordConfigured && !security.passwordHashConfigured) {
     warnings.push('No admin password is configured. Login will fail until ADMIN_PASSWORD or ADMIN_PASSWORD_HASH is set.');
   }
