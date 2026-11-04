@@ -395,6 +395,33 @@ async function runTests() {
   reportResult("Test 12a: Exact net settlement", 725.61, split.exact_net_settlement);
   reportResult("Test 12b: Estimated entry count", 1, split.estimated_entries);
 
+    // =========================================================================
+  // TEST 13: Bug Fix Verification
+  // 13a: Safe handling of undefined/empty group in buildEntryFromGroup (no crash)
+  // 13b: Single-item order with blank Order Line ID on shipping fee associates to the item
+  // 13c: Multi-item order with order-level shipping fee prorates and conserves total
+  // =========================================================================
+  const emptyRes = await buildEntryFromGroup(undefined, null, NO_DB);
+  reportResult("Test 13a: Null/undefined group returns null without throwing", 1, emptyRes === null ? 1 : 0);
+
+  const singleItemOrderRows = [
+    { "Order Number": "555", "Order Line ID": "555-1", "Fee Name": "Product Price Paid by Buyer", "Amount(Include Tax)": "1000" },
+    { "Order Number": "555", "Order Line ID": "", "Fee Name": "Shipping Fee", "Amount(Include Tax)": "-150" }
+  ];
+  const singleItemGroups = groupRowsByOrder(singleItemOrderRows);
+  reportResult("Test 13b: Single-item order with blank shipping Line ID grouped into 1 item", 1, singleItemGroups.length);
+
+  const multiItemWithOrderLevelRows = [
+    { "Order Number": "777", "Order Line ID": "777-1", "Fee Name": "Product Price Paid by Buyer", "Amount(Include Tax)": "1000" },
+    { "Order Number": "777", "Order Line ID": "777-2", "Fee Name": "Product Price Paid by Buyer", "Amount(Include Tax)": "1000" },
+    { "Order Number": "777", "Order Line ID": "", "Fee Name": "Shipping Fee", "Amount(Include Tax)": "-200" }
+  ];
+  const multiGroups = groupRowsByOrder(multiItemWithOrderLevelRows);
+  reportResult("Test 13c: Multi-item order with order-level shipping split into 2 items", 2, multiGroups.length);
+  const totalMultiPayout = (await buildEntryFromGroup(multiGroups[0], null, NO_DB)).net_settlement +
+                           (await buildEntryFromGroup(multiGroups[1], null, NO_DB)).net_settlement;
+  reportResult("Test 13d: Multi-item prorated sum matches exact net total (PKR 1,800)", 1800, totalMultiPayout);
+
   // =========================================================================
   // SUMMARY
   // =========================================================================

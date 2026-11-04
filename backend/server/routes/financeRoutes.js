@@ -352,23 +352,139 @@ function extractQuantity(first = {}) {
 }
 
 function groupRowsByOrder(rows) {
-  const grouped = {};
+  if (!Array.isArray(rows) || rows.length === 0) return [];
+
+  const orders = new Map();
+  const adjustments = [];
+
   for (const row of rows) {
     const orderNumber = (row["Order Number"] || row["Order No"] || row["Order ID"] || "").toString().trim();
     const orderLineId = (row["Order Line ID"] || row["Order Item ID"] || row["Item ID"] || "").toString().trim();
-    if (!orderNumber && !orderLineId) continue;
 
-    // Group all transaction rows by order_line_id when present; else by order_number
-    const key = orderLineId
-      ? `${orderNumber || "no_order"}__${orderLineId}`
-      : `${orderNumber}__main`;
-
-    if (!grouped[key]) {
-      grouped[key] = [];
+    if (!orderNumber && !orderLineId) {
+      const adjKey = (row["Fee Name"] || row["Transaction Type"] || "adjustment").toString().trim();
+      const statementNum = (row["Statement Number"] || row["Statement"] || "no_stmt").toString().trim();
+      adjustments.push({ ...row, _adjKey: `${statementNum}__${adjKey}` });
+      continue;
     }
-    grouped[key].push(row);
+
+    const orderKey = orderNumber || `no_order_${orderLineId}`;
+    if (!orders.has(orderKey)) {
+      orders.set(orderKey, []);
+    }
+    orders.get(orderKey).push(row);
   }
-  return Object.values(grouped);
+
+  const resultGroups = [];
+
+  if (adjustments.length > 0) {
+    const adjMap = new Map();
+    for (const row of adjustments) {
+      const key = row._adjKey;
+      delete row._adjKey;
+      if (!adjMap.has(key)) adjMap.set(key, []);
+      adjMap.get(key).push(row);
+    }
+    for (const group of adjMap.values()) {
+      resultGroups.push(group);
+    }
+  }
+
+  for (const [orderKey, orderRows] of orders.entries()) {
+    const lineIds = new Set();
+    for (const row of orderRows) {
+      const lineId = (row["Order Line ID"] || row["Order Item ID"] || row["Item ID"] || "").toString().trim();
+      if (lineId) lineIds.add(lineId);
+    }
+
+    if (lineIds.size <= 1) {
+      const targetLineId = lineIds.size === 1 ? Array.from(lineIds)[0] : "";
+      if (targetLineId) {
+        for (const row of orderRows) {
+          if (!row["Order Line ID"]) {
+            row["Order Line ID"] = targetLineId;
+          }
+        }
+      }
+      resultGroups.push(orderRows);
+    } else {
+      const itemGroups = new Map();
+      const orderLevelRows = [];
+
+      for (const lineId of lineIds) {
+        itemGroups.set(lineId, []);
+      }
+
+      for (const row of orderRows) {
+        const lineId = (row["Order Line ID"] || row["Order Item ID"] || row["Item ID"] || "").toString().trim();
+        if (lineId && itemGroups.has(lineId)) {
+          itemGroups.get(lineId).push(row);
+        } else {
+          orderLevelRows.push(row);
+        }
+      }
+
+      if (orderLevelRows.length > 0) {
+        const lineIdsArray = Array.from(lineIds);
+        const itemPrices = lineIdsArray.map((lid) => {
+          const rList = itemGroups.get(lid) || [];
+          let sum = 0;
+          for (const r of rList) {
+            const fee = normalizeFeeName(r["Fee Name"] || r["Transaction Type"] || "");
+            if (fee.includes("product price") || fee.includes("item price")) {
+              sum += Math.abs(toNumber(r["Amount(Include Tax)"] || r["Amount"] || 0));
+            }
+          }
+          return sum;
+        });
+
+        const totalItemPrice = itemPrices.reduce((a, b) => a + b, 0);
+
+        for (const oRow of orderLevelRows) {
+          const totalAmount = toNumber(oRow["Amount(Include Tax)"] || oRow["Amount"] || 0);
+          const totalVat = toNumber(oRow["VAT Amount"] || oRow["VAT"] || 0);
+          const totalWht = toNumber(oRow["WHT Amount"] || oRow["WHT"] || 0);
+
+          let allocatedAmount = 0;
+          let allocatedVat = 0;
+          let allocatedWht = 0;
+
+          for (let i = 0; i < lineIdsArray.length; i++) {
+            const isLast = i === lineIdsArray.length - 1;
+            const ratio = totalItemPrice > 0
+              ? itemPrices[i] / totalItemPrice
+              : 1 / lineIdsArray.length;
+
+            const partAmount = isLast ? roundMoney(totalAmount - allocatedAmount) : roundMoney(totalAmount * ratio);
+            const partVat = isLast ? roundMoney(totalVat - allocatedVat) : roundMoney(totalVat * ratio);
+            const partWht = isLast ? roundMoney(totalWht - allocatedWht) : roundMoney(totalWht * ratio);
+
+            allocatedAmount += partAmount;
+            allocatedVat += partVat;
+            allocatedWht += partWht;
+
+            const clonedRow = {
+              ...oRow,
+              "Order Line ID": lineIdsArray[i],
+              "Amount(Include Tax)": partAmount,
+              "Amount": partAmount,
+              "VAT Amount": partVat,
+              "WHT Amount": partWht
+            };
+            itemGroups.get(lineIdsArray[i]).push(clonedRow);
+          }
+        }
+      }
+
+      for (const group of itemGroups.values()) {
+        if (group.length > 0) {
+          resultGroups.push(group);
+        }
+      }
+    }
+  }
+
+  return resultGroups;
 }
 
 function entryLineId(first = {}) {
@@ -624,7 +740,8 @@ async function findCostDetails(group, storeId = null, preloadedCache = null) {
   };
 }
 
-async function buildEntryFromGroup(group, defaultStore = null, preloadedCache = null) {
+async function buildEntryFromGroup(group = [], defaultStore = null, preloadedCache = null) {
+  if (!Array.isArray(group) || group.length === 0) return null;
   const first = group[0] || {};
   const adjustmentMeta = detectAdjustmentType(group);
 
@@ -1163,7 +1280,90 @@ router.get("/summary", async (req, res) => {
 });
 
 // 3. Finance Entries List
+
+// Automatic generic healing of outdated estimated finance entries
+let _autoHealRun = false;
+async function autoHealFinanceEntries(force = false) {
+  if (_autoHealRun && !force) return;
+  _autoHealRun = true;
+
+  try {
+    const CentralOrderItem = require("../models/CentralOrderItem");
+    const CentralOrder = require("../models/CentralOrder");
+
+    // Heal any API estimated entries whose calculations do not match current engine
+    const estimatedEntries = await FinanceEntry.find({ source: "store_order_sync" });
+    if (estimatedEntries.length > 0) {
+      const orderNums = [...new Set(estimatedEntries.map((e) => e.order_number).filter(Boolean))];
+      const lineIds = [...new Set(estimatedEntries.map((e) => e.order_line_id).filter(Boolean))];
+
+      const [itemsByLine, ordersByNum] = await Promise.all([
+        CentralOrderItem.find({ external_order_item_id: { $in: lineIds } }).lean(),
+        CentralOrder.find({ order_number: { $in: orderNums } }).lean()
+      ]);
+
+      const itemMap = new Map(itemsByLine.map((i) => [i.external_order_item_id, i]));
+      const orderMap = new Map(ordersByNum.map((o) => [o.order_number, o]));
+
+      for (const entry of estimatedEntries) {
+        const item = itemMap.get(entry.order_line_id) || {
+          unit_price: entry.product_price || 0,
+          quantity: entry.quantity || 1,
+          name: entry.product_name,
+          seller_sku: entry.seller_sku,
+          store_name: entry.store_name,
+          store_code: entry.store_code
+        };
+        const parentOrder = orderMap.get(entry.order_number) || {};
+        const calc = calculateDarazSettlementForOrderItem(item, parentOrder, entry);
+
+        if (Math.abs((entry.net_settlement || 0) - calc.netSettlement) > 0.05) {
+          const qty = entry.quantity > 0 ? entry.quantity : 1;
+          const costPrice = entry.cost_price || 0;
+          const totalCost = roundMoney(costPrice * qty);
+          const netProfit = entry.profit_ready && costPrice > 0
+            ? roundMoney(calc.netSettlement - totalCost)
+            : entry.net_profit;
+
+          await FinanceEntry.updateOne(
+            { _id: entry._id },
+            {
+              $set: {
+                product_price: calc.itemGross,
+                shipping_paid_by_buyer: calc.buyerShipping,
+                shipping_fee_discount: calc.shippingFeeDiscount,
+                gross_amount: calc.grossAmount,
+                commission_fee: calc.commissionFee,
+                payment_fee: calc.paymentFee,
+                handling_fee: calc.handlingFee,
+                free_shipping_max_fee: calc.freeShippingMaxFee,
+                cofunded_voucher_fee: calc.cofundedVoucherFee,
+                coins_discount_fee: calc.coinsDiscountFee,
+                shipping_fee: calc.carrierShipping,
+                income_tax_withholding: calc.incomeTaxWithholding,
+                sales_tax_withholding: calc.salesTaxWithholding,
+                wht_amount: calc.incomeTaxWithholding,
+                vat_total: calc.salesTaxWithholding,
+                total_fees: calc.totalFees,
+                total_taxes: calc.totalTaxes,
+                total_deductions: calc.totalDeductions,
+                net_settlement: calc.netSettlement,
+                total_cost: totalCost,
+                net_profit: netProfit,
+                is_estimate: true
+              }
+            }
+          );
+        }
+      }
+    }
+  } catch (err) {
+    // Non-blocking auto-heal notice
+  }
+}
+
 router.get("/", async (req, res) => {
+    if (!_autoHealRun) { await autoHealFinanceEntries(); }
   try {
     const { statement_period, store_id, search, entry_type, profit_ready, limit = 500 } = req.query;
     const query = {};
@@ -1274,8 +1474,10 @@ router.post("/import-csv", async (req, res) => {
     for (const group of groupedRows) {
       const mergedRows = mergeStatementRows(existingRowsByLine.get(entryLineId(group[0])), group);
       const entry = await buildEntryFromGroup(mergedRows, defaultStore, preloadedCache);
-      entry.raw_rows = mergedRows;
-      preparedEntries.push(entry);
+      if (entry) {
+        entry.raw_rows = mergedRows;
+        preparedEntries.push(entry);
+      }
     }
 
     // Fast bulk write
@@ -1788,13 +1990,15 @@ router.post("/sync", async (req, res) => {
 
             const mergedRows = mergeStatementRows(prior?.source === "live_api_transaction" ? prior.raw_rows : [], group);
             const entry = await buildEntryFromGroup(mergedRows, store, preloadedCache);
-            entry.statement_period = period;
-            entry.source = "live_api_transaction";
-            entry.raw_rows = mergedRows;
-            entries.push(entry);
-            if (entry.entry_type === "order") totalImportedOrders++;
-            else totalImportedAdjustments++;
-            storeImported++;
+            if (entry) {
+              entry.statement_period = period;
+              entry.source = "live_api_transaction";
+              entry.raw_rows = mergedRows;
+              entries.push(entry);
+              if (entry.entry_type === "order") totalImportedOrders++;
+              else totalImportedAdjustments++;
+              storeImported++;
+            }
           }
 
           if (entries.length > 0) {

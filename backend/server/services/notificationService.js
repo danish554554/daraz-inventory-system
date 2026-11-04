@@ -1,8 +1,9 @@
-﻿const DeviceToken = require("../models/DeviceToken");
+const DeviceToken = require("../models/DeviceToken");
 const CentralOrderItem = require("../models/CentralOrderItem");
 const Product = require("../models/Product");
+const NotificationAlert = require("../models/NotificationAlert");
 
-// ponytail: in-memory alert history, lost on restart; persist to a model if a client starts reading /notifications/history
+// In-memory alert cache backed by NotificationAlert model in MongoDB
 const recentAlerts = [];
 
 class NotificationService {
@@ -28,13 +29,26 @@ class NotificationService {
   }
 
   async recordAlert({ type, title, body, data = {} }) {
+    let alertDoc = null;
+    try {
+      alertDoc = await NotificationAlert.create({
+        type,
+        title,
+        body,
+        data,
+        read: false
+      });
+    } catch (e) {
+      // In case MongoDB is offline or under unit tests
+    }
+
     const alertEntry = {
-      id: Date.now().toString(),
+      id: alertDoc ? alertDoc._id.toString() : Date.now().toString(),
       type, // 'scrap_warning', 'low_stock', 'order_alert', 'system'
       title,
       body,
       data,
-      created_at: new Date().toISOString(),
+      created_at: alertDoc ? alertDoc.createdAt.toISOString() : new Date().toISOString(),
       read: false
     };
 
@@ -46,7 +60,23 @@ class NotificationService {
     return alertEntry;
   }
 
-  getAlertHistory() {
+  async getAlertHistory() {
+    try {
+      const docs = await NotificationAlert.find().sort({ createdAt: -1 }).limit(50).lean();
+      if (docs && docs.length > 0) {
+        return docs.map((d) => ({
+          id: d._id.toString(),
+          type: d.type,
+          title: d.title,
+          body: d.body,
+          data: d.data,
+          created_at: d.createdAt ? d.createdAt.toISOString() : new Date().toISOString(),
+          read: Boolean(d.read)
+        }));
+      }
+    } catch (e) {
+      // Fallback to in-memory alerts
+    }
     return recentAlerts;
   }
 

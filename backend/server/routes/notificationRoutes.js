@@ -1,4 +1,4 @@
-﻿const express = require("express");
+const express = require("express");
 const router = express.Router();
 const notificationService = require("../services/notificationService");
 
@@ -16,7 +16,7 @@ router.post("/register-token", async (req, res) => {
 // Get alert & notification history
 router.get("/history", async (req, res) => {
   try {
-    const history = notificationService.getAlertHistory();
+    const history = await notificationService.getAlertHistory();
     return res.json({ success: true, alerts: history });
   } catch (error) {
     return res.status(500).json({ success: false, message: error.message });
