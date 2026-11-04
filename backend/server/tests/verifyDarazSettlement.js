@@ -423,6 +423,28 @@ async function runTests() {
   reportResult("Test 13d: Multi-item prorated sum matches exact net total (PKR 1,800)", 1800, totalMultiPayout);
 
   // =========================================================================
+  // TEST 14: Benchmark Order #251020390442696 (Seller Center Screenshot Reconciled)
+  // Product: Rechargeable Hair Removal Sh..., Store: Accessories Hub 76
+  // =========================================================================
+  const order14Rows = [
+    { "Order Number": "251020390442696", "Order Line ID": "251020390542696", "Fee Name": "Product Price Paid by Buyer", "Amount(Include Tax)": "1148.00" },
+    { "Order Number": "251020390442696", "Order Line ID": "251020390542696", "Fee Name": "Shipping Fee Paid by Buyer", "Amount(Include Tax)": "210.00" },
+    { "Order Number": "251020390442696", "Order Line ID": "251020390542696", "Fee Name": "Payment Fee", "Amount(Include Tax)": "-29.70" },
+    { "Order Number": "251020390442696", "Order Line ID": "251020390542696", "Fee Name": "Commission Fee", "Amount(Include Tax)": "-211.76" },
+    { "Order Number": "251020390442696", "Order Line ID": "251020390542696", "Fee Name": "Shipping Fee", "Amount(Include Tax)": "-241.50" },
+    { "Order Number": "251020390442696", "Order Line ID": "251020390542696", "Fee Name": "Free Shipping Max Fee", "Amount(Include Tax)": "-79.21" },
+    { "Order Number": "251020390442696", "Order Line ID": "251020390542696", "Fee Name": "Daraz Coins Discount Participation Fee", "Amount(Include Tax)": "-9.20" },
+    { "Order Number": "251020390442696", "Order Line ID": "251020390542696", "Fee Name": "Co-funded Voucher Max", "Amount(Include Tax)": "-34.44" },
+    { "Order Number": "251020390442696", "Order Line ID": "251020390542696", "Fee Name": "Income Tax Withholding", "Amount(Include Tax)": "-11.00" },
+    { "Order Number": "251020390442696", "Order Line ID": "251020390542696", "Fee Name": "Sales Tax Withholding", "Amount(Include Tax)": "-23.00" },
+    { "Order Number": "251020390442696", "Order Line ID": "251020390542696", "Fee Name": "Handling Fee", "Amount(Include Tax)": "-23.00" }
+  ];
+  const order14Entry = await buildEntryFromGroup(order14Rows, null, NO_DB);
+  reportResult("Test 14a: Daraz Seller Center Order #251020390442696 Net Payout matches exactly", 695.19, order14Entry.net_settlement, "Official Daraz payout: PKR 695.19");
+  reportResult("Test 14b: Daraz Seller Center Order #251020390442696 Gross Amount matches exactly", 1358.00, order14Entry.gross_amount);
+  reportResult("Test 14c: Daraz Seller Center Order #251020390442696 Deductions match exactly", 662.81, order14Entry.total_deductions);
+
+  // =========================================================================
   // SUMMARY
   // =========================================================================
   console.log("\n============================================================");

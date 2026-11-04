@@ -1659,8 +1659,8 @@ function calculateDarazSettlementForOrderItem(item, parentOrder = {}, store = nu
 
   if (raw.shipping_fee_discount !== undefined && Number(raw.shipping_fee_discount) > 0) {
     shippingFeeDiscount = Number(raw.shipping_fee_discount);
-  } else if (isFsm) {
-    // Under FSM, Daraz subsidizes the carrier shipping difference above seller's small net liability (~7.35 PKR)
+  } else if (isFsm && buyerShipping < 100) {
+    // Under FSM, Daraz subsidizes the carrier shipping difference when buyer receives promotional shipping (~49 PKR)
     shippingFeeDiscount = Math.max(0, roundMoney(carrierShipping - buyerShipping - 7.35));
   } else {
     shippingFeeDiscount = 0.00;
@@ -1688,7 +1688,8 @@ function calculateDarazSettlementForOrderItem(item, parentOrder = {}, store = nu
   let incomeTaxWithholding = 0.00;
   let salesTaxWithholding = 0.00;
   if (!categoryRule.whtExempt && itemGross >= 1000) {
-    incomeTaxWithholding = roundMoney(itemGross * 0.02);
+    const whtRate = raw.wht_rate !== undefined ? Number(raw.wht_rate) : (raw.is_active_filer ? 0.01 : 0.02);
+    incomeTaxWithholding = roundMoney(itemGross * whtRate);
     salesTaxWithholding = roundMoney(itemGross * 0.02);
   }
 
