@@ -445,6 +445,36 @@ async function runTests() {
   reportResult("Test 14c: Daraz Seller Center Order #251020390442696 Deductions match exactly", 662.81, order14Entry.total_deductions);
 
   // =========================================================================
+  // TEST 15: Benchmark Order #250980320408457 (Order Item ID: 250980320508457)
+  // Product: Rechargeable Body Hair Remover, Store: Accessories Hub 76
+  // Reconciles Handling Fee PKR -69.00 with blank lineId into item payout PKR 1,395.64
+  // =========================================================================
+  const order15RawRows = [
+    { "Order Number": "250980320408457", "Order Line ID": "250980320508457", "Fee Name": "Product Price Paid by Buyer", "Amount(Include Tax)": "2299.00" },
+    { "Order Number": "250980320408457", "Order Line ID": "250980320508457", "Fee Name": "Shipping Fee Paid by Buyer", "Amount(Include Tax)": "200.00" },
+    { "Order Number": "250980320408457", "Order Line ID": "250980320508457", "Fee Name": "Commission Fee", "Amount(Include Tax)": "-424.07" },
+    { "Order Number": "250980320408457", "Order Line ID": "250980320508457", "Fee Name": "Payment Fee", "Amount(Include Tax)": "-59.49" },
+    { "Order Number": "250980320408457", "Order Line ID": "250980320508457", "Fee Name": "Shipping Fee", "Amount(Include Tax)": "-230.00" },
+    { "Order Number": "250980320408457", "Order Line ID": "250980320508457", "Fee Name": "Free Shipping Max Fee", "Amount(Include Tax)": "-158.63" },
+    { "Order Number": "250980320408457", "Order Line ID": "250980320508457", "Fee Name": "Daraz Coins Discount Participation Fee", "Amount(Include Tax)": "-9.20" },
+    { "Order Number": "250980320408457", "Order Line ID": "250980320508457", "Fee Name": "Co-funded Voucher Max", "Amount(Include Tax)": "-68.97" },
+    { "Order Number": "250980320408457", "Order Line ID": "250980320508457", "Fee Name": "Income Tax Withholding", "Amount(Include Tax)": "-42.00" },
+    { "Order Number": "250980320408457", "Order Line ID": "250980320508457", "Fee Name": "Sales Tax Withholding", "Amount(Include Tax)": "-42.00" },
+    // Order-level Handling Fee from Daraz API/export with blank Order Line ID:
+    { "Order Number": "250980320408457", "Order Line ID": "", "Fee Name": "Handling Fee", "Amount(Include Tax)": "-69.00" }
+  ];
+
+  const order15Groups = groupRowsByOrder(order15RawRows);
+  reportResult("Test 15a: Order #250980320408457 groups all 11 rows into 1 item (no orphan penalty)", 1, order15Groups.length);
+
+  const order15Entry = await buildEntryFromGroup(order15Groups[0], null, NO_DB);
+  reportResult("Test 15b: Daraz Seller Center Order #250980320408457 Net Payout matches exactly (PKR 1,395.64)", 1395.64, order15Entry.net_settlement, "Official Daraz payout: PKR 1,395.64");
+  reportResult("Test 15c: Gross Sales Amount matches exactly (PKR 2,499.00)", 2499.00, order15Entry.gross_amount);
+  reportResult("Test 15d: Total Deductions match exactly (PKR 1,103.36)", 1103.36, order15Entry.total_deductions);
+  reportResult("Test 15e: Handling Fee is captured as PKR 69.00 (not lost)", 69.00, order15Entry.handling_fee);
+  reportResult("Test 15f: Not falsely classified as penalty", 0, order15Entry.penalties);
+
+  // =========================================================================
   // SUMMARY
   // =========================================================================
   console.log("\n============================================================");

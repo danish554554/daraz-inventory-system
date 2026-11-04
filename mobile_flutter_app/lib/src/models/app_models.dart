@@ -1489,8 +1489,7 @@ class FinanceEntry {
       isPenalty ||
       penalties > 0 ||
       (netSettlement < 0 &&
-          (productPrice == 0 ||
-              orderStatus.toLowerCase().contains('penalty') ||
+          (orderStatus.toLowerCase().contains('penalty') ||
               adjustmentReason.toLowerCase().contains('penalt') ||
               adjustmentReason.toLowerCase().contains('fine')));
 

@@ -942,7 +942,7 @@ async function buildEntryFromGroup(group = [], defaultStore = null, preloadedCac
 
   const isPenaltyCharged =
     penalties > 0 ||
-    (netSettlement < 0 && (productPrice === 0 || feeNamesText.includes("penalt") || feeNamesText.includes("fine") || commentText.includes("penalt")));
+    (netSettlement < 0 && (feeNamesText.includes("penalt") || feeNamesText.includes("fine") || commentText.includes("penalt")));
 
   const isPenaltyReturned =
     penaltiesRefunded > 0 ||
@@ -1350,10 +1350,115 @@ async function autoHealFinanceEntries(force = false) {
                 net_settlement: calc.netSettlement,
                 total_cost: totalCost,
                 net_profit: netProfit,
-                is_estimate: true
+                is_estimate: true,
+                fee_breakdown: {
+                  "Product Price Paid by Buyer": calc.itemGross,
+                  ...(calc.buyerShipping > 0 ? { "Shipping Fee Paid by Buyer": calc.buyerShipping } : {}),
+                  ...(calc.shippingFeeDiscount > 0 ? { "Shipping Fee Discount": calc.shippingFeeDiscount } : {}),
+                  "Commission Fee": -calc.commissionFee,
+                  "Payment Fee": -calc.paymentFee,
+                  ...(calc.carrierShipping > 0 ? { "Shipping Fee": -calc.carrierShipping } : {}),
+                  ...(calc.freeShippingMaxFee > 0 ? { "Free Shipping Max Fee": -calc.freeShippingMaxFee } : {}),
+                  ...(calc.cofundedVoucherFee > 0 ? { "Co-funded Voucher Max": -calc.cofundedVoucherFee } : {}),
+                  "Handling Fee": -calc.handlingFee,
+                  ...(calc.coinsDiscountFee > 0 ? { "Daraz Coins Discount": -calc.coinsDiscountFee } : {}),
+                  "Income Tax Withholding": -calc.incomeTaxWithholding,
+                  ...(calc.salesTaxWithholding > 0 ? { "Sales Tax Withholding": -calc.salesTaxWithholding } : {})
+                }
               }
             }
           );
+        }
+      }
+    }
+
+    // 2. Reconcile and heal orphaned order-level fees (such as Handling Fee) where product_price <= 0
+    // but a main order entry exists for the same order_number
+    const allOrderEntries = await FinanceEntry.find({
+      entry_type: "order",
+      product_price: { $gt: 0 },
+      order_number: { $exists: true, $ne: "" }
+    }).lean();
+
+    if (allOrderEntries.length > 0) {
+      const orderNums = [...new Set(allOrderEntries.map((e) => e.order_number).filter(Boolean))];
+      const orphans = await FinanceEntry.find({
+        order_number: { $in: orderNums },
+        product_price: { $lte: 0 },
+        net_settlement: { $lt: 0 }
+      }).lean();
+
+      if (orphans.length > 0) {
+        const orphansByOrder = new Map();
+        for (const orphan of orphans) {
+          if (!orphansByOrder.has(orphan.order_number)) orphansByOrder.set(orphan.order_number, []);
+          orphansByOrder.get(orphan.order_number).push(orphan);
+        }
+
+        const parentByOrder = new Map();
+        for (const parent of allOrderEntries) {
+          if (!parentByOrder.has(parent.order_number)) parentByOrder.set(parent.order_number, []);
+          parentByOrder.get(parent.order_number).push(parent);
+        }
+
+        const orphanIdsToDelete = [];
+
+        for (const [orderNum, orphanList] of orphansByOrder.entries()) {
+          const parents = parentByOrder.get(orderNum);
+          if (!parents || parents.length === 0) continue;
+
+          for (const orphan of orphanList) {
+            const orphanDeduction = Math.abs(orphan.net_settlement || 0);
+            const orphanHandling = orphan.handling_fee > 0
+              ? orphan.handling_fee
+              : (String(orphan.adjustment_reason || "").toLowerCase().includes("handling") ? orphanDeduction : 0);
+            const orphanRows = orphan.raw_rows || [];
+
+            const totalParentPrice = parents.reduce((sum, p) => sum + (p.product_price || 0), 0);
+
+            for (let i = 0; i < parents.length; i++) {
+              const parent = parents[i];
+              const ratio = parents.length === 1 || totalParentPrice <= 0 ? 1 : (parent.product_price || 0) / totalParentPrice;
+              const partDeduction = roundMoney(orphanDeduction * ratio);
+              const partHandling = roundMoney(orphanHandling * ratio);
+
+              const newNet = roundMoney((parent.net_settlement || 0) - partDeduction);
+              const newHandling = roundMoney((parent.handling_fee || 0) + partHandling);
+              const newTotalFees = roundMoney((parent.total_fees || 0) + partDeduction);
+              const newTotalDeductions = roundMoney((parent.total_deductions || 0) + partDeduction);
+
+              const feeBreakdown = { ...(parent.fee_breakdown || {}) };
+              if (partHandling > 0) {
+                feeBreakdown["Handling Fee"] = roundMoney((feeBreakdown["Handling Fee"] || 0) - partHandling);
+              } else {
+                const feeKey = orphan.adjustment_reason || "Marketplace Fee";
+                feeBreakdown[feeKey] = roundMoney((feeBreakdown[feeKey] || 0) - partDeduction);
+              }
+
+              const mergedRows = mergeStatementRows(parent.raw_rows || [], orphanRows);
+
+              const updateDoc = {
+                net_settlement: newNet,
+                handling_fee: newHandling,
+                total_fees: newTotalFees,
+                total_deductions: newTotalDeductions,
+                fee_breakdown: feeBreakdown,
+                raw_rows: mergedRows
+              };
+
+              if (parent.profit_ready && parent.cost_price > 0) {
+                updateDoc.net_profit = roundMoney(newNet - (parent.total_cost || 0));
+              }
+
+              await FinanceEntry.updateOne({ _id: parent._id }, { $set: updateDoc });
+            }
+
+            orphanIdsToDelete.push(orphan._id);
+          }
+        }
+
+        if (orphanIdsToDelete.length > 0) {
+          await FinanceEntry.deleteMany({ _id: { $in: orphanIdsToDelete } });
         }
       }
     }
@@ -1466,13 +1571,41 @@ router.post("/import-csv", async (req, res) => {
 
     // Lines for one order can arrive across several weekly statements: merge with lines already imported
     const lineIds = groupedRows.map((group) => entryLineId(group[0]));
-    const existingFileEntries = await FinanceEntry.find({ order_line_id: { $in: lineIds }, source: "statement_file" })
-      .select("order_line_id raw_rows")
-      .lean();
-    const existingRowsByLine = new Map(existingFileEntries.map((item) => [item.order_line_id, item.raw_rows || []]));
+    const orderNums = groupedRows.map((group) => (group[0]["Order Number"] || group[0]["Order No"] || group[0]["Order ID"] || "").toString().trim()).filter(Boolean);
+
+    const existingFileEntries = await FinanceEntry.find({
+      $or: [
+        { order_line_id: { $in: lineIds } },
+        { order_number: { $in: orderNums }, entry_type: "order" }
+      ],
+      source: "statement_file"
+    }).select("order_number order_line_id raw_rows").lean();
+
+    const existingRowsByLine = new Map();
+    const existingByOrder = new Map();
+    for (const item of existingFileEntries) {
+      if (item.order_line_id) existingRowsByLine.set(item.order_line_id, item.raw_rows || []);
+      if (item.order_number) {
+        if (!existingByOrder.has(item.order_number)) existingByOrder.set(item.order_number, []);
+        existingByOrder.get(item.order_number).push(item);
+      }
+    }
 
     for (const group of groupedRows) {
-      const mergedRows = mergeStatementRows(existingRowsByLine.get(entryLineId(group[0])), group);
+      const lineId = entryLineId(group[0]);
+      const orderNum = (group[0]["Order Number"] || group[0]["Order No"] || group[0]["Order ID"] || "").toString().trim();
+      const rawLineId = (group[0]["Order Line ID"] || group[0]["Order Item ID"] || group[0]["Item ID"] || "").toString().trim();
+
+      let baseRows = existingRowsByLine.get(lineId);
+      if (!baseRows && !rawLineId && orderNum) {
+        const parents = existingByOrder.get(orderNum);
+        if (parents && parents.length > 0) {
+          baseRows = parents[0].raw_rows || [];
+          group[0]["Order Line ID"] = parents[0].order_line_id;
+        }
+      }
+
+      const mergedRows = mergeStatementRows(baseRows, group);
       const entry = await buildEntryFromGroup(mergedRows, defaultStore, preloadedCache);
       if (entry) {
         entry.raw_rows = mergedRows;
@@ -1945,16 +2078,10 @@ router.post("/sync", async (req, res) => {
             if (!txRes.hasMore) break;
           }
 
-          const grouped = {};
-          for (const tx of transactions) {
+          const normalizedRows = transactions.map((tx) => {
             const orderNum = String(pick(tx, ["order_no", "order_number", "orderNumber", "trade_order_id"])).trim();
-            if (!orderNum) continue;
-            const lineId = String(pick(tx, ["orderItem_no", "order_item_no", "order_line_id", "orderLineId", "order_item_id"]) || orderNum).trim();
-
-            const key = `${orderNum}__${lineId}`;
-            if (!grouped[key]) grouped[key] = [];
-
-            grouped[key].push({
+            const rawLineId = String(pick(tx, ["orderItem_no", "order_item_no", "order_line_id", "orderLineId", "order_item_id"])).trim();
+            return {
               "Statement Period": period,
               "Statement Number": pick(tx, ["statement", "statement_number", "statementNumber"]) || `STMT-${store.code || store.name}-${period.replace(/\s+/g, "_")}`,
               "Transaction Number": pick(tx, ["transaction_number", "transactionNumber", "transaction_id"]),
@@ -1962,7 +2089,7 @@ router.post("/sync", async (req, res) => {
               "Release Status": pick(tx, ["paid_status", "paidStatus"]),
               "Order Status": pick(tx, ["orderItem_status", "order_item_status"]),
               "Order Number": orderNum,
-              "Order Line ID": lineId,
+              "Order Line ID": rawLineId,
               "Seller SKU": pick(tx, ["seller_sku", "sellerSku"]),
               "Lazada SKU": pick(tx, ["lazada_sku", "lazadaSku"]),
               "Product Name": pick(tx, ["details", "product_name", "productName", "item_name"]),
@@ -1972,22 +2099,58 @@ router.post("/sync", async (req, res) => {
               "WHT Amount": pick(tx, ["WHT_amount", "wht_amount", "whtAmount"]) || 0,
               "Comment": pick(tx, ["comment", "reason"]),
               "Quantity": pick(tx, ["quantity"]) || 1
-            });
-          }
+            };
+          }).filter((r) => r["Order Number"] || r["Order Line ID"] || r["Fee Name"]);
 
-          const groups = Object.values(grouped).map(tagRowFingerprints);
+          const groups = groupRowsByOrder(normalizedRows).map(tagRowFingerprints);
           const lineIds = groups.map((group) => entryLineId(group[0]));
-          const existing = await FinanceEntry.find({ order_line_id: { $in: lineIds } })
-            .select("order_line_id source raw_rows")
-            .lean();
-          const existingByLine = new Map(existing.map((item) => [item.order_line_id, item]));
+          const orderNums = groups.map((group) => (group[0]["Order Number"] || group[0]["Order No"] || group[0]["Order ID"] || "").toString().trim()).filter(Boolean);
+
+          const existing = await FinanceEntry.find({
+            $or: [
+              { order_line_id: { $in: lineIds } },
+              { order_number: { $in: orderNums }, entry_type: "order" }
+            ]
+          }).select("order_number order_line_id source raw_rows").lean();
+
+          const existingByLine = new Map();
+          const existingByOrder = new Map();
+          for (const item of existing) {
+            if (item.order_line_id) existingByLine.set(item.order_line_id, item);
+            if (item.order_number) {
+              if (!existingByOrder.has(item.order_number)) existingByOrder.set(item.order_number, []);
+              existingByOrder.get(item.order_number).push(item);
+            }
+          }
 
           const entries = [];
           for (const group of groups) {
             const lineId = entryLineId(group[0]);
+            const orderNum = (group[0]["Order Number"] || group[0]["Order No"] || group[0]["Order ID"] || "").toString().trim();
+            const rawLineId = (group[0]["Order Line ID"] || group[0]["Order Item ID"] || group[0]["Item ID"] || "").toString().trim();
             const prior = existingByLine.get(lineId);
+
             // An imported statement file is authoritative for its lines; never mix API lines into it
             if (prior?.source === "statement_file") continue;
+
+            // If this is an order-level fee group (no item line ID) but a prior item for this order exists in DB:
+            if (!rawLineId && orderNum && !prior) {
+              const existingParents = existingByOrder.get(orderNum);
+              if (existingParents && existingParents.length > 0) {
+                const targetParent = existingParents[0];
+                if (targetParent.source !== "statement_file") {
+                  const mergedRows = mergeStatementRows(targetParent.raw_rows || [], group);
+                  const updatedEntry = await buildEntryFromGroup(mergedRows, store, preloadedCache);
+                  if (updatedEntry) {
+                    updatedEntry.statement_period = period;
+                    updatedEntry.source = targetParent.source || "live_api_transaction";
+                    updatedEntry.raw_rows = mergedRows;
+                    entries.push(updatedEntry);
+                  }
+                  continue;
+                }
+              }
+            }
 
             const mergedRows = mergeStatementRows(prior?.source === "live_api_transaction" ? prior.raw_rows : [], group);
             const entry = await buildEntryFromGroup(mergedRows, store, preloadedCache);
