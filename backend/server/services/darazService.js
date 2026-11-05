@@ -558,6 +558,28 @@ async function saveStoreTokenConnection(storeId, payload = {}) {
     }
   );
 
+  // MANUAL_CONFIG_SYNC
+  await StoreConnectionConfig.findOneAndUpdate(
+    { store_id: store._id },
+    {
+      store_id: store._id,
+      app_key: process.env.DARAZ_APP_KEY || "",
+      app_secret: "",
+      redirect_uri: getOauthRedirectUri(),
+      api_region: safeString(payload.country_code || store.country).toLowerCase(),
+      seller_account_name: safeString(payload.account),
+      auth_status: expiryState.status === "expired" ? "token_expired" : "token_active",
+      last_connected_at: new Date(),
+      last_validated_at: new Date(),
+      last_error_message: ""
+    },
+    {
+      upsert: true,
+      returnDocument: "after",
+      setDefaultsOnInsert: true
+    }
+  );
+
   return {
     store,
     token,

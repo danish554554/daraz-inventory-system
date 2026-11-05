@@ -14,7 +14,7 @@ const StockAdjustmentRequest = require("../models/StockAdjustmentRequest");
 const StockReceipt = require("../models/StockReceipt");
 const SyncIssue = require("../models/SyncIssue");
 const { getStoresHealthData, getSingleStoreHealth } = require("../services/storeHealthService");
-const { validateStoreToken } = require("../services/darazService");
+const { validateStoreToken, saveStoreTokenConnection } = require("../services/darazService");
 
 const router = express.Router();
 
@@ -122,6 +122,51 @@ router.post("/:id/validate-connection", async (req, res) => {
     res.status(500).json({
       success: false,
       message: "Failed to validate store connection"
+    });
+  }
+});
+
+/*
+------------------------------------------------
+CONNECT STORE WITH MANUAL TOKEN
+------------------------------------------------
+*/
+router.post("/:id/manual-token", async (req, res) => {
+  try {
+    const { access_token, refresh_token, seller_id, account, expires_in } = req.body;
+    if (!normalize(access_token)) {
+      return res.status(400).json({
+        success: false,
+        message: "access_token is required"
+      });
+    }
+
+    const payload = {
+      access_token: normalize(access_token),
+      refresh_token: normalize(refresh_token),
+      seller_id: normalize(seller_id),
+      account: normalize(account),
+      token_source: "manual"
+    };
+
+    if (expires_in) {
+      payload.expires_at = new Date(Date.now() + Number(expires_in) * 1000);
+    } else {
+      payload.expires_at = new Date(Date.now() + 30 * 24 * 60 * 60 * 1000);
+    }
+
+    const result = await saveStoreTokenConnection(req.params.id, payload);
+    return res.json({
+      success: true,
+      message: "Store token saved successfully",
+      store: result.store,
+      token: result.token_summary
+    });
+  } catch (error) {
+    console.error("[Manual Token Save Error]", error);
+    return res.status(500).json({
+      success: false,
+      message: error.message || "Failed to save manual token"
     });
   }
 });

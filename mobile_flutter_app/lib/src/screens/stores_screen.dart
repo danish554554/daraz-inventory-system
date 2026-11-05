@@ -83,6 +83,138 @@ class _StoresScreenState extends State<StoresScreen> {
     if (updated == true) await _load();
   }
 
+  Future<void> _showManualTokenDialog(StoreModel store) async {
+    final tokenCtrl = TextEditingController();
+    final refreshCtrl = TextEditingController();
+    final sellerIdCtrl = TextEditingController();
+    bool isSubmitting = false;
+
+    await showDialog<void>(
+      context: context,
+      builder: (ctx) => StatefulBuilder(
+        builder: (dialogCtx, setDialogState) => AlertDialog(
+          backgroundColor: AppTheme.cardColor(dialogCtx),
+          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
+          title: Row(
+            children: [
+              Container(
+                padding: const EdgeInsets.all(8),
+                decoration: BoxDecoration(
+                  color: AppTheme.primary.withValues(alpha: 0.12),
+                  borderRadius: BorderRadius.circular(10),
+                ),
+                child: const Icon(Icons.key_rounded, color: AppTheme.primary, size: 22),
+              ),
+              const SizedBox(width: 10),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text('Manual Daraz Token',
+                        style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold, color: AppTheme.textPrimaryColor(dialogCtx))),
+                    Text(store.name,
+                        style: TextStyle(fontSize: 12, color: AppTheme.textMutedColor(dialogCtx))),
+                  ],
+                ),
+              ),
+            ],
+          ),
+          content: SingleChildScrollView(
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  'Paste the Access Token generated from open.daraz.com console to connect immediately without browser OAuth.',
+                  style: TextStyle(fontSize: 12.5, height: 1.4, color: AppTheme.textMutedColor(dialogCtx)),
+                ),
+                const SizedBox(height: 16),
+                TextField(
+                  controller: tokenCtrl,
+                  maxLines: 2,
+                  decoration: InputDecoration(
+                    labelText: 'Access Token *',
+                    hintText: 'e.g. 50000...',
+                    filled: true,
+                    fillColor: AppTheme.softGreyColor(dialogCtx),
+                    border: OutlineInputBorder(borderRadius: BorderRadius.circular(10)),
+                  ),
+                ),
+                const SizedBox(height: 12),
+                TextField(
+                  controller: refreshCtrl,
+                  decoration: InputDecoration(
+                    labelText: 'Refresh Token (optional)',
+                    filled: true,
+                    fillColor: AppTheme.softGreyColor(dialogCtx),
+                    border: OutlineInputBorder(borderRadius: BorderRadius.circular(10)),
+                  ),
+                ),
+                const SizedBox(height: 12),
+                TextField(
+                  controller: sellerIdCtrl,
+                  decoration: InputDecoration(
+                    labelText: 'Seller ID (optional)',
+                    hintText: 'e.g. PK...',
+                    filled: true,
+                    fillColor: AppTheme.softGreyColor(dialogCtx),
+                    border: OutlineInputBorder(borderRadius: BorderRadius.circular(10)),
+                  ),
+                ),
+              ],
+            ),
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(dialogCtx),
+              child: const Text('Cancel'),
+            ),
+            ElevatedButton(
+              onPressed: isSubmitting
+                  ? null
+                  : () async {
+                      final token = tokenCtrl.text.trim();
+                      if (token.isEmpty) {
+                        showAppSnackBar(dialogCtx, 'Access token is required', error: true);
+                        return;
+                      }
+                      setDialogState(() => isSubmitting = true);
+                      try {
+                        await ApiClient.instance.post(
+                          '/stores/${store.id}/manual-token',
+                          body: <String, dynamic>{
+                            'access_token': token,
+                            'refresh_token': refreshCtrl.text.trim(),
+                            'seller_id': sellerIdCtrl.text.trim(),
+                          },
+                        );
+                        if (dialogCtx.mounted) Navigator.pop(dialogCtx);
+                        await _load();
+                        if (mounted) {
+                          showAppSnackBar(context, '${store.name} token connected successfully!');
+                        }
+                      } catch (e) {
+                        setDialogState(() => isSubmitting = false);
+                        if (dialogCtx.mounted) {
+                          showAppSnackBar(dialogCtx, 'Failed to save token: $e', error: true);
+                        }
+                      }
+                    },
+              style: ElevatedButton.styleFrom(
+                backgroundColor: AppTheme.primary,
+                foregroundColor: Colors.white,
+                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+              ),
+              child: isSubmitting
+                  ? const SizedBox(width: 16, height: 16, child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white))
+                  : const Text('Connect Store'),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
   Future<void> _connectStore(StoreModel store) async {
     final action = await showModalBottomSheet<String>(
       context: context,
@@ -155,6 +287,12 @@ class _StoresScreenState extends State<StoresScreen> {
                 icon: Icons.copy_rounded,
                 onPressed: () => Navigator.pop(context, 'copy'),
               ),
+              const SizedBox(height: 10),
+              SecondaryButton(
+                label: 'Enter Token Manually',
+                icon: Icons.key_rounded,
+                onPressed: () => Navigator.pop(context, 'manual_token'),
+              ),
             ],
           ),
         ),
@@ -162,6 +300,11 @@ class _StoresScreenState extends State<StoresScreen> {
     );
 
     if (action == null) return;
+
+    if (action == 'manual_token') {
+      await _showManualTokenDialog(store);
+      return;
+    }
 
     try {
       final response = await ApiClient.instance.get(
