@@ -1,3 +1,4 @@
+import 'daraz_auth_webview_screen.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_web_auth_2/flutter_web_auth_2.dart';
@@ -277,21 +278,21 @@ class _StoresScreenState extends State<StoresScreen> {
               ),
               const SizedBox(height: 18),
               PrimaryButton(
-                label: 'Authorize in Chrome',
-                icon: Icons.open_in_browser_rounded,
-                onPressed: () => Navigator.pop(context, 'connect'),
-              ),
-              const SizedBox(height: 10),
-              SecondaryButton(
-                label: 'Copy Link (PC / Browser)',
-                icon: Icons.copy_rounded,
-                onPressed: () => Navigator.pop(context, 'copy'),
+                label: 'Connect Directly in App',
+                icon: Icons.phone_android_rounded,
+                onPressed: () => Navigator.pop(context, 'in_app'),
               ),
               const SizedBox(height: 10),
               SecondaryButton(
                 label: 'Enter Token Manually',
                 icon: Icons.key_rounded,
                 onPressed: () => Navigator.pop(context, 'manual_token'),
+              ),
+              const SizedBox(height: 10),
+              SecondaryButton(
+                label: 'Copy Link (Browser / PC)',
+                icon: Icons.copy_rounded,
+                onPressed: () => Navigator.pop(context, 'copy'),
               ),
             ],
           ),
@@ -317,6 +318,27 @@ class _StoresScreenState extends State<StoresScreen> {
       final url = response['authorize_url']?.toString();
       if (url == null || url.isEmpty) {
         throw ApiException(message: 'Daraz authorization URL was not returned.');
+      }
+
+      if (action == 'in_app') {
+        if (!mounted) return;
+        final result = await Navigator.push<dynamic>(
+          context,
+          MaterialPageRoute(
+            builder: (context) => DarazAuthWebViewScreen(
+              store: store,
+              authorizeUrl: url,
+            ),
+          ),
+        );
+
+        if (result == true) {
+          await _load();
+          if (mounted) showAppSnackBar(context, '${store.name} connected to Daraz successfully!');
+        } else if (result is String && result.isNotEmpty) {
+          if (mounted) showAppSnackBar(context, result, error: true);
+        }
+        return;
       }
 
       if (action == 'copy') {

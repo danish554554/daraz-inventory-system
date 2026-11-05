@@ -21,6 +21,7 @@ dependencies:
   mobile_scanner: ^5.2.3
   file_picker: ^8.1.2
   provider: ^6.1.2
+  webview_flutter: ^4.14.1
 
 dev_dependencies:
   flutter_test:
