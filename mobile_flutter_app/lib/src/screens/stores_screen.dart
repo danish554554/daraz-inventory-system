@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_web_auth_2/flutter_web_auth_2.dart';
+import 'package:url_launcher/url_launcher.dart';
 
 import '../models/app_models.dart';
 import '../services/api_client.dart';
@@ -144,13 +145,13 @@ class _StoresScreenState extends State<StoresScreen> {
               ),
               const SizedBox(height: 18),
               PrimaryButton(
-                label: 'Authorize via Browser',
+                label: 'Authorize in Chrome',
                 icon: Icons.open_in_browser_rounded,
                 onPressed: () => Navigator.pop(context, 'connect'),
               ),
               const SizedBox(height: 10),
               SecondaryButton(
-                label: 'Copy Authorization Link',
+                label: 'Copy Link (PC / Browser)',
                 icon: Icons.copy_rounded,
                 onPressed: () => Navigator.pop(context, 'copy'),
               ),
@@ -178,7 +179,63 @@ class _StoresScreenState extends State<StoresScreen> {
       if (action == 'copy') {
         await Clipboard.setData(ClipboardData(text: url));
         if (mounted) {
-          showAppSnackBar(context, 'Authorization link copied! You can paste it into Chrome on your phone or PC.');
+          showDialog<void>(
+            context: context,
+            builder: (ctx) => AlertDialog(
+              backgroundColor: AppTheme.cardColor(ctx),
+              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+              title: Row(
+                children: [
+                  const Icon(Icons.link_rounded, color: AppTheme.primary),
+                  const SizedBox(width: 8),
+                  Text('Authorization Link', style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold, color: AppTheme.textPrimaryColor(ctx))),
+                ],
+              ),
+              content: SingleChildScrollView(
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      'Link copied to clipboard!\n\n1. Open this link in Chrome on your PC / laptop, or in mobile Chrome with "Desktop site" turned on.\n2. Log in with your "${store.name}" Daraz Seller account.\n3. Tap Authorize to connect.',
+                      style: TextStyle(fontSize: 13, height: 1.4, color: AppTheme.textMutedColor(ctx)),
+                    ),
+                    const SizedBox(height: 12),
+                    Container(
+                      padding: const EdgeInsets.all(10),
+                      decoration: BoxDecoration(
+                        color: AppTheme.softGreyColor(ctx),
+                        borderRadius: BorderRadius.circular(8),
+                      ),
+                      child: SelectableText(
+                        url,
+                        style: const TextStyle(fontSize: 11, color: AppTheme.primary, fontFamily: 'monospace'),
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+              actions: [
+                TextButton(
+                  onPressed: () => Navigator.pop(ctx),
+                  child: const Text('Close'),
+                ),
+                ElevatedButton.icon(
+                  onPressed: () async {
+                    Navigator.pop(ctx);
+                    await launchUrl(Uri.parse(url), mode: LaunchMode.externalApplication);
+                  },
+                  icon: const Icon(Icons.open_in_new_rounded, size: 16),
+                  label: const Text('Open Browser'),
+                  style: ElevatedButton.styleFrom(
+                    backgroundColor: AppTheme.primary,
+                    foregroundColor: Colors.white,
+                    shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+                  ),
+                ),
+              ],
+            ),
+          );
         }
         return;
       }
@@ -186,6 +243,9 @@ class _StoresScreenState extends State<StoresScreen> {
       final callbackUrl = await FlutterWebAuth2.authenticate(
         url: url,
         callbackUrlScheme: AppConfig.oauthCallbackScheme,
+        options: const FlutterWebAuth2Options(
+          customTabsPackageOrder: ['com.android.chrome'],
+        ),
       );
 
       final callback = Uri.parse(callbackUrl);
