@@ -1,5 +1,7 @@
 import 'package:flutter/material.dart';
+import 'package:provider/provider.dart';
 
+import 'providers/finance_provider.dart';
 import 'screens/home_shell.dart';
 import 'screens/login_screen.dart';
 import 'services/session_manager.dart';
@@ -12,22 +14,27 @@ class DarazInventoryApp extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return AnimatedBuilder(
-      animation: sessionManager,
-      builder: (context, _) {
-        return MaterialApp(
-          title: 'Daraz Inventory Control',
-          debugShowCheckedModeBanner: false,
-          theme: AppTheme.lightTheme,
-          darkTheme: AppTheme.darkTheme,
-          themeMode: sessionManager.themeMode,
-          home: sessionManager.isBootstrapping
-              ? const _BootstrapScreen()
-              : sessionManager.isAuthenticated
-                  ? HomeShell(sessionManager: sessionManager)
-                  : LoginScreen(sessionManager: sessionManager),
-        );
-      },
+    return MultiProvider(
+      providers: [
+        ChangeNotifierProvider<FinanceProvider>(create: (_) => FinanceProvider()),
+      ],
+      child: AnimatedBuilder(
+        animation: sessionManager,
+        builder: (context, _) {
+          return MaterialApp(
+            title: 'Daraz Inventory Control',
+            debugShowCheckedModeBanner: false,
+            theme: AppTheme.lightTheme,
+            darkTheme: AppTheme.darkTheme,
+            themeMode: sessionManager.themeMode,
+            home: sessionManager.isBootstrapping
+                ? const _BootstrapScreen()
+                : sessionManager.isAuthenticated
+                    ? HomeShell(sessionManager: sessionManager)
+                    : LoginScreen(sessionManager: sessionManager),
+          );
+        },
+      ),
     );
   }
 }

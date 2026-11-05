@@ -4,7 +4,10 @@ import 'dart:io';
 import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
 
+import 'package:provider/provider.dart';
+
 import '../models/app_models.dart';
+import '../providers/finance_provider.dart';
 import '../services/api_client.dart';
 import '../services/api_exception.dart';
 import '../services/formatters.dart';
@@ -20,151 +23,58 @@ class FinanceScreen extends StatefulWidget {
 }
 
 class _FinanceScreenState extends State<FinanceScreen> {
-  bool _loading = true;
-  bool _syncing = false;
-  String? _error;
-  String _search = '';
-  String _activeTab = 'all'; // all, orders, adjustments, pending_cost
-
-  String _selectedPeriod = 'all';
-  String _selectedStoreId = 'all';
-
-  List<StatementPeriodModel> _periods = <StatementPeriodModel>[];
-  List<StoreModel> _stores = <StoreModel>[];
-  FinanceSummary _summary = FinanceSummary.empty();
-  List<FinanceEntry> _entries = <FinanceEntry>[];
+  final TextEditingController _searchController = TextEditingController();
   List<InventoryItem> _inventory = <InventoryItem>[];
+
+  FinanceProvider get _provider => context.read<FinanceProvider>();
+  FinanceProvider get _watchedProvider => context.watch<FinanceProvider>();
+
+  bool get _loading => _watchedProvider.loading;
+  bool get _syncing => _watchedProvider.syncing;
+  String? get _error => _watchedProvider.error;
+  String get _activeTab => _watchedProvider.activeTab;
+  String get _selectedPeriod => _watchedProvider.selectedPeriod;
+  String get _selectedStoreId => _watchedProvider.selectedStoreId;
+  List<StatementPeriodModel> get _periods => _watchedProvider.periods;
+  List<StoreModel> get _stores => _watchedProvider.stores;
+  FinanceSummary get _summary => _watchedProvider.summary;
+  List<FinanceEntry> get _entries => _watchedProvider.entries;
+  List<FinanceEntry> get _filteredEntries => _watchedProvider.filteredEntries;
 
   @override
   void initState() {
     super.initState();
-    _load();
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (mounted) {
+        context.read<FinanceProvider>().load();
+      }
+    });
+  }
+
+  @override
+  void dispose() {
+    _searchController.dispose();
+    super.dispose();
   }
 
   Future<void> _load({bool silent = false, bool forceRefresh = false}) async {
-    if (!silent) {
-      setState(() {
-        _loading = true;
-        _error = null;
-      });
-    }
-
-    try {
-      final periodParam = _selectedPeriod == 'all' ? '' : _selectedPeriod;
-      final storeParam = _selectedStoreId == 'all' ? '' : _selectedStoreId;
-
-      final futures = <Future<dynamic>>[
-        ApiClient.instance.get(
-          '/finance/summary',
-          queryParameters: <String, dynamic>{
-            if (periodParam.isNotEmpty) 'statement_period': periodParam,
-            if (storeParam.isNotEmpty) 'store_id': storeParam,
-          },
-          bypassCache: forceRefresh,
-        ),
-        ApiClient.instance.get(
-          '/finance',
-          queryParameters: <String, dynamic>{
-            if (periodParam.isNotEmpty) 'statement_period': periodParam,
-            if (storeParam.isNotEmpty) 'store_id': storeParam,
-          },
-          bypassCache: forceRefresh,
-        ),
-      ];
-
-      final needPeriods = _periods.isEmpty || forceRefresh;
-      final needStores = _stores.isEmpty || forceRefresh;
-
-      if (needPeriods) futures.add(ApiClient.instance.get('/finance/periods', bypassCache: forceRefresh));
-      if (needStores) futures.add(ApiClient.instance.get('/stores', bypassCache: forceRefresh));
-
-      final results = await Future.wait<dynamic>(futures);
-
-      final summaryMap = JsonReaders.map(results[0]);
-      final entriesList = JsonReaders.list(results[1]).map((e) => FinanceEntry.fromJson(JsonReaders.map(e))).toList();
-
-      var nextIdx = 2;
-      List<StatementPeriodModel>? periodsList;
-      if (needPeriods) {
-        final periodsData = JsonReaders.map(results[nextIdx++]);
-        periodsList = JsonReaders.list(periodsData['periods']).map((p) => StatementPeriodModel.fromJson(JsonReaders.map(p))).toList();
-      }
-      List<StoreModel>? storesList;
-      if (needStores) {
-        storesList = JsonReaders.list(results[nextIdx++]).map((s) => StoreModel.fromJson(JsonReaders.map(s))).toList();
-      }
-
-      if (mounted) {
-        setState(() {
-          _summary = FinanceSummary.fromJson(summaryMap);
-          _entries = entriesList;
-          if (periodsList != null) _periods = periodsList;
-          if (storesList != null) _stores = storesList;
-        });
-      }
-    } on ApiException catch (e) {
-      if (mounted) setState(() => _error = e.message);
-    } catch (_) {
-      if (mounted) setState(() => _error = 'Failed to load finance records.');
-    } finally {
-      if (mounted) setState(() => _loading = false);
-    }
+    await _provider.load(silent: silent, forceRefresh: forceRefresh);
   }
 
   Future<void> _syncFromDaraz({String? period, bool silent = false}) async {
-    final targetPeriod = period ?? _selectedPeriod;
     if (!silent && mounted) {
       showAppSnackBar(context, 'Connecting to Daraz API & importing statement...');
     }
-    setState(() => _syncing = true);
     try {
-      final response = await ApiClient.instance.post(
-        '/finance/sync',
-        body: <String, dynamic>{
-          if (targetPeriod != 'all') 'statement_period': targetPeriod,
-          if (_selectedStoreId != 'all') 'store_id': _selectedStoreId,
-        },
-        timeout: const Duration(seconds: 90),
-      );
-      final respMap = JsonReaders.map(response);
-      final msg = JsonReaders.string(respMap, 'message', 'Statements synchronized successfully.');
+      final msg = await _provider.syncFromDaraz(period: period);
       if (mounted) {
         showAppSnackBar(context, msg);
       }
-      ApiClient.instance.clearCache();
-      await _load(silent: true, forceRefresh: true);
     } catch (e) {
       if (mounted) {
         showAppSnackBar(context, 'Failed to sync from Daraz API: $e', error: true);
       }
-    } finally {
-      if (mounted) setState(() => _syncing = false);
     }
-  }
-
-  List<FinanceEntry> get _filteredEntries {
-    final query = _search.trim().toLowerCase();
-    return _entries.where((item) {
-      // Filter by tab
-      if (_activeTab == 'orders' && !item.isOrder && item.orderNumber.isEmpty) return false;
-      if (_activeTab == 'adjustments' && !item.isAdjustment && !item.isPenaltyCharged && !item.isPenaltyReturned) return false;
-      if (_activeTab == 'pending_cost') {
-        if (!item.isOrder || item.isProfitReady || item.productPrice == 0 || item.isPenaltyCharged || item.isPenaltyReturned) return false;
-      }
-
-      // Filter by search
-      if (query.isNotEmpty) {
-        final matches = item.orderNumber.toLowerCase().contains(query) ||
-            item.orderLineId.toLowerCase().contains(query) ||
-            item.sellerSku.toLowerCase().contains(query) ||
-            item.productName.toLowerCase().contains(query) ||
-            item.adjustmentReason.toLowerCase().contains(query) ||
-            item.storeName.toLowerCase().contains(query);
-        if (!matches) return false;
-      }
-
-      return true;
-    }).toList();
   }
 
   void _openPeriodPickerSheet() {
@@ -215,9 +125,8 @@ class _FinanceScreenState extends State<FinanceScreen> {
                           isSelected: _selectedPeriod == 'all',
                           hasData: true,
                           onTap: () {
-                            setState(() => _selectedPeriod = 'all');
                             Navigator.pop(context);
-                            _load();
+                            _provider.setPeriod('all');
                           },
                         ),
                         const Divider(height: 12),
@@ -230,10 +139,8 @@ class _FinanceScreenState extends State<FinanceScreen> {
                             isSelected: isSel,
                             onTap: () async {
                               final targetPeriod = p.statementPeriod;
-                              setState(() => _selectedPeriod = targetPeriod);
                               Navigator.pop(context);
-                              // Automatically import statement from Daraz for this cycle
-                              await _syncFromDaraz(period: targetPeriod);
+                              await _provider.setPeriod(targetPeriod);
                             },
                           );
                         }),
@@ -433,14 +340,7 @@ class _FinanceScreenState extends State<FinanceScreen> {
       }
 
       try {
-        await ApiClient.instance.post(
-          '/finance/set-cost',
-          body: <String, dynamic>{
-            'seller_sku': sku,
-            'cost_price': cost,
-          },
-        );
-        await _load(silent: true);
+        await _provider.setCostPrice(sellerSku: sku, costPrice: cost);
         if (mounted) showAppSnackBar(context, 'Cost price saved! Profits recalculated for SKU $sku.');
       } catch (e) {
         if (mounted) showAppSnackBar(context, 'Error updating cost: $e', error: true);
@@ -804,9 +704,7 @@ class _FinanceScreenState extends State<FinanceScreen> {
 
     if (confirmed == true) {
       try {
-        final queryParam = isPeriodSelected ? <String, dynamic>{'statement_period': _selectedPeriod} : null;
-        await ApiClient.instance.delete('/finance/clear', queryParameters: queryParam);
-        await _load(silent: true);
+        await _provider.clearData(period: isPeriodSelected ? _selectedPeriod : null);
         if (mounted) showAppSnackBar(context, 'Finance data cleared successfully.');
       } catch (e) {
         if (mounted) showAppSnackBar(context, 'Failed to clear finance data: $e', error: true);
@@ -834,18 +732,8 @@ class _FinanceScreenState extends State<FinanceScreen> {
 
     if (confirmed == true) {
       try {
-        final response = await ApiClient.instance.post(
-          '/finance/recalculate',
-          body: <String, dynamic>{
-            if (_selectedPeriod != 'all') 'statement_period': _selectedPeriod,
-          },
-          timeout: const Duration(seconds: 120),
-        );
-        final respMap = JsonReaders.map(response);
-        final msg = JsonReaders.string(respMap, 'message', 'Records recalculated.');
-        if (mounted) showAppSnackBar(context, msg);
-        ApiClient.instance.clearCache();
-        await _load(silent: true, forceRefresh: true);
+        await _provider.recalculate();
+        if (mounted) showAppSnackBar(context, 'Records recalculated successfully.');
       } catch (e) {
         if (mounted) showAppSnackBar(context, 'Recalculation failed: $e', error: true);
       }
@@ -855,9 +743,9 @@ class _FinanceScreenState extends State<FinanceScreen> {
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      body: _loading
+      body: _loading && _entries.isEmpty
           ? const AppLoader(label: 'Loading weekly financial statements...')
-          : _error != null
+          : _error != null && _entries.isEmpty
               ? SafeArea(
                   child: Padding(
                     padding: const EdgeInsets.all(16),
@@ -865,125 +753,155 @@ class _FinanceScreenState extends State<FinanceScreen> {
                       title: 'Finance center unavailable',
                       message: _error!,
                       icon: Icons.account_balance_wallet_outlined,
+                      action: PrimaryButton(
+                        label: 'Retry',
+                        icon: Icons.refresh_rounded,
+                        onPressed: () => _load(forceRefresh: true),
+                      ),
                     ),
                   ),
                 )
-              : AppShell(
-                  onRefresh: () async {
-                    ApiClient.instance.clearCache();
-                    await _load(silent: true, forceRefresh: true);
-                  },
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: <Widget>[
-                      SectionHeader(
-                        title: 'Finance & Profit',
-                        subtitle: 'Daraz weekly settlement cycles, fee itemization & true profit',
-                        action: Row(
-                          mainAxisSize: MainAxisSize.min,
-                          children: <Widget>[
-                            CircleIconButton(
-                              icon: Icons.sync_rounded,
-                              onPressed: _syncing ? null : () => _syncFromDaraz(),
-                              background: AppTheme.primary,
-                              foreground: Colors.white,
+              : SafeArea(
+                  child: RefreshIndicator(
+                    onRefresh: () async {
+                      ApiClient.instance.clearCache();
+                      await _load(silent: true, forceRefresh: true);
+                    },
+                    child: CustomScrollView(
+                      physics: const AlwaysScrollableScrollPhysics(),
+                      slivers: <Widget>[
+                        SliverPadding(
+                          padding: const EdgeInsets.fromLTRB(16, 10, 16, 12),
+                          sliver: SliverToBoxAdapter(
+                            child: Column(
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              children: <Widget>[
+                                SectionHeader(
+                                  title: 'Finance & Profit',
+                                  subtitle: 'Daraz weekly settlement cycles, fee itemization & true profit',
+                                  action: Row(
+                                    mainAxisSize: MainAxisSize.min,
+                                    children: <Widget>[
+                                      CircleIconButton(
+                                        icon: Icons.sync_rounded,
+                                        onPressed: _syncing ? null : () => _syncFromDaraz(),
+                                        background: AppTheme.primary,
+                                        foreground: Colors.white,
+                                      ),
+                                      const SizedBox(width: 8),
+                                      CircleIconButton(
+                                        icon: Icons.upload_file_rounded,
+                                        onPressed: _openImportSheet,
+                                        background: AppTheme.softGreyColor(context),
+                                        foreground: AppTheme.textPrimaryColor(context),
+                                      ),
+                                      const SizedBox(width: 8),
+                                      CircleIconButton(
+                                        icon: Icons.delete_sweep_rounded,
+                                        onPressed: _confirmClearData,
+                                        background: AppTheme.dangerSoft,
+                                        foreground: AppTheme.danger,
+                                      ),
+                                      const SizedBox(width: 8),
+                                      CircleIconButton(
+                                        icon: Icons.calculate_rounded,
+                                        onPressed: _recalculate,
+                                        background: AppTheme.primarySoft,
+                                        foreground: AppTheme.primary,
+                                      ),
+                                      const SizedBox(width: 8),
+                                      CircleIconButton(
+                                        icon: Icons.share_rounded,
+                                        onPressed: () {
+                                          ReportGeneratorService.shareDailySummary(
+                                            historySummary: <String, dynamic>{
+                                              'total_orders': _summary.totalOrders,
+                                              'gross_amount': _summary.grossAmount,
+                                              'net_settlement': _summary.netSettlement,
+                                              'net_profit': _summary.netProfit,
+                                              'final_profit_after_adjustments': _summary.finalProfitAfterAdjustments,
+                                            },
+                                            orders: const <CentralOrder>[],
+                                            lowStockItems: const <InventoryItem>[],
+                                            period: _selectedPeriod == 'all' ? 'All Cycles' : _selectedPeriod,
+                                            connectedStoresCount: _stores.length,
+                                            totalStoresCount: _stores.length,
+                                          );
+                                        },
+                                        background: AppTheme.success,
+                                        foreground: Colors.white,
+                                      ),
+                                    ],
+                                  ),
+                                ),
+                                const SizedBox(height: 14),
+                                _periodSelectorBar(),
+                                const SizedBox(height: 12),
+                                if (_stores.length > 1) ...<Widget>[
+                                  _storeSelectorBar(),
+                                  const SizedBox(height: 12),
+                                ],
+                                _heroFinanceCard(),
+                                const SizedBox(height: 14),
+                                _feeBreakdownGrid(context),
+                                const SizedBox(height: 16),
+                                _filterTabs(),
+                                const SizedBox(height: 12),
+                                TextField(
+                                  controller: _searchController,
+                                  decoration: InputDecoration(
+                                    hintText: 'Search order #, line ID, SKU, product, or reason...',
+                                    prefixIcon: const Icon(Icons.search_rounded),
+                                    isDense: true,
+                                    filled: true,
+                                    fillColor: AppTheme.cardColor(context),
+                                    border: OutlineInputBorder(borderRadius: BorderRadius.circular(14), borderSide: BorderSide(color: AppTheme.borderColor(context))),
+                                    enabledBorder: OutlineInputBorder(borderRadius: BorderRadius.circular(14), borderSide: BorderSide(color: AppTheme.borderColor(context))),
+                                  ),
+                                  onChanged: (val) => _provider.setSearch(val),
+                                ),
+                              ],
                             ),
-                            const SizedBox(width: 8),
-                            CircleIconButton(
-                              icon: Icons.upload_file_rounded,
-                              onPressed: _openImportSheet,
-                              background: AppTheme.softGreyColor(context),
-                              foreground: AppTheme.textPrimaryColor(context),
-                            ),
-                            const SizedBox(width: 8),
-                            CircleIconButton(
-                              icon: Icons.delete_sweep_rounded,
-                              onPressed: _confirmClearData,
-                              background: AppTheme.dangerSoft,
-                              foreground: AppTheme.danger,
-                            ),
-                            const SizedBox(width: 8),
-                            CircleIconButton(
-                              icon: Icons.calculate_rounded,
-                              onPressed: _recalculate,
-                              background: AppTheme.primarySoft,
-                              foreground: AppTheme.primary,
-                            ),
-                            const SizedBox(width: 8),
-                            CircleIconButton(
-                              icon: Icons.share_rounded,
-                              onPressed: () {
-                                ReportGeneratorService.shareDailySummary(
-                                  historySummary: <String, dynamic>{
-                                    'total_orders': _summary.totalOrders,
-                                    'gross_amount': _summary.grossAmount,
-                                    'net_settlement': _summary.netSettlement,
-                                    'net_profit': _summary.netProfit,
-                                    'final_profit_after_adjustments': _summary.finalProfitAfterAdjustments,
-                                  },
-                                  orders: const <CentralOrder>[],
-                                  lowStockItems: const <InventoryItem>[],
-                                  period: _selectedPeriod == 'all' ? 'All Cycles' : _selectedPeriod,
-                                  connectedStoresCount: _stores.length,
-                                  totalStoresCount: _stores.length,
-                                );
-                              },
-                              background: AppTheme.success,
-                              foreground: Colors.white,
-                            ),
-                          ],
-                        ),
-                      ),
-                      const SizedBox(height: 14),
-                      _periodSelectorBar(),
-                      const SizedBox(height: 12),
-                      if (_stores.length > 1) ...<Widget>[
-                        _storeSelectorBar(),
-                        const SizedBox(height: 12),
-                      ],
-                      _heroFinanceCard(),
-                      const SizedBox(height: 14),
-                      _feeBreakdownGrid(context),
-                      const SizedBox(height: 16),
-                      _filterTabs(),
-                      const SizedBox(height: 12),
-                      TextField(
-                        decoration: InputDecoration(
-                          hintText: 'Search order #, line ID, SKU, product, or reason...',
-                          prefixIcon: const Icon(Icons.search_rounded),
-                          isDense: true,
-                          filled: true,
-                          fillColor: AppTheme.cardColor(context),
-                          border: OutlineInputBorder(borderRadius: BorderRadius.circular(14), borderSide: BorderSide(color: AppTheme.borderColor(context))),
-                          enabledBorder: OutlineInputBorder(borderRadius: BorderRadius.circular(14), borderSide: BorderSide(color: AppTheme.borderColor(context))),
-                        ),
-                        onChanged: (val) => setState(() => _search = val),
-                      ),
-                      const SizedBox(height: 14),
-                      if (_filteredEntries.isEmpty)
-                        Padding(
-                          padding: const EdgeInsets.only(top: 8, bottom: 20),
-                          child: EmptyState(
-                            title: _entries.isEmpty ? 'No statement records found' : 'No matching entries',
-                            message: _entries.isEmpty
-                                ? (_selectedPeriod != 'all'
-                                    ? 'No imported records for "$_selectedPeriod". Tap below to automatically sync this payout cycle directly from Daraz Seller Center.'
-                                    : 'Import statement records from Daraz API or select a weekly cycle above.')
-                                : 'Try changing your search keywords or filter tab.',
-                            icon: Icons.receipt_long_outlined,
-                            action: _entries.isEmpty
-                                ? PrimaryButton(
-                                    label: _syncing ? 'Syncing statement...' : 'Sync Statement via Daraz API',
-                                    icon: Icons.sync_rounded,
-                                    loading: _syncing,
-                                    onPressed: () => _syncFromDaraz(),
-                                  )
-                                : null,
                           ),
-                        )
-                      else
-                        ..._filteredEntries.map(_buildFinanceRow),
-                    ],
+                        ),
+                        if (_filteredEntries.isEmpty)
+                          SliverToBoxAdapter(
+                            child: Padding(
+                              padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 20),
+                              child: EmptyState(
+                                title: _entries.isEmpty ? 'No statement records found' : 'No matching entries',
+                                message: _entries.isEmpty
+                                    ? (_selectedPeriod != 'all'
+                                        ? 'No imported records for "$_selectedPeriod". Tap below to automatically sync this payout cycle directly from Daraz Seller Center.'
+                                        : 'Import statement records from Daraz API or select a weekly cycle above.')
+                                    : 'Try changing your search keywords or filter tab.',
+                                icon: Icons.receipt_long_outlined,
+                                action: _entries.isEmpty
+                                    ? PrimaryButton(
+                                        label: _syncing ? 'Syncing statement...' : 'Sync Statement via Daraz API',
+                                        icon: Icons.sync_rounded,
+                                        loading: _syncing,
+                                        onPressed: () => _syncFromDaraz(),
+                                      )
+                                    : null,
+                              ),
+                            ),
+                          )
+                        else
+                          SliverPadding(
+                            padding: const EdgeInsets.symmetric(horizontal: 16),
+                            sliver: SliverList.builder(
+                              itemCount: _filteredEntries.length,
+                              itemBuilder: (context, index) {
+                                return _buildFinanceRow(_filteredEntries[index]);
+                              },
+                            ),
+                          ),
+                        const SliverToBoxAdapter(
+                          child: SizedBox(height: 96),
+                        ),
+                      ],
+                    ),
                   ),
                 ),
       floatingActionButton: FloatingActionButton.extended(
@@ -1081,8 +999,7 @@ class _FinanceScreenState extends State<FinanceScreen> {
         selected: selected,
         label: Text(label),
         onSelected: (_) {
-          setState(() => _selectedStoreId = storeId);
-          _load();
+          _provider.setStore(storeId);
         },
         selectedColor: AppTheme.primary,
         backgroundColor: AppTheme.cardColor(context),
@@ -1319,7 +1236,7 @@ class _FinanceScreenState extends State<FinanceScreen> {
     return ChoiceChip(
       selected: selected,
       label: Text(label),
-      onSelected: (_) => setState(() => _activeTab = key),
+      onSelected: (_) => _provider.setTab(key),
       selectedColor: AppTheme.primary,
       backgroundColor: AppTheme.cardColor(context),
       labelStyle: TextStyle(
