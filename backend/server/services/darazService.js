@@ -59,7 +59,7 @@ function getOauthRedirectUri() {
 }
 
 function getForceAuthValue() {
-  return safeString(process.env.DARAZ_OAUTH_FORCE_AUTH || "true");
+  return safeString(process.env.DARAZ_OAUTH_FORCE_AUTH || "false");
 }
 
 function isLiveApiEnabled() {
@@ -746,7 +746,10 @@ async function createOauthConnectUrl(storeId, options = {}) {
   const url = new URL("/oauth/authorize", authorizeBase);
 
   url.searchParams.set("response_type", "code");
-  url.searchParams.set("force_auth", forceAuth || getForceAuthValue());
+  const finalForceAuth = safeString(options.forceAuth !== undefined ? options.forceAuth : getForceAuthValue());
+  if (finalForceAuth && finalForceAuth !== "false") {
+    url.searchParams.set("force_auth", "true");
+  }
   url.searchParams.set("redirect_uri", redirectUri);
   url.searchParams.set("client_id", appKey);
   url.searchParams.set("state", state);

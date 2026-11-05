@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_web_auth_2/flutter_web_auth_2.dart';
 
 import '../models/app_models.dart';
@@ -82,17 +83,104 @@ class _StoresScreenState extends State<StoresScreen> {
   }
 
   Future<void> _connectStore(StoreModel store) async {
+    final action = await showModalBottomSheet<String>(
+      context: context,
+      backgroundColor: AppTheme.cardColor(context),
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
+      ),
+      builder: (context) => SafeArea(
+        child: Padding(
+          padding: const EdgeInsets.fromLTRB(20, 16, 20, 20),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: <Widget>[
+              Row(
+                children: <Widget>[
+                  Container(
+                    padding: const EdgeInsets.all(10),
+                    decoration: BoxDecoration(
+                      color: AppTheme.primary.withValues(alpha: 0.12),
+                      borderRadius: BorderRadius.circular(12),
+                    ),
+                    child: const Icon(Icons.link_rounded, color: AppTheme.primary, size: 24),
+                  ),
+                  const SizedBox(width: 12),
+                  Expanded(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: <Widget>[
+                        Text('Connect ${store.name}',
+                            style: TextStyle(fontSize: 18, fontWeight: FontWeight.w900, color: AppTheme.textPrimaryColor(context))),
+                        Text('Daraz Open Platform OAuth',
+                            style: TextStyle(fontSize: 12, color: AppTheme.textMutedColor(context))),
+                      ],
+                    ),
+                  ),
+                ],
+              ),
+              const SizedBox(height: 16),
+              Container(
+                padding: const EdgeInsets.all(12),
+                decoration: BoxDecoration(
+                  color: AppTheme.warningSoft,
+                  borderRadius: BorderRadius.circular(12),
+                  border: Border.all(color: AppTheme.warning.withValues(alpha: 0.3)),
+                ),
+                child: Row(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: <Widget>[
+                    const Icon(Icons.info_outline, color: AppTheme.warning, size: 20),
+                    const SizedBox(width: 10),
+                    Expanded(
+                      child: Text(
+                        'Important: Log into "${store.name}" on sellercenter.daraz.pk in Chrome first. Daraz will then recognize your session and display the "Authorize" button.',
+                        style: const TextStyle(fontSize: 12.5, height: 1.35, color: AppTheme.warning, fontWeight: FontWeight.w600),
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+              const SizedBox(height: 18),
+              PrimaryButton(
+                label: 'Authorize via Browser',
+                icon: Icons.open_in_browser_rounded,
+                onPressed: () => Navigator.pop(context, 'connect'),
+              ),
+              const SizedBox(height: 10),
+              SecondaryButton(
+                label: 'Copy Authorization Link',
+                icon: Icons.copy_rounded,
+                onPressed: () => Navigator.pop(context, 'copy'),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+
+    if (action == null) return;
+
     try {
       final response = await ApiClient.instance.get(
         '/stores/oauth/${store.id}/connect',
         queryParameters: <String, dynamic>{
           'client_redirect_uri': AppConfig.oauthCallbackUrl,
-          'force_auth': true,
+          'force_auth': false,
         },
       ) as Map<String, dynamic>;
       final url = response['authorize_url']?.toString();
       if (url == null || url.isEmpty) {
         throw ApiException(message: 'Daraz authorization URL was not returned.');
+      }
+
+      if (action == 'copy') {
+        await Clipboard.setData(ClipboardData(text: url));
+        if (mounted) {
+          showAppSnackBar(context, 'Authorization link copied! You can paste it into Chrome on your phone or PC.');
+        }
+        return;
       }
 
       final callbackUrl = await FlutterWebAuth2.authenticate(
