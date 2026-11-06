@@ -441,7 +441,7 @@ async function importProductsForStore(storeId, options = {}) {
                 cost_price: initialCost
               }
             },
-            { new: true }
+            { returnDocument: 'after' }
           );
         } else {
           // Create brand new active CentralInventory record

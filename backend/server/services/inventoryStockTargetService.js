@@ -227,7 +227,7 @@ async function updateTargetStock(target, { type, quantity, product_name, low_sto
   const update = { $inc: { stock: inc } };
   if (Object.keys(set).length) update.$set = set;
 
-  const before = await Model.findOneAndUpdate(filter, update, { new: false });
+  const before = await Model.findOneAndUpdate(filter, update, { returnDocument: 'before' });
   if (!before) {
     return {
       ok: false,
