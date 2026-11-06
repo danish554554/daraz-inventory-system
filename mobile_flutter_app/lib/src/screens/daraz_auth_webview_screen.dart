@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:webview_flutter/webview_flutter.dart';
 
@@ -23,6 +24,7 @@ class _DarazAuthWebViewScreenState extends State<DarazAuthWebViewScreen> {
   late final WebViewController _controller;
   double _progress = 0;
   bool _isLoading = true;
+  bool _isFinalizing = false;
   bool _hasHandledCallback = false;
 
   // Desktop user agent prevents Daraz from redirecting mobile browsers to the Play Store
@@ -85,12 +87,41 @@ class _DarazAuthWebViewScreenState extends State<DarazAuthWebViewScreen> {
     final isCustomScheme = uri.scheme == AppConfig.oauthCallbackScheme ||
         url.startsWith(AppConfig.oauthCallbackUrl);
 
-    // Also check if Render callback finished and returned query parameters
-    final isRenderCallback = (url.contains('/api/stores/oauth/callback') ||
-            url.contains('/api/stores/auth/callback')) &&
-        uri.queryParameters.containsKey('oauth');
+    // Check if Daraz redirected back to Render callback endpoint
+    final isCallbackPath = url.contains('/api/stores/oauth/callback') ||
+        url.contains('/api/stores/auth/callback');
 
-    if (isCustomScheme || isRenderCallback) {
+    // Case A: App custom scheme reached
+    if (isCustomScheme) {
+      _hasHandledCallback = true;
+      final oauthStatus = uri.queryParameters['oauth'];
+      final message = uri.queryParameters['message']?.trim() ?? '';
+
+      if (oauthStatus == 'success' || oauthStatus == null) {
+        Navigator.of(context).pop(true);
+      } else {
+        Navigator.of(context).pop(message.isNotEmpty ? message : 'Authorization failed');
+      }
+      return true;
+    }
+
+    // Case B: Daraz sent auth code to Render callback endpoint
+    if (isCallbackPath && uri.queryParameters.containsKey('code')) {
+      if (!_isFinalizing && mounted) {
+        setState(() => _isFinalizing = true);
+      }
+      // Give Render 1.5 seconds to exchange code and store the token in DB, then auto-close with success!
+      Timer(const Duration(milliseconds: 1600), () {
+        if (mounted && !_hasHandledCallback) {
+          _hasHandledCallback = true;
+          Navigator.of(context).pop(true);
+        }
+      });
+      return false; // let request reach Render
+    }
+
+    // Case C: Render callback returned with oauth query param
+    if (isCallbackPath && uri.queryParameters.containsKey('oauth')) {
       _hasHandledCallback = true;
       final oauthStatus = uri.queryParameters['oauth'];
       final message = uri.queryParameters['message']?.trim() ?? '';
@@ -117,8 +148,8 @@ class _DarazAuthWebViewScreenState extends State<DarazAuthWebViewScreen> {
         elevation: 0.5,
         leading: IconButton(
           icon: const Icon(Icons.close_rounded),
-          onPressed: () => Navigator.of(context).pop(false),
-          tooltip: 'Cancel',
+          onPressed: () => Navigator.of(context).pop(_isFinalizing ? true : false),
+          tooltip: 'Close',
         ),
         title: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
@@ -132,10 +163,11 @@ class _DarazAuthWebViewScreenState extends State<DarazAuthWebViewScreen> {
               ),
             ),
             Text(
-              'Daraz In-App Authorization',
+              _isFinalizing ? 'Saving connection...' : 'Daraz In-App Authorization',
               style: TextStyle(
                 fontSize: 11,
-                color: AppTheme.textMutedColor(context),
+                color: _isFinalizing ? AppTheme.success : AppTheme.textMutedColor(context),
+                fontWeight: _isFinalizing ? FontWeight.bold : FontWeight.normal,
               ),
             ),
           ],
@@ -147,20 +179,66 @@ class _DarazAuthWebViewScreenState extends State<DarazAuthWebViewScreen> {
             tooltip: 'Reload',
           ),
         ],
-        bottom: _isLoading
+        bottom: (_isLoading || _isFinalizing)
             ? PreferredSize(
                 preferredSize: const Size.fromHeight(3),
                 child: LinearProgressIndicator(
-                  value: _progress > 0 && _progress < 1 ? _progress : null,
+                  value: _progress > 0 && _progress < 1 && !_isFinalizing ? _progress : null,
                   backgroundColor: isDark ? Colors.grey[850] : Colors.grey[200],
-                  valueColor: const AlwaysStoppedAnimation<Color>(AppTheme.primary),
+                  valueColor: AlwaysStoppedAnimation<Color>(
+                    _isFinalizing ? AppTheme.success : AppTheme.primary,
+                  ),
                   minHeight: 3,
                 ),
               )
             : null,
       ),
       body: SafeArea(
-        child: WebViewWidget(controller: _controller),
+        child: Stack(
+          children: [
+            WebViewWidget(controller: _controller),
+            if (_isFinalizing)
+              Container(
+                color: Colors.black54,
+                child: Center(
+                  child: Container(
+                    padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 20),
+                    decoration: BoxDecoration(
+                      color: AppTheme.cardColor(context),
+                      borderRadius: BorderRadius.circular(16),
+                      boxShadow: const [
+                        BoxShadow(color: Colors.black26, blurRadius: 10, offset: Offset(0, 4))
+                      ],
+                    ),
+                    child: Column(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        const SizedBox(
+                          width: 36,
+                          height: 36,
+                          child: CircularProgressIndicator(strokeWidth: 3, color: AppTheme.primary),
+                        ),
+                        const SizedBox(height: 16),
+                        Text(
+                          'Connecting ${widget.store.name}...',
+                          style: TextStyle(
+                            fontSize: 16,
+                            fontWeight: FontWeight.bold,
+                            color: AppTheme.textPrimaryColor(context),
+                          ),
+                        ),
+                        const SizedBox(height: 6),
+                        Text(
+                          'Saving authorization token',
+                          style: TextStyle(fontSize: 12, color: AppTheme.textMutedColor(context)),
+                        ),
+                      ],
+                    ),
+                  ),
+                ),
+              ),
+          ],
+        ),
       ),
     );
   }

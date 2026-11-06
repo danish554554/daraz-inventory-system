@@ -500,7 +500,7 @@ router.post("/import-products/:storeId", async (req, res) => {
 
     res.json({
       success: true,
-      message: "Daraz active products imported successfully",
+      message: `Import complete: ${result.imported || 0} new product(s) imported, ${result.skipped || 0} existing SKU(s) kept without duplicates.`,
       result
     });
   } catch (error) {

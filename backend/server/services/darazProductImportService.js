@@ -314,6 +314,8 @@ async function importProductsForStore(storeId, options = {}) {
   let skipped = 0;
   let errors = 0;
   const error_details = [];
+  const skipped_skus = [];
+  const new_skus = [];
   const seenKeys = new Set();
 
   while (page < maxPages) {
@@ -364,17 +366,36 @@ async function importProductsForStore(storeId, options = {}) {
           continue;
         }
 
-        // Check if SKU is already present in active central inventory across any store
+        // Check if SKU is already present in central inventory across ANY store (active, archived, or deleted)
+        // STRICT DEDUPLICATION: Same SKU must never be repeated to prevent inventory mess!
         const alreadyInInventory = await CentralInventory.findOne({
-          seller_sku: { $regex: skuRegex },
-          is_archived: { $ne: true },
-          is_deleted: { $ne: true },
-          status: { $nin: ['archived', 'inactive', 'deleted', 'suspended', 'draft', 'offline', 'disabled', 'rejected'] }
+          seller_sku: { $regex: skuRegex }
         });
 
         if (alreadyInInventory) {
-          // Product with this SKU is already imported and present in stock list - ignore to prevent duplicate SKUs
+          // Product with this SKU was already imported previously!
+          // 1. Never duplicate it in CentralInventory.
+          // 2. Ensure ProductSkuMap links this store to the existing central product.
+          try {
+            const ProductSkuMap = require('../models/ProductSkuMap');
+            await ProductSkuMap.findOneAndUpdate(
+              { store_id: store._id, sku: sellerSku.trim() },
+              {
+                $setOnInsert: {
+                  store_id: store._id,
+                  sku: sellerSku.trim(),
+                  product_id: alreadyInInventory._id,
+                  daraz_sku_id: safeString(row.daraz_sku_id),
+                  daraz_item_id: safeString(row.daraz_item_id),
+                  seller_sku: sellerSku.trim()
+                }
+              },
+              { upsert: true }
+            );
+          } catch (_) {}
+
           skipped += 1;
+          skipped_skus.push(sellerSku);
           continue;
         }
 
@@ -423,7 +444,7 @@ async function importProductsForStore(storeId, options = {}) {
           last_product_import_at: new Date()
         };
 
-        await CentralInventory.create({
+        const newDoc = await CentralInventory.create({
           ...update,
           stock: initialStock,
           purchase_price: initialCost,
@@ -435,6 +456,25 @@ async function importProductsForStore(storeId, options = {}) {
           status: 'active'
         });
 
+        try {
+          const ProductSkuMap = require('../models/ProductSkuMap');
+          await ProductSkuMap.findOneAndUpdate(
+            { store_id: store._id, sku: sellerSku.trim() },
+            {
+              $setOnInsert: {
+                store_id: store._id,
+                sku: sellerSku.trim(),
+                product_id: newDoc._id,
+                daraz_sku_id: safeString(row.daraz_sku_id),
+                daraz_item_id: safeString(row.daraz_item_id),
+                seller_sku: sellerSku.trim()
+              }
+            },
+            { upsert: true }
+          );
+        } catch (_) {}
+
+        new_skus.push(sellerSku);
         imported += 1;
       } catch (error) {
         errors += 1;
@@ -469,7 +509,9 @@ async function importProductsForStore(storeId, options = {}) {
     updated,
     skipped,
     errors,
-    error_details
+    error_details,
+    new_skus,
+    skipped_skus
   };
 }
 

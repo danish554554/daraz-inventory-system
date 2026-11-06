@@ -19,7 +19,7 @@ class StoresScreen extends StatefulWidget {
   State<StoresScreen> createState() => _StoresScreenState();
 }
 
-class _StoresScreenState extends State<StoresScreen> {
+class _StoresScreenState extends State<StoresScreen> with WidgetsBindingObserver {
   bool _loading = true;
   String? _error;
   String _search = '';
@@ -29,7 +29,21 @@ class _StoresScreenState extends State<StoresScreen> {
   @override
   void initState() {
     super.initState();
+    WidgetsBinding.instance.addObserver(this);
     _load();
+  }
+
+  @override
+  void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
+    super.dispose();
+  }
+
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    if (state == AppLifecycleState.resumed) {
+      _load();
+    }
   }
 
   Future<void> _load() async {
@@ -332,11 +346,16 @@ class _StoresScreenState extends State<StoresScreen> {
           ),
         );
 
-        if (result == true) {
-          await _load();
-          if (mounted) showAppSnackBar(context, '${store.name} connected to Daraz successfully!');
-        } else if (result is String && result.isNotEmpty) {
-          if (mounted) showAppSnackBar(context, result, error: true);
+        // Always reload immediately when returning from webview
+        await _load();
+        Future.delayed(const Duration(seconds: 2), () {
+          if (mounted) _load();
+        });
+
+        if (result == true && mounted) {
+          showAppSnackBar(context, '${store.name} connected to Daraz successfully!');
+        } else if (result is String && result.isNotEmpty && mounted) {
+          showAppSnackBar(context, result, error: true);
         }
         return;
       }
@@ -496,10 +515,11 @@ class _StoresScreenState extends State<StoresScreen> {
 
   Future<void> _importProductsForStore(StoreModel store) async {
     try {
-      await ApiClient.instance.post('/daraz-sync/import-products/${store.id}');
+      final response = await ApiClient.instance.post('/daraz-sync/import-products/${store.id}') as Map<String, dynamic>;
       await _load();
-      if (mounted) showAppSnackBar(context, 'Active Daraz products imported successfully.');
-    } catch (_) {
+      final msg = response['message']?.toString() ?? 'Active Daraz products imported successfully.';
+      if (mounted) showAppSnackBar(context, msg);
+    } catch (e) {
       if (mounted) showAppSnackBar(context, 'Failed to import Daraz products. Please try again.', error: true);
     }
   }
