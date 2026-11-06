@@ -322,7 +322,9 @@ class _DashboardScreenState extends State<DashboardScreen> {
           onPressed: () async {
             await Navigator.push(
               context,
-              MaterialPageRoute<void>(builder: (context) => const ScannerScreen()),
+              MaterialPageRoute<void>(
+                builder: (context) => const ScannerScreen(mode: ScannerScanMode.returnParcels),
+              ),
             );
             await _load(silent: true);
           },
@@ -636,14 +638,16 @@ class _DashboardScreenState extends State<DashboardScreen> {
             Expanded(
               child: _quickActionTile(
                 title: 'Scan Barcode',
-                subtitle: 'Warehouse Audit',
+                subtitle: 'Confirm Failed Delivery',
                 icon: Icons.qr_code_scanner_rounded,
                 color: AppTheme.accent,
                 background: AppTheme.accentSoft,
                 onTap: () async {
                   await Navigator.push(
                     context,
-                    MaterialPageRoute<void>(builder: (context) => const ScannerScreen()),
+                    MaterialPageRoute<void>(
+                      builder: (context) => const ScannerScreen(mode: ScannerScanMode.returnParcels),
+                    ),
                   );
                   await _load(silent: true);
                 },

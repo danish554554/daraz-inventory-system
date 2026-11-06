@@ -523,7 +523,24 @@ router.get("/orders", async (req, res) => {
     if (status) query.status = normalizeString(status).toLowerCase();
     if (normalizeString(search)) {
       const term = normalizeString(search);
-      query.$or = [{ external_order_id: term }, { order_number: term }];
+      const termRegex = new RegExp(`^${term.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}$`, 'i');
+      const matchingItems = await CentralOrderItem.find({
+        $or: [
+          { external_order_item_id: term },
+          { seller_sku: termRegex },
+          { "raw_payload.tracking_code": termRegex },
+          { "raw_payload.package_id": termRegex },
+          { "raw_payload.tracking_number": termRegex }
+        ]
+      }).select("order_id").limit(20).lean();
+      const matchedOrderIds = matchingItems.map((it) => it.order_id).filter(Boolean);
+      query.$or = [
+        { external_order_id: term },
+        { order_number: term },
+        { "raw_payload.order_number": term },
+        { "raw_payload.order_id": term },
+        { _id: { $in: matchedOrderIds } }
+      ];
     }
 
     const orders = await CentralOrder.find(query)
@@ -659,6 +676,156 @@ router.get("/failed-delivery", async (req, res) => {
 router.post("/order-items/:id/mark-received", async (req, res) => {
   try {
     const result = await markOrderItemReceivedBack(req.params.id, { actor: req.body?.actor || 'admin' });
+
+router.get("/lookup-parcel", async (req, res) => {
+  try {
+    const rawCode = (req.query.code || req.query.search || "").toString().trim();
+    if (!rawCode) {
+      return res.status(400).json({ success: false, message: "Code parameter is required" });
+    }
+
+    const cleanCode = rawCode.replace(/[\s\-_]+/g, "");
+    const codeRegex = new RegExp(`^${rawCode.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}$`, "i");
+
+    // 1. Search CentralOrderItem by external_order_item_id, tracking_code, package_id, seller_sku
+    let items = await CentralOrderItem.find({
+      $or: [
+        { external_order_item_id: rawCode },
+        { external_order_item_id: cleanCode },
+        { "raw_payload.tracking_code": codeRegex },
+        { "raw_payload.package_id": codeRegex },
+        { "raw_payload.tracking_number": codeRegex },
+        { "raw_payload.order_item_id": rawCode },
+        { "raw_payload.order_id": rawCode }
+      ]
+    })
+      .populate("store_id", "name code")
+      .populate("order_id", "external_order_id order_number status")
+      .sort({ updatedAt: -1, createdAt: -1 })
+      .limit(10)
+      .lean();
+
+    // 2. If no items found yet, search CentralOrder by order_number or external_order_id
+    if (!items.length) {
+      const orders = await CentralOrder.find({
+        $or: [
+          { order_number: rawCode },
+          { external_order_id: rawCode },
+          { order_number: cleanCode },
+          { external_order_id: cleanCode },
+          { "raw_payload.order_number": rawCode },
+          { "raw_payload.order_id": rawCode }
+        ]
+      }).limit(5).lean();
+
+      if (orders.length) {
+        const orderIds = orders.map((o) => o._id);
+        items = await CentralOrderItem.find({ order_id: { $in: orderIds } })
+          .populate("store_id", "name code")
+          .populate("order_id", "external_order_id order_number status")
+          .sort({ updatedAt: -1, createdAt: -1 })
+          .limit(10)
+          .lean();
+      }
+    }
+
+    // 3. Fallback: search by seller_sku
+    if (!items.length) {
+      items = await CentralOrderItem.find({ seller_sku: codeRegex })
+        .populate("store_id", "name code")
+        .populate("order_id", "external_order_id order_number status")
+        .sort({ updatedAt: -1, createdAt: -1 })
+        .limit(5)
+        .lean();
+    }
+
+    if (!items.length) {
+      return res.json({
+        success: true,
+        found: false,
+        message: "No matching parcel found for this barcode",
+        code: rawCode
+      });
+    }
+
+    // Prioritize return or failed delivery parcels
+    items.sort((a, b) => {
+      const aIsReturnOrFailed = ["return", "failed_delivery"].includes(a.parcel_type) || ["return", "failed_delivery"].includes(a.status_category);
+      const bIsReturnOrFailed = ["return", "failed_delivery"].includes(b.parcel_type) || ["return", "failed_delivery"].includes(b.status_category);
+      if (aIsReturnOrFailed && !bIsReturnOrFailed) return -1;
+      if (!aIsReturnOrFailed && bIsReturnOrFailed) return 1;
+      return 0;
+    });
+
+    const parsedItems = items.map(itemPayload);
+    res.json({
+      success: true,
+      found: true,
+      count: parsedItems.length,
+      items: parsedItems,
+      primary_item: parsedItems[0]
+    });
+  } catch (error) {
+    res.status(500).json({
+      success: false,
+      message: "Error looking up parcel: " + error.message,
+      error: error.message
+    });
+  }
+});
+
+router.post("/confirm-failed-delivery", async (req, res) => {
+  try {
+    const { order_item_id, code } = req.body || {};
+    let targetItemId = order_item_id;
+
+    if (!targetItemId && code) {
+      const rawCode = String(code).trim();
+      const codeRegex = new RegExp(`^${rawCode.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}$`, "i");
+      let item = await CentralOrderItem.findOne({
+        $or: [
+          { external_order_item_id: rawCode },
+          { "raw_payload.tracking_code": codeRegex },
+          { "raw_payload.package_id": codeRegex },
+          { "raw_payload.order_item_id": rawCode }
+        ]
+      }).sort({ updatedAt: -1 });
+
+      if (!item) {
+        const order = await CentralOrder.findOne({
+          $or: [{ order_number: rawCode }, { external_order_id: rawCode }]
+        });
+        if (order) {
+          item = await CentralOrderItem.findOne({ order_id: order._id }).sort({ updatedAt: -1 });
+        }
+      }
+      if (item) targetItemId = item._id;
+    }
+
+    if (!targetItemId) {
+      return res.status(404).json({ success: false, message: "Parcel or order item not found" });
+    }
+
+    const result = await markOrderItemReceivedBack(targetItemId, { actor: 'barcode_scanner' });
+    const updatedDoc = await CentralOrderItem.findById(targetItemId)
+      .populate("store_id", "name code")
+      .populate("order_id", "external_order_id order_number status")
+      .lean();
+
+    res.json({
+      success: true,
+      message: "Failed delivery / return confirmed and removed from active list.",
+      result,
+      item: itemPayload(updatedDoc)
+    });
+  } catch (error) {
+    res.status(400).json({
+      success: false,
+      message: error.message || "Failed to confirm parcel delivery failure",
+      error: error.message
+    });
+  }
+});
     res.json({ success: true, message: "Parcel marked as collected.", result });
   } catch (error) {
     res.status(400).json({ success: false, message: error.message || "Unable to mark parcel as collected", error: error.message });

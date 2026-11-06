@@ -57,6 +57,27 @@ class _ScannerScreenState extends State<ScannerScreen> {
     setState(() => _isProcessing = true);
 
     try {
+      // 0. Search for matching return / failed delivery parcel first via /daraz-sync/lookup-parcel
+      try {
+        final parcelRes = await ApiClient.instance.get(
+          '/daraz-sync/lookup-parcel',
+          queryParameters: <String, dynamic>{'code': code},
+          bypassCache: true,
+        );
+        final parcelMap = JsonReaders.map(parcelRes);
+        if (parcelMap['found'] == true) {
+          final items = JsonReaders.list(parcelMap['items']);
+          if (items.isNotEmpty) {
+            final firstItem = CentralOrderItem.fromJson(JsonReaders.map(items.first));
+            if (mounted) {
+              await _showReturnParcelMatchSheet(firstItem, code);
+              setState(() => _isProcessing = false);
+              return;
+            }
+          }
+        }
+      } catch (_) {}
+
       // 1. Search for matching orders/returns first
       final orderRes = await ApiClient.instance.get(
         '/daraz-sync/orders',
@@ -103,6 +124,226 @@ class _ScannerScreenState extends State<ScannerScreen> {
         setState(() => _isProcessing = false);
       }
     }
+  }
+
+  Future<void> _showReturnParcelMatchSheet(CentralOrderItem item, String scannedCode) async {
+    await showModalBottomSheet<void>(
+      context: context,
+      isScrollControlled: true,
+      useSafeArea: true,
+      backgroundColor: AppTheme.cardColor(context),
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(24)),
+      ),
+      builder: (context) {
+        final isCollected = item.isCollected ||
+            item.collectionStatus.toLowerCase() == 'collected' ||
+            item.collectionStatus.toLowerCase() == 'received';
+        final isFailed = item.isFailedDelivery || item.parcelType == 'failed_delivery';
+
+        return Padding(
+          padding: const EdgeInsets.fromLTRB(20, 16, 20, 28),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: <Widget>[
+              Center(
+                child: Container(
+                  width: 40,
+                  height: 4,
+                  decoration: BoxDecoration(
+                    color: AppTheme.borderColor(context),
+                    borderRadius: BorderRadius.circular(2),
+                  ),
+                ),
+              ),
+              const SizedBox(height: 16),
+              Row(
+                children: <Widget>[
+                  Container(
+                    padding: const EdgeInsets.all(8),
+                    decoration: BoxDecoration(
+                      color: isCollected ? AppTheme.successSoft : (isFailed ? AppTheme.dangerSoft : AppTheme.warningSoft),
+                      borderRadius: BorderRadius.circular(12),
+                    ),
+                    child: Icon(
+                      isCollected ? Icons.check_circle_rounded : (isFailed ? Icons.cancel_presentation_rounded : Icons.assignment_return_rounded),
+                      color: isCollected ? AppTheme.success : (isFailed ? AppTheme.danger : AppTheme.warning),
+                      size: 24,
+                    ),
+                  ),
+                  const SizedBox(width: 12),
+                  Expanded(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: <Widget>[
+                        Text(
+                          isCollected
+                              ? 'Return Already Confirmed'
+                              : (isFailed ? 'Confirm Failed Delivery' : 'Confirm Customer Return'),
+                          style: TextStyle(
+                            fontSize: 16,
+                            fontWeight: FontWeight.w900,
+                            color: AppTheme.textPrimaryColor(context),
+                          ),
+                        ),
+                        Text(
+                          'Scanned Barcode: $scannedCode',
+                          style: TextStyle(
+                            fontSize: 11,
+                            color: AppTheme.textMutedColor(context),
+                            fontWeight: FontWeight.w700,
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                ],
+              ),
+              const SizedBox(height: 16),
+              AppCard(
+                padding: const EdgeInsets.all(12),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: <Widget>[
+                    Row(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: <Widget>[
+                        ProductImageBox(
+                          imageUrl: item.imageUrl,
+                          icon: isFailed ? Icons.local_shipping_outlined : Icons.assignment_return_outlined,
+                          size: 52,
+                        ),
+                        const SizedBox(width: 12),
+                        Expanded(
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: <Widget>[
+                              Text(
+                                item.displayTitle.isNotEmpty ? item.displayTitle : item.productName,
+                                maxLines: 2,
+                                overflow: TextOverflow.ellipsis,
+                                style: TextStyle(fontWeight: FontWeight.w900, fontSize: 13, color: AppTheme.textPrimaryColor(context)),
+                              ),
+                              const SizedBox(height: 4),
+                              Text(
+                                'Order #${item.orderNumber} · ${item.storeName.isNotEmpty ? item.storeName : item.storeCode}',
+                                style: TextStyle(fontSize: 11, color: AppTheme.textMutedColor(context), fontWeight: FontWeight.w800),
+                              ),
+                              if (item.sellerSku.isNotEmpty) ...[
+                                const SizedBox(height: 2),
+                                Text(
+                                  'SKU: ${item.sellerSku}',
+                                  style: TextStyle(fontSize: 10, color: AppTheme.textMutedColor(context), fontWeight: FontWeight.w700),
+                                ),
+                              ],
+                            ],
+                          ),
+                        ),
+                      ],
+                    ),
+                    const SizedBox(height: 10),
+                    if (item.returnReason.isNotEmpty) ...[
+                      Container(
+                        padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+                        decoration: BoxDecoration(
+                          color: AppTheme.softGreyColor(context),
+                          borderRadius: BorderRadius.circular(8),
+                        ),
+                        child: Row(
+                          children: <Widget>[
+                            const Icon(Icons.info_outline_rounded, size: 14, color: AppTheme.warning),
+                            const SizedBox(width: 6),
+                            Expanded(
+                              child: Text(
+                                'Reason: ${item.returnReason.replaceAll('_', ' ')}',
+                                style: TextStyle(fontSize: 11, fontWeight: FontWeight.w700, color: AppTheme.textPrimaryColor(context)),
+                              ),
+                            ),
+                          ],
+                        ),
+                      ),
+                      const SizedBox(height: 10),
+                    ],
+                    Row(
+                      mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                      children: <Widget>[
+                        Text(
+                          'Amount: PKR ${Formatters.money(item.amount)}',
+                          style: const TextStyle(fontWeight: FontWeight.w900, fontSize: 12, color: AppTheme.primary),
+                        ),
+                        StatusChip(
+                          label: isCollected ? 'Collected' : (isFailed ? 'Failed Delivery' : 'Return'),
+                          color: isCollected ? AppTheme.success : (isFailed ? AppTheme.danger : AppTheme.warning),
+                          softColor: isCollected ? AppTheme.successSoft : (isFailed ? AppTheme.dangerSoft : AppTheme.warningSoft),
+                        ),
+                      ],
+                    ),
+                  ],
+                ),
+              ),
+              const SizedBox(height: 16),
+              if (isCollected)
+                Container(
+                  width: double.infinity,
+                  padding: const EdgeInsets.all(12),
+                  decoration: BoxDecoration(
+                    color: AppTheme.successSoft,
+                    borderRadius: BorderRadius.circular(12),
+                  ),
+                  child: Row(
+                    children: <Widget>[
+                      const Icon(Icons.check_circle_rounded, color: AppTheme.success, size: 20),
+                      const SizedBox(width: 10),
+                      Expanded(
+                        child: Text(
+                          item.collectedAt != null
+                              ? 'This parcel was already confirmed and collected on ${Formatters.date(item.collectedAt!)}.'
+                              : 'This parcel has already been confirmed and recorded in history.',
+                          style: const TextStyle(fontSize: 11, fontWeight: FontWeight.w800, color: AppTheme.success),
+                        ),
+                      ),
+                    ],
+                  ),
+                )
+              else
+                PrimaryButton(
+                  label: 'Confirm Return & Restore Stock (+1)',
+                  icon: Icons.check_circle_rounded,
+                  expanded: true,
+                  onPressed: () async {
+                    Navigator.pop(context);
+                    try {
+                      await ApiClient.instance.post(
+                        '/daraz-sync/confirm-failed-delivery',
+                        body: <String, dynamic>{
+                          'order_item_id': item.id,
+                          'code': scannedCode,
+                        },
+                      );
+                      if (context.mounted) {
+                        showAppSnackBar(
+                          context,
+                          '✓ Order #${item.orderNumber} confirmed! Removed from active returns screen & stock restored (+1).',
+                        );
+                      }
+                    } catch (e) {
+                      if (context.mounted) {
+                        showAppSnackBar(context, 'Failed to confirm parcel: $e', error: true);
+                      }
+                    }
+                  },
+                ),
+              const SizedBox(height: 8),
+              SecondaryButton(
+                label: isCollected ? 'Done' : 'Cancel',
+                onPressed: () => Navigator.pop(context),
+              ),
+            ],
+          ),
+        );
+      },
+    );
   }
 
   Future<void> _showOrderMatchSheet(CentralOrder order, String scannedCode) async {
@@ -606,14 +847,14 @@ class _ScannerScreenState extends State<ScannerScreen> {
                 borderRadius: BorderRadius.circular(16),
                 border: Border.all(color: Colors.white24),
               ),
-              child: const Row(
+              child: Row(
                 children: <Widget>[
-                  Icon(Icons.qr_code_scanner_rounded, color: AppTheme.primary, size: 24),
-                  SizedBox(width: 12),
+                  const Icon(Icons.qr_code_scanner_rounded, color: AppTheme.primary, size: 24),
+                  const SizedBox(width: 12),
                   Expanded(
                     child: Text(
-                      'Align Tracking Barcode or Product SKU within frame for instant triage & stock restore.',
-                      style: TextStyle(
+                      widget.mode == ScannerScanMode.returnParcels ? 'Align Tracking Barcode, Order Barcode, or Package ID to confirm delivery failure/return.' : 'Align Tracking Barcode or Product SKU within frame for instant triage & stock restore.',
+                      style: const TextStyle(
                         color: Colors.white,
                         fontSize: 11,
                         fontWeight: FontWeight.w700,

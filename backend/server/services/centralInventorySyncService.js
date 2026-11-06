@@ -1027,7 +1027,11 @@ async function markOrderItemReceivedBack(orderItemId, { actor = 'admin' } = {}) 
     ['return', 'failed_delivery', 'collected', 'scrapped'].includes(statusCategory) ||
     isReturnOrFailedStatus(effectiveStatus, itemDoc.raw_payload || {});
 
-  if (!canCollect) {
+  if (!canCollect && (actor === 'barcode_scanner' || actor === 'admin')) {
+    itemDoc.parcel_type = 'failed_delivery';
+    itemDoc.status_category = 'failed_delivery';
+    itemDoc.return_reason = itemDoc.return_reason || 'Scanned Failed Delivery';
+  } else if (!canCollect) {
     throw new Error('Only return or failed delivery parcels can be marked as collected');
   }
 
