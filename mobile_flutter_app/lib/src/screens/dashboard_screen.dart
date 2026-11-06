@@ -12,7 +12,6 @@ import '../widgets/app_theme.dart';
 import '../widgets/common_widgets.dart';
 import 'returns_screen.dart';
 import 'scanner_screen.dart';
-import 'sync_screen.dart';
 
 class DashboardScreen extends StatefulWidget {
   const DashboardScreen({super.key, required this.sessionManager});
@@ -674,21 +673,6 @@ class _DashboardScreenState extends State<DashboardScreen> {
               ),
             ),
           ],
-        ),
-        const SizedBox(height: 10),
-        _quickActionTile(
-          title: 'Sync Center',
-          subtitle: 'Store Syncs, Orders & Alerts',
-          icon: Icons.sync_rounded,
-          color: AppTheme.primary,
-          background: AppTheme.primarySoft,
-          onTap: () async {
-            await Navigator.push(
-              context,
-              MaterialPageRoute<void>(builder: (context) => const SyncScreen()),
-            );
-            await _load(silent: true);
-          },
         ),
       ],
     );
