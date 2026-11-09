@@ -59,10 +59,10 @@ class _DashboardScreenState extends State<DashboardScreen> {
 
   static DateTime? _lastLiveSyncAt;
 
-  Future<void> _triggerBackgroundLiveSync() async {
+  Future<void> _triggerBackgroundLiveSync({bool force = false}) async {
     if (_isLiveSyncing) return;
     final now = DateTime.now();
-    if (_lastLiveSyncAt != null && now.difference(_lastLiveSyncAt!).inMinutes < 15) {
+    if (!force && _lastLiveSyncAt != null && now.difference(_lastLiveSyncAt!).inMinutes < 15) {
       return; // Already synced within last 15 minutes, keep app fast and lightweight
     }
     _lastLiveSyncAt = now;
@@ -70,10 +70,25 @@ class _DashboardScreenState extends State<DashboardScreen> {
     try {
       await ApiClient.instance.post('/daraz-sync/run-all');
       if (mounted) {
-        await _load(silent: true);
+        await _load(silent: true, forceRefresh: true);
+      }
+      if (mounted && force) {
+        showAppSnackBar(context, 'Orders synced successfully');
+      }
+    } on ApiException catch (e) {
+      if (mounted) {
+        await _load(silent: true, forceRefresh: true);
+      }
+      if (mounted && force) {
+        showAppSnackBar(context, e.message);
       }
     } catch (_) {
-      // Background sync errors shouldn't break UI
+      if (mounted) {
+        await _load(silent: true, forceRefresh: true);
+      }
+      if (mounted && force) {
+        showAppSnackBar(context, 'Sync finished');
+      }
     } finally {
       if (mounted) setState(() => _isLiveSyncing = false);
     }
@@ -225,7 +240,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
               : AppShell(
                   onRefresh: () async {
                     await _load(forceRefresh: true);
-                    await _triggerBackgroundLiveSync();
+                    await _triggerBackgroundLiveSync(force: true);
                   },
                   child: Column(
                     crossAxisAlignment: CrossAxisAlignment.start,
@@ -361,7 +376,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
         ),
         InkWell(
           onTap: _isLiveSyncing ? null : () async {
-            await _triggerBackgroundLiveSync();
+            await _triggerBackgroundLiveSync(force: true);
           },
           borderRadius: BorderRadius.circular(14),
           child: Container(
@@ -371,18 +386,28 @@ class _DashboardScreenState extends State<DashboardScreen> {
               borderRadius: BorderRadius.circular(14),
               border: Border.all(color: AppTheme.primary.withValues(alpha: 0.2)),
             ),
-            child: const Row(
+            child: Row(
               mainAxisSize: MainAxisSize.min,
               children: <Widget>[
-                Icon(
-                  Icons.sync_rounded,
-                  size: 16,
-                  color: AppTheme.primary,
-                ),
-                SizedBox(width: 4),
+                if (_isLiveSyncing)
+                  const SizedBox(
+                    width: 14,
+                    height: 14,
+                    child: CircularProgressIndicator(
+                      strokeWidth: 2,
+                      valueColor: AlwaysStoppedAnimation<Color>(AppTheme.primary),
+                    ),
+                  )
+                else
+                  const Icon(
+                    Icons.sync_rounded,
+                    size: 16,
+                    color: AppTheme.primary,
+                  ),
+                const SizedBox(width: 4),
                 Text(
-                  'Sync',
-                  style: TextStyle(
+                  _isLiveSyncing ? 'Syncing...' : 'Sync',
+                  style: const TextStyle(
                     color: AppTheme.primary,
                     fontWeight: FontWeight.w900,
                     fontSize: 11,
@@ -605,11 +630,12 @@ class _DashboardScreenState extends State<DashboardScreen> {
             Expanded(
               child: _quickActionTile(
                 title: 'Pull Orders',
-                subtitle: 'Live Sync',
+                subtitle: _isLiveSyncing ? 'Syncing...' : 'Live Sync',
                 icon: Icons.cloud_download_rounded,
                 color: AppTheme.primary,
                 background: AppTheme.primarySoft,
-                onTap: _isLiveSyncing ? null : () => _triggerBackgroundLiveSync(),
+                isLoading: _isLiveSyncing,
+                onTap: _isLiveSyncing ? null : () => _triggerBackgroundLiveSync(force: true),
               ),
             ),
             const SizedBox(width: 10),
@@ -685,6 +711,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
     required Color color,
     required Color background,
     required VoidCallback? onTap,
+    bool isLoading = false,
   }) {
     return AppCard(
       onTap: onTap,
@@ -697,7 +724,16 @@ class _DashboardScreenState extends State<DashboardScreen> {
               color: background,
               borderRadius: BorderRadius.circular(12),
             ),
-            child: Icon(icon, color: color, size: 20),
+            child: isLoading
+                ? SizedBox(
+                    width: 20,
+                    height: 20,
+                    child: CircularProgressIndicator(
+                      strokeWidth: 2.2,
+                      valueColor: AlwaysStoppedAnimation<Color>(color),
+                    ),
+                  )
+                : Icon(icon, color: color, size: 20),
           ),
           const SizedBox(width: 10),
           Expanded(
@@ -719,8 +755,8 @@ class _DashboardScreenState extends State<DashboardScreen> {
                   subtitle,
                   maxLines: 1,
                   overflow: TextOverflow.ellipsis,
-                  style: const TextStyle(
-                    color: AppTheme.textMuted,
+                  style: TextStyle(
+                    color: isLoading ? color : AppTheme.textMuted,
                     fontSize: 10,
                     fontWeight: FontWeight.w700,
                   ),
