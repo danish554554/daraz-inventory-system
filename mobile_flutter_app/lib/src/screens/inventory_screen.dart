@@ -586,6 +586,27 @@ class _InventoryScreenState extends State<InventoryScreen> {
                               onPressed: _deleting ? null : _cancelDeleteMode,
                               child: const Text('Cancel', style: TextStyle(fontSize: 12, fontWeight: FontWeight.w900)),
                             ),
+                            TextButton(
+                              onPressed: _deleting
+                                  ? null
+                                  : () {
+                                      setState(() {
+                                        if (_selectedDeleteInventoryIds.length == _visibleItems.length) {
+                                          _selectedDeleteInventoryIds.clear();
+                                        } else {
+                                          _selectedDeleteInventoryIds.clear();
+                                          for (final item in _visibleItems) {
+                                            final id = item.inventoryId.isNotEmpty ? item.inventoryId : item.id;
+                                            if (id.isNotEmpty) _selectedDeleteInventoryIds.add(id);
+                                          }
+                                        }
+                                      });
+                                    },
+                              child: Text(
+                                _selectedDeleteInventoryIds.length == _visibleItems.length ? 'Deselect All' : 'Select All',
+                                style: const TextStyle(fontSize: 12, fontWeight: FontWeight.w900),
+                              ),
+                            ),
                             FilledButton.icon(
                               style: FilledButton.styleFrom(
                                 backgroundColor: AppTheme.danger,

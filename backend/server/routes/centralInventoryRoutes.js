@@ -1088,27 +1088,44 @@ router.delete('/:id', async (req, res, next) => {
 router.post('/batch-delete', async (req, res, next) => {
   try {
     const { inventory_ids = [] } = req.body;
-    if (!Array.isArray(inventory_ids) || inventory_ids.length === 0) {
-      return res.status(400).json({ message: 'No inventory IDs provided for removal.' });
-    }
+    const isAll = inventory_ids === 'all' || (Array.isArray(inventory_ids) && inventory_ids.includes('all'));
 
-    const [items, groups] = await Promise.all([
-      CentralInventory.find({ _id: { $in: inventory_ids } }),
-      InventoryMergeGroup.find({ _id: { $in: inventory_ids } })
-    ]);
+    let targetItemIds = [];
+    let targetSkus = [];
+    let groups = [];
 
-    const allItemIds = new Set(items.map((i) => String(i._id)));
-    const skus = new Set(items.map((i) => i.seller_sku).filter(Boolean));
-
-    for (const group of groups) {
-      for (const id of group.inventory_ids || []) {
-        allItemIds.add(String(id));
+    if (isAll) {
+      const [items, allGroups] = await Promise.all([
+        CentralInventory.find({ is_archived: { $ne: true }, is_deleted: { $ne: true } }),
+        InventoryMergeGroup.find({})
+      ]);
+      targetItemIds = items.map((i) => i._id);
+      targetSkus = items.map((i) => i.seller_sku).filter(Boolean);
+      groups = allGroups;
+    } else {
+      if (!Array.isArray(inventory_ids) || inventory_ids.length === 0) {
+        return res.status(400).json({ message: 'No inventory IDs provided for removal.' });
       }
-      if (group.master_sku) skus.add(group.master_sku);
-    }
 
-    const targetItemIds = Array.from(allItemIds);
-    const targetSkus = Array.from(skus);
+      const [items, foundGroups] = await Promise.all([
+        CentralInventory.find({ _id: { $in: inventory_ids } }),
+        InventoryMergeGroup.find({ _id: { $in: inventory_ids } })
+      ]);
+
+      const allItemIds = new Set(items.map((i) => String(i._id)));
+      const skus = new Set(items.map((i) => i.seller_sku).filter(Boolean));
+
+      for (const group of foundGroups) {
+        for (const id of group.inventory_ids || []) {
+          allItemIds.add(String(id));
+        }
+        if (group.master_sku) skus.add(group.master_sku);
+      }
+
+      targetItemIds = Array.from(allItemIds);
+      targetSkus = Array.from(skus);
+      groups = foundGroups;
+    }
 
     await InventoryMergeGroup.updateMany(
       { inventory_ids: { $in: targetItemIds } },
@@ -1125,14 +1142,20 @@ router.post('/batch-delete', async (req, res, next) => {
     );
 
     if (targetSkus.length > 0) {
-      await Product.updateMany(
-        { sku: { $in: targetSkus } },
-        { $set: { is_active: false, status: 'archived' } }
-      );
-      await CentralInventory.updateMany(
-        { seller_sku: { $in: targetSkus } },
-        { $set: { is_archived: true, is_deleted: true, status: 'archived' } }
-      );
+      const ProductSkuMap = require('../models/ProductSkuMap');
+      await Promise.all([
+        Product.updateMany(
+          { sku: { $in: targetSkus } },
+          { $set: { is_active: false, status: 'archived' } }
+        ),
+        CentralInventory.updateMany(
+          { seller_sku: { $in: targetSkus } },
+          { $set: { is_archived: true, is_deleted: true, status: 'archived' } }
+        ),
+        ProductSkuMap.deleteMany(
+          { sku: { $in: targetSkus } }
+        )
+      ]);
     }
 
     res.json({
