@@ -418,7 +418,7 @@ async function importProductsForStore(storeId, options = {}) {
                     seller_sku: sellerSku.trim()
                   }
                 },
-                { upsert: true }
+                { upsert: true, returnDocument: 'after' }
               );
             } catch (_) {}
           }
@@ -506,7 +506,7 @@ async function importProductsForStore(storeId, options = {}) {
                 seller_sku: sellerSku.trim()
               }
             },
-            { upsert: true }
+            { upsert: true, returnDocument: 'after' }
           );
         } catch (_) {}
 
