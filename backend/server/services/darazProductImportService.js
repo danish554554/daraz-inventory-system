@@ -318,6 +318,15 @@ async function importProductsForStore(storeId, options = {}) {
   const new_skus = [];
   const seenKeys = new Set();
 
+  // Purge any orphaned CentralInventory documents from previously deleted stores
+  try {
+    const allActiveStores = await Store.find().select('_id').lean();
+    const activeStoreIds = allActiveStores.map((s) => s._id);
+    await CentralInventory.deleteMany({
+      store_id: { $nin: activeStoreIds }
+    });
+  } catch (_) {}
+
   while (page < maxPages) {
     const response = await getProducts({
       storeToken,
@@ -364,12 +373,32 @@ async function importProductsForStore(storeId, options = {}) {
           status: { $nin: ['archived', 'inactive', 'deleted', 'suspended', 'draft', 'offline', 'disabled', 'rejected', 'deactivated'] }
         };
 
-        const alreadyOnStockScreen = await CentralInventory.findOne(activeStockQuery);
+        let alreadyOnStockScreen = await CentralInventory.findOne(activeStockQuery);
+
+        if (alreadyOnStockScreen) {
+          const owningStore = await Store.findById(alreadyOnStockScreen.store_id);
+          if (!owningStore) {
+            // Orphaned from deleted store: delete it and allow clean import for active store
+            await CentralInventory.deleteOne({ _id: alreadyOnStockScreen._id });
+            alreadyOnStockScreen = null;
+          }
+        }
 
         const InventoryMergeGroup = require('../models/InventoryMergeGroup');
-        const inMergeGroup = await InventoryMergeGroup.findOne({
+        let inMergeGroup = await InventoryMergeGroup.findOne({
           master_sku: { $regex: skuRegex }
         });
+
+        if (inMergeGroup) {
+          const validInv = await CentralInventory.find({
+            _id: { $in: inMergeGroup.inventory_ids },
+            is_deleted: { $ne: true }
+          }).lean();
+          if (validInv.length === 0) {
+            await InventoryMergeGroup.deleteOne({ _id: inMergeGroup._id });
+            inMergeGroup = null;
+          }
+        }
 
         if (alreadyOnStockScreen || inMergeGroup) {
           // SKU is ALREADY listed on the stock screen! NEVER import duplicate SKU on stock screen.

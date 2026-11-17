@@ -264,8 +264,14 @@ class _FinanceScreenState extends State<FinanceScreen> {
 
     if (!mounted) return;
 
-    // Look for matching inventory item
-    final matched = _inventory.where((i) => i.sellerSku.toLowerCase() == sku.toLowerCase()).firstOrNull;
+    // Look for matching inventory item with exact or punctuation-normalized SKU matching
+    String normSku(String s) => s.replaceAll(RegExp(r'[^a-zA-Z0-9]'), '').toLowerCase();
+    final targetNorm = normSku(sku);
+    final matched = _inventory.where((i) {
+      if (i.sellerSku.toLowerCase() == sku.toLowerCase()) return true;
+      if (targetNorm.isNotEmpty && normSku(i.sellerSku) == targetNorm) return true;
+      return false;
+    }).firstOrNull;
     if (matched != null && (matched.costPrice > 0 || matched.purchasePrice > 0)) {
       final c = matched.costPrice > 0 ? matched.costPrice : matched.purchasePrice;
       costController.text = c.toStringAsFixed(c.truncateToDouble() == c ? 0 : 2);

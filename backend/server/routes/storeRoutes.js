@@ -13,6 +13,9 @@ const ProductSkuMap = require("../models/ProductSkuMap");
 const StockAdjustmentRequest = require("../models/StockAdjustmentRequest");
 const StockReceipt = require("../models/StockReceipt");
 const SyncIssue = require("../models/SyncIssue");
+const FinanceEntry = require("../models/FinanceEntry");
+const InventoryMergeGroup = require("../models/InventoryMergeGroup");
+const Product = require("../models/Product");
 const { getStoresHealthData, getSingleStoreHealth } = require("../services/storeHealthService");
 const { validateStoreToken, saveStoreTokenConnection } = require("../services/darazService");
 
@@ -296,26 +299,77 @@ router.delete("/:id", async (req, res) => {
       });
     }
 
-    const query = { store_id: store._id };
+    const storeIdStr = String(store._id);
+    const storeCode = String(store.code || "").trim();
+    const storeName = String(store.name || "").trim();
 
+    const storeQuery = {
+      $or: [
+        { store_id: store._id },
+        { store_id: storeIdStr },
+        ...(storeCode ? [{ store_code: storeCode }] : [])
+      ]
+    };
+
+    // 1. Clean up InventoryMergeGroup references
+    const storeInvDocs = await CentralInventory.find(storeQuery).select("_id seller_sku").lean();
+    const invIds = storeInvDocs.map((d) => d._id);
+
+    if (invIds.length > 0) {
+      await InventoryMergeGroup.updateMany(
+        {},
+        { $pull: { inventory_ids: { $in: invIds } } }
+      );
+      await InventoryMergeGroup.deleteMany({
+        $or: [
+          { inventory_ids: { $size: 0 } },
+          { inventory_ids: { $size: 1 } },
+          { "inventory_ids.0": { $exists: false } }
+        ]
+      });
+    }
+
+    // 2. Cascade delete all store-related records
     await Promise.all([
-      StoreToken.deleteMany(query),
-      StoreConnectionConfig.deleteMany(query),
-      StoreSyncLog.deleteMany(query),
-      CentralInventory.deleteMany(query),
-      CentralOrder.deleteMany(query),
-      CentralOrderItem.deleteMany(query),
-      InventoryTransaction.deleteMany(query),
-      ProductSkuMap.deleteMany(query),
-      StockAdjustmentRequest.deleteMany(query),
-      StockReceipt.deleteMany(query),
-      SyncIssue.deleteMany(query),
+      StoreToken.deleteMany(storeQuery),
+      StoreConnectionConfig.deleteMany(storeQuery),
+      StoreSyncLog.deleteMany(storeQuery),
+      CentralInventory.deleteMany(storeQuery),
+      CentralOrder.deleteMany(storeQuery),
+      CentralOrderItem.deleteMany(storeQuery),
+      InventoryTransaction.deleteMany(storeQuery),
+      ProductSkuMap.deleteMany({
+        $or: [
+          { store_id: store._id },
+          { store_id: storeIdStr }
+        ]
+      }),
+      StockAdjustmentRequest.deleteMany(storeQuery),
+      StockReceipt.deleteMany(storeQuery),
+      SyncIssue.deleteMany(storeQuery),
+      FinanceEntry.deleteMany({
+        $or: [
+          { store_id: store._id },
+          { store_id: storeIdStr },
+          ...(storeCode ? [{ store_code: storeCode }] : []),
+          ...(storeName ? [{ store_name: storeName }] : [])
+        ]
+      }),
       Store.deleteOne({ _id: store._id })
     ]);
 
+    // 3. Clean up orphaned Product records that have no remaining CentralInventory or ProductSkuMap
+    const remainingSkuMaps = await ProductSkuMap.distinct("sku");
+    const remainingInventorySkus = await CentralInventory.distinct("seller_sku");
+    const activeSkus = new Set([...remainingSkuMaps, ...remainingInventorySkus]);
+    const orphanedProducts = await Product.find({ sku: { $nin: Array.from(activeSkus) } }).select("_id").lean();
+    if (orphanedProducts.length > 0) {
+      await Product.deleteMany({ _id: { $in: orphanedProducts.map((p) => p._id) } });
+    }
+
     return res.json({
       success: true,
-      message: "Store deleted successfully"
+      message: "Store, inventory, and finance data deleted successfully"
     });
   } catch (error) {
     console.error(error);

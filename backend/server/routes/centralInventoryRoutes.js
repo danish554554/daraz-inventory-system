@@ -9,6 +9,7 @@ const StockReceipt = require('../models/StockReceipt');
 const StockAdjustmentRequest = require('../models/StockAdjustmentRequest');
 const Store = require('../models/Store');
 const InventoryMergeGroup = require('../models/InventoryMergeGroup');
+const FinanceEntry = require('../models/FinanceEntry');
 const {
   buildMasterSku,
   resolveStockTarget,
@@ -47,6 +48,75 @@ function normalizeDateInput(value) {
   const date = value ? new Date(value) : new Date();
   if (Number.isNaN(date.getTime())) return new Date();
   return date;
+}
+
+// Synchronize purchasing cost to Products, CentralOrderItems, and FinanceEntries
+async function syncFinanceCostForSku(sku, unitCost) {
+  if (!sku || unitCost <= 0) return 0;
+  try {
+    const trimmed = String(sku).trim();
+    const escaped = trimmed.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    const withHyphens = trimmed.replace(/\s+/g, '-');
+    const withSpaces = trimmed.replace(/[-_]+/g, ' ');
+    const strippedSuffix = trimmed.replace(/[-_\s]\d+$/, '');
+
+    const candidateStrings = Array.from(new Set([
+      trimmed,
+      withHyphens,
+      withSpaces,
+      strippedSuffix
+    ].filter(Boolean)));
+
+    const regexList = candidateStrings.map((s) => new RegExp(`^${s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}$`, 'i'));
+    const orQueries = regexList.map((rgx) => ({ seller_sku: rgx }));
+
+    // 1. Update Product catalog purchase price
+    await Product.updateMany(
+      { $or: regexList.map((rgx) => ({ sku: rgx })) },
+      { $set: { purchase_price: unitCost } }
+    );
+
+    // 2. Update CentralOrderItem records
+    const orderItems = await CentralOrderItem.find({ $or: orQueries });
+    for (const orderItem of orderItems) {
+      const itemUnitPrice = toNumber(orderItem.unit_price, 0);
+      const itemQty = toNumber(orderItem.quantity, 1);
+      const itemRev = itemUnitPrice * itemQty;
+      const itemCost = unitCost * itemQty;
+      orderItem.cost_price = unitCost;
+      orderItem.profit = itemRev - itemCost;
+      orderItem.profit_margin = itemRev > 0 ? Number((((itemRev - itemCost) / itemRev) * 100).toFixed(2)) : 0;
+      orderItem.profit_ready = true;
+      await orderItem.save();
+    }
+
+    // 3. Update FinanceEntry order records across all statements
+    const financeEntries = await FinanceEntry.find({
+      $or: orQueries,
+      entry_type: 'order'
+    });
+
+    let count = 0;
+    for (const entry of financeEntries) {
+      if (entry.is_penalty || entry.is_penalty_refund || /return|cancel|penalt/i.test(entry.order_status || '')) continue;
+      const qty = entry.quantity > 0 ? entry.quantity : 1;
+      const totalCost = Number((unitCost * qty).toFixed(2));
+      const netProfit = Number(((entry.net_settlement || 0) - totalCost).toFixed(2));
+
+      entry.cost_price = unitCost;
+      entry.total_cost = totalCost;
+      entry.net_profit = netProfit;
+      entry.profit_ready = true;
+      entry.matched_by = `central_inventory_sync:${trimmed}`;
+      await entry.save();
+      count++;
+    }
+
+    return count;
+  } catch (err) {
+    console.warn(`[CentralInventory] syncFinanceCostForSku error for SKU ${sku}:`, err.message);
+    return 0;
+  }
 }
 
 async function findInventoryByPayload({ inventory_id, product_id, store_id, seller_sku, product_name }) {
@@ -629,23 +699,11 @@ router.post('/restock', async (req, res, next) => {
       }
 
       if (refreshed.seller_sku) {
-        await Product.findOneAndUpdate(
-          { sku: refreshed.seller_sku },
-          { $set: { purchase_price: unitCost } }
+        await CentralInventory.updateMany(
+          { seller_sku: { $regex: new RegExp(`^${refreshed.seller_sku.trim().replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}$`, 'i') } },
+          { $set: { purchase_price: unitCost, cost_price: unitCost } }
         );
-
-        const orderItems = await CentralOrderItem.find({ seller_sku: refreshed.seller_sku });
-        for (const orderItem of orderItems) {
-          const itemUnitPrice = toNumber(orderItem.unit_price, 0);
-          const itemQty = toNumber(orderItem.quantity, 1);
-          const itemRev = itemUnitPrice * itemQty;
-          const itemCost = unitCost * itemQty;
-          orderItem.cost_price = unitCost;
-          orderItem.profit = itemRev - itemCost;
-          orderItem.profit_margin = itemRev > 0 ? Number((((itemRev - itemCost) / itemRev) * 100).toFixed(2)) : 0;
-          orderItem.profit_ready = true;
-          await orderItem.save();
-        }
+        await syncFinanceCostForSku(refreshed.seller_sku, unitCost);
       }
     }
 
@@ -677,6 +735,21 @@ router.post('/restock/bulk', async (req, res, next) => {
         const refreshed = result.target || target;
         await StockReceipt.create({ inventory_id: refreshed.stock_doc_id, store_id: refreshed.store_id, seller_sku: refreshed.seller_sku, product_name: refreshed.product_name, quantity: qty, unit_cost: unitCost, supplier_name: supplierName, invoice_number: invoiceNumber, note, receipt_type: 'purchase', created_by: req.body.created_by || 'admin' });
         await InventoryTransaction.create({ store_id: refreshed.store_id, inventory_id: refreshed.stock_doc_id, seller_sku: refreshed.seller_sku, master_sku: refreshed.master_sku, product_name: refreshed.product_name, transaction_type: 'manual_add', quantity: qty, stock_before: result.stock_before, stock_after: result.stock_after, note: note || 'Bulk restock' });
+        if (unitCost > 0) {
+          if (refreshed.stock_doc_id) {
+            await CentralInventory.findByIdAndUpdate(
+              refreshed.stock_doc_id,
+              { $set: { cost_price: unitCost, purchase_price: unitCost } }
+            );
+          }
+          if (refreshed.seller_sku) {
+            await CentralInventory.updateMany(
+              { seller_sku: { $regex: new RegExp(`^${refreshed.seller_sku.trim().replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}$`, 'i') } },
+              { $set: { purchase_price: unitCost, cost_price: unitCost } }
+            );
+            await syncFinanceCostForSku(refreshed.seller_sku, unitCost);
+          }
+        }
         results.push({ line: index + 1, store_code: storeCode, seller_sku: refreshed.seller_sku, master_sku: refreshed.master_sku, product_name: refreshed.product_name, quantity: qty, stock_after: result.stock_after, merged: refreshed.kind === 'merge' });
       } catch (error) {
         errors.push({ line: index + 1, value: line, message: error.message || 'Bulk restock failed' });
@@ -927,23 +1000,13 @@ router.put('/:id/prices', async (req, res, next) => {
     item.profit_margin = margin;
     await item.save();
 
-    await Product.findOneAndUpdate(
-      { sku: item.seller_sku },
-      { $set: { purchase_price: cost, selling_price: selling } }
-    );
-
-    if (cost > 0) {
-      const orderItems = await CentralOrderItem.find({ seller_sku: item.seller_sku });
-      for (const orderItem of orderItems) {
-        const itemUnitPrice = toNumber(orderItem.unit_price, 0);
-        const itemQty = toNumber(orderItem.quantity, 1);
-        const itemRev = itemUnitPrice * itemQty;
-        const itemCost = cost * itemQty;
-        orderItem.cost_price = cost;
-        orderItem.profit = itemRev - itemCost;
-        orderItem.profit_margin = itemRev > 0 ? Number((((itemRev - itemCost) / itemRev) * 100).toFixed(2)) : 0;
-        orderItem.profit_ready = true;
-        await orderItem.save();
+    if (item.seller_sku) {
+      await CentralInventory.updateMany(
+        { seller_sku: { $regex: new RegExp(`^${item.seller_sku.trim().replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}$`, 'i') } },
+        { $set: { purchase_price: cost, cost_price: cost, selling_price: selling, profit_margin: margin } }
+      );
+      if (cost > 0) {
+        await syncFinanceCostForSku(item.seller_sku, cost);
       }
     }
 
