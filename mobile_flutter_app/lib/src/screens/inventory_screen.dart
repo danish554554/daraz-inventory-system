@@ -194,6 +194,143 @@ class _InventoryScreenState extends State<InventoryScreen> {
     }
   }
 
+  Future<void> _openEditPriceDialog(InventoryItem item) async {
+    final currentCost = item.costPrice > 0 ? item.costPrice : item.purchasePrice;
+    final costController = TextEditingController(
+      text: currentCost > 0 ? currentCost.toStringAsFixed(currentCost.truncateToDouble() == currentCost ? 0 : 2) : '',
+    );
+    final sellingController = TextEditingController(
+      text: item.sellingPrice > 0
+          ? item.sellingPrice.toStringAsFixed(item.sellingPrice.truncateToDouble() == item.sellingPrice ? 0 : 2)
+          : '',
+    );
+
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (context) => StatefulBuilder(
+        builder: (context, setDialogState) {
+          final costVal = double.tryParse(costController.text.trim()) ?? 0;
+          final sellVal = double.tryParse(sellingController.text.trim()) ?? 0;
+          final marginVal = sellVal > 0 && costVal > 0 ? (((sellVal - costVal) / sellVal) * 100) : 0.0;
+
+          return AlertDialog(
+            backgroundColor: AppTheme.cardColor(context),
+            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
+            title: Row(
+              children: <Widget>[
+                Container(
+                  padding: const EdgeInsets.all(6),
+                  decoration: BoxDecoration(color: AppTheme.primarySoft, borderRadius: BorderRadius.circular(10)),
+                  child: const Icon(Icons.price_change_outlined, color: AppTheme.primary, size: 20),
+                ),
+                const SizedBox(width: 10),
+                Expanded(
+                  child: Text(
+                    'Set Purchase Cost & Price',
+                    style: TextStyle(color: AppTheme.textPrimaryColor(context), fontWeight: FontWeight.w900, fontSize: 16),
+                  ),
+                ),
+              ],
+            ),
+            content: SingleChildScrollView(
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: <Widget>[
+                  Text(
+                    item.title,
+                    maxLines: 2,
+                    overflow: TextOverflow.ellipsis,
+                    style: TextStyle(fontWeight: FontWeight.w800, color: AppTheme.textPrimaryColor(context), fontSize: 13),
+                  ),
+                  const SizedBox(height: 4),
+                  Text(
+                    'SKU: ${item.sellerSku}',
+                    style: TextStyle(color: AppTheme.textMutedColor(context), fontSize: 11, fontWeight: FontWeight.w700),
+                  ),
+                  const SizedBox(height: 14),
+                  AppTextField(
+                    controller: costController,
+                    labelText: 'Purchase / Unit Cost (PKR)',
+                    hintText: 'e.g. 280',
+                    keyboardType: const TextInputType.numberWithOptions(decimal: true),
+                    onChanged: (_) => setDialogState(() {}),
+                  ),
+                  const SizedBox(height: 12),
+                  AppTextField(
+                    controller: sellingController,
+                    labelText: 'Selling Price (PKR)',
+                    hintText: 'e.g. 550',
+                    keyboardType: const TextInputType.numberWithOptions(decimal: true),
+                    onChanged: (_) => setDialogState(() {}),
+                  ),
+                  const SizedBox(height: 12),
+                  Container(
+                    padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+                    decoration: BoxDecoration(
+                      color: AppTheme.softGreyColor(context),
+                      borderRadius: BorderRadius.circular(10),
+                    ),
+                    child: Row(
+                      mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                      children: <Widget>[
+                        Text('Calculated Margin:', style: TextStyle(color: AppTheme.textMutedColor(context), fontSize: 12, fontWeight: FontWeight.w700)),
+                        Text(
+                          '${marginVal.toStringAsFixed(1)}%',
+                          style: TextStyle(
+                            color: marginVal >= 20 ? AppTheme.success : (marginVal > 0 ? AppTheme.warning : AppTheme.danger),
+                            fontWeight: FontWeight.w900,
+                            fontSize: 13,
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                  const SizedBox(height: 8),
+                  Text(
+                    '💡 Saving will instantly update all orders on the Finance screen and calculate your true net profit.',
+                    style: TextStyle(color: AppTheme.textMutedColor(context), fontSize: 11, fontWeight: FontWeight.w600),
+                  ),
+                ],
+              ),
+            ),
+            actions: <Widget>[
+              TextButton(onPressed: () => Navigator.pop(context, false), child: const Text('Cancel')),
+              FilledButton(
+                style: FilledButton.styleFrom(backgroundColor: AppTheme.primary),
+                onPressed: () => Navigator.pop(context, true),
+                child: const Text('Save & Sync to Finance'),
+              ),
+            ],
+          );
+        },
+      ),
+    );
+
+    if (confirmed == true) {
+      final unitCost = double.tryParse(costController.text.trim()) ?? 0;
+      final selling = double.tryParse(sellingController.text.trim()) ?? 0;
+      final id = item.inventoryId.isNotEmpty ? item.inventoryId : item.id;
+
+      try {
+        await ApiClient.instance.put(
+          '/central-inventory/$id/prices',
+          body: <String, dynamic>{
+            'purchase_price': unitCost,
+            'cost_price': unitCost,
+            'selling_price': selling,
+          },
+        );
+        if (mounted) {
+          showAppSnackBar(context, 'Price and cost saved! Recalculated finance profits for this product.');
+          _load(silent: true);
+        }
+      } catch (e) {
+        if (mounted) showAppSnackBar(context, 'Failed to update prices: $e', error: true);
+      }
+    }
+  }
+
   Future<void> _openQuickAdjustment({InventoryItem? item}) async {
     final delta = await showModalBottomSheet<int>(
       context: context,
@@ -743,6 +880,10 @@ class _InventoryScreenState extends State<InventoryScreen> {
                 Navigator.pop(sheetContext);
                 WidgetsBinding.instance.addPostFrameCallback((_) => _openRestockSheet(item: item));
               },
+              onEditPrice: () {
+                Navigator.pop(sheetContext);
+                WidgetsBinding.instance.addPostFrameCallback((_) => _openEditPriceDialog(item));
+              },
               onAdjust: () {
                 Navigator.pop(sheetContext);
                 WidgetsBinding.instance.addPostFrameCallback((_) => _openQuickAdjustment(item: item));
@@ -1105,6 +1246,7 @@ class InventoryItemActionsSheet extends StatelessWidget {
     super.key,
     required this.item,
     required this.onRestock,
+    required this.onEditPrice,
     required this.onAdjust,
     required this.onRequest,
     required this.onRemove,
@@ -1112,6 +1254,7 @@ class InventoryItemActionsSheet extends StatelessWidget {
 
   final InventoryItem item;
   final VoidCallback onRestock;
+  final VoidCallback onEditPrice;
   final VoidCallback onAdjust;
   final VoidCallback onRequest;
   final VoidCallback onRemove;
@@ -1157,6 +1300,12 @@ class InventoryItemActionsSheet extends StatelessWidget {
               onPressed: onRestock,
               icon: Icons.add_box_outlined,
               expanded: true,
+            ),
+            const SizedBox(height: 10),
+            SecondaryButton(
+              label: 'Set Purchase Cost & Selling Price',
+              onPressed: onEditPrice,
+              icon: Icons.price_change_outlined,
             ),
             const SizedBox(height: 10),
             SecondaryButton(

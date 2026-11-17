@@ -264,12 +264,16 @@ class _FinanceScreenState extends State<FinanceScreen> {
 
     if (!mounted) return;
 
-    // Look for matching inventory item with exact or punctuation-normalized SKU matching
+    // Look for matching inventory item with exact, punctuation-normalized, prefix, or title matching
     String normSku(String s) => s.replaceAll(RegExp(r'[^a-zA-Z0-9]'), '').toLowerCase();
     final targetNorm = normSku(sku);
+    final targetNameNorm = normSku(name);
     final matched = _inventory.where((i) {
       if (i.sellerSku.toLowerCase() == sku.toLowerCase()) return true;
-      if (targetNorm.isNotEmpty && normSku(i.sellerSku) == targetNorm) return true;
+      final iSkuNorm = normSku(i.sellerSku);
+      if (targetNorm.isNotEmpty && iSkuNorm == targetNorm) return true;
+      if (targetNorm.length >= 6 && (iSkuNorm.startsWith(targetNorm) || targetNorm.startsWith(iSkuNorm))) return true;
+      if (targetNameNorm.length >= 5 && (normSku(i.title) == targetNameNorm || normSku(i.title).contains(targetNameNorm) || targetNameNorm.contains(normSku(i.title)))) return true;
       return false;
     }).firstOrNull;
     if (matched != null && (matched.costPrice > 0 || matched.purchasePrice > 0)) {
@@ -346,7 +350,7 @@ class _FinanceScreenState extends State<FinanceScreen> {
       }
 
       try {
-        await _provider.setCostPrice(sellerSku: sku, costPrice: cost);
+        await _provider.setCostPrice(sellerSku: sku, costPrice: cost, productName: entry.productName);
         if (mounted) showAppSnackBar(context, 'Cost price saved! Profits recalculated for SKU $sku.');
       } catch (e) {
         if (mounted) showAppSnackBar(context, 'Error updating cost: $e', error: true);

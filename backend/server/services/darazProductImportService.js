@@ -351,93 +351,34 @@ async function importProductsForStore(storeId, options = {}) {
 
       const rowKey = `${String(store._id)}:${sellerSku.toLowerCase()}`;
       if (seenKeys.has(rowKey)) {
-        skipped += 1;
         continue;
       }
       seenKeys.add(rowKey);
+
       try {
         const skuRegex = new RegExp(`^${sellerSku.trim().replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}$`, 'i');
 
-        // 1. Only active listings on stores should be imported. If product is in inactive tab, do not import it!
+        // Only active listings on stores should be imported. If product is inactive/suspended on Daraz, skip it.
         if (isInactiveStatus(row.status)) {
           skipped += 1;
           skipped_skus.push(sellerSku);
           continue;
         }
 
-        // 2. Check if this SKU is ALREADY listed on the stock screen (active CentralInventory or merge group)
-        const activeStockQuery = {
-          seller_sku: { $regex: skuRegex },
-          is_archived: { $ne: true },
-          is_deleted: { $ne: true },
-          status: { $nin: ['archived', 'inactive', 'deleted', 'suspended', 'draft', 'offline', 'disabled', 'rejected', 'deactivated'] }
-        };
-
-        let alreadyOnStockScreen = await CentralInventory.findOne(activeStockQuery);
-
-        if (alreadyOnStockScreen) {
-          const owningStore = await Store.findById(alreadyOnStockScreen.store_id);
-          if (!owningStore) {
-            // Orphaned from deleted store: delete it and allow clean import for active store
-            await CentralInventory.deleteOne({ _id: alreadyOnStockScreen._id });
-            alreadyOnStockScreen = null;
-          }
-        }
-
-        const InventoryMergeGroup = require('../models/InventoryMergeGroup');
-        let inMergeGroup = await InventoryMergeGroup.findOne({
-          master_sku: { $regex: skuRegex }
-        });
-
-        if (inMergeGroup) {
-          const validInv = await CentralInventory.find({
-            _id: { $in: inMergeGroup.inventory_ids },
-            is_deleted: { $ne: true }
-          }).lean();
-          if (validInv.length === 0) {
-            await InventoryMergeGroup.deleteOne({ _id: inMergeGroup._id });
-            inMergeGroup = null;
-          }
-        }
-
-        if (alreadyOnStockScreen || inMergeGroup) {
-          // SKU is ALREADY listed on the stock screen! NEVER import duplicate SKU on stock screen.
-          const targetDoc = alreadyOnStockScreen || (await CentralInventory.findOne({ seller_sku: { $regex: skuRegex } }));
-          if (targetDoc) {
-            try {
-              const ProductSkuMap = require('../models/ProductSkuMap');
-              await ProductSkuMap.findOneAndUpdate(
-                { store_id: store._id, sku: sellerSku.trim() },
-                {
-                  $setOnInsert: {
-                    store_id: store._id,
-                    sku: sellerSku.trim(),
-                    product_id: targetDoc._id,
-                    daraz_sku_id: safeString(row.daraz_sku_id),
-                    daraz_item_id: safeString(row.daraz_item_id),
-                    seller_sku: sellerSku.trim()
-                  }
-                },
-                { upsert: true, returnDocument: 'after' }
-              );
-            } catch (_) {}
-          }
-
-          skipped += 1;
-          skipped_skus.push(sellerSku);
-          continue;
-        }
-
-        // 3. The SKU is NOT present on the stock screen, and it is an active listing on Daraz!
-        // IMPORT IT so it appears on the stock screen without creating duplicate records.
-        const existingHistoricalDoc = await CentralInventory.findOne({
+        // Check if this SKU already exists for THIS store
+        const existingStoreDoc = await CentralInventory.findOne({
+          store_id: store._id,
           seller_sku: { $regex: skuRegex }
         });
 
         const Product = require('../models/Product');
         const existingProduct = await Product.findOne({ sku: { $regex: skuRegex } }).lean();
-        const initialStock = existingProduct?.stock > 0 ? existingProduct.stock : (existingHistoricalDoc?.stock > 0 ? existingHistoricalDoc.stock : (row.stock > 0 ? row.stock : 0));
-        const initialCost = existingProduct?.purchase_price > 0 ? existingProduct.purchase_price : (existingHistoricalDoc?.purchase_price > 0 ? existingHistoricalDoc.purchase_price : 0);
+        const initialStock = row.stock !== undefined && row.stock !== null
+          ? toNumber(row.stock, 0)
+          : (existingProduct?.stock > 0 ? existingProduct.stock : (existingStoreDoc?.stock > 0 ? existingStoreDoc.stock : 0));
+        const initialCost = existingProduct?.purchase_price > 0
+          ? existingProduct.purchase_price
+          : (existingStoreDoc?.purchase_price > 0 ? existingStoreDoc.purchase_price : 0);
 
         const updateData = {
           store_id: store._id,
@@ -445,12 +386,12 @@ async function importProductsForStore(storeId, options = {}) {
           product_name: safeString(row.product_name) || sellerSku,
           original_product_name: safeString(row.original_product_name || row.product_name),
           display_title: safeString(row.display_title) || buildDisplayTitle(row.product_name, sellerSku),
-          image_url: safeString(row.image_url) || existingHistoricalDoc?.image_url || '',
-          daraz_product_id: safeString(row.daraz_product_id) || existingHistoricalDoc?.daraz_product_id || '',
-          daraz_item_id: safeString(row.daraz_item_id) || existingHistoricalDoc?.daraz_item_id || '',
-          daraz_sku_id: safeString(row.daraz_sku_id) || existingHistoricalDoc?.daraz_sku_id || '',
-          variation_name: safeString(row.variation_name) || existingHistoricalDoc?.variation_name || '',
-          selling_price: toNumber(row.selling_price, 0) || existingHistoricalDoc?.selling_price || 0,
+          image_url: safeString(row.image_url) || existingStoreDoc?.image_url || '',
+          daraz_product_id: safeString(row.daraz_product_id) || existingStoreDoc?.daraz_product_id || '',
+          daraz_item_id: safeString(row.daraz_item_id) || existingStoreDoc?.daraz_item_id || '',
+          daraz_sku_id: safeString(row.daraz_sku_id) || existingStoreDoc?.daraz_sku_id || '',
+          variation_name: safeString(row.variation_name) || existingStoreDoc?.variation_name || '',
+          selling_price: toNumber(row.selling_price, 0) || existingStoreDoc?.selling_price || 0,
           last_product_import_at: new Date(),
           is_archived: false,
           is_deleted: false,
@@ -458,10 +399,9 @@ async function importProductsForStore(storeId, options = {}) {
         };
 
         let finalDoc;
-        if (existingHistoricalDoc) {
-          // Reactivate existing document so it appears on the stock screen cleanly
+        if (existingStoreDoc) {
           finalDoc = await CentralInventory.findByIdAndUpdate(
-            existingHistoricalDoc._id,
+            existingStoreDoc._id,
             {
               $set: {
                 ...updateData,
@@ -472,8 +412,8 @@ async function importProductsForStore(storeId, options = {}) {
             },
             { returnDocument: 'after' }
           );
+          updated += 1;
         } else {
-          // Create brand new active CentralInventory record
           finalDoc = await CentralInventory.create({
             ...updateData,
             stock: initialStock,
@@ -482,12 +422,27 @@ async function importProductsForStore(storeId, options = {}) {
             reserved_stock: 0,
             low_stock_limit: existingProduct?.low_stock_limit || 5
           });
+          imported += 1;
         }
 
         if (existingProduct) {
           try {
             await Product.findByIdAndUpdate(existingProduct._id, {
-              $set: { is_active: true, status: 'active' }
+              $set: { is_active: true, status: 'active', title: updateData.display_title }
+            });
+          } catch (_) {}
+        } else {
+          try {
+            await Product.create({
+              name: updateData.display_title,
+              title: updateData.display_title,
+              sku: sellerSku.trim(),
+              stock: initialStock,
+              purchase_price: initialCost,
+              selling_price: updateData.selling_price,
+              image_url: updateData.image_url,
+              is_active: true,
+              status: 'active'
             });
           } catch (_) {}
         }
@@ -511,7 +466,6 @@ async function importProductsForStore(storeId, options = {}) {
         } catch (_) {}
 
         new_skus.push(sellerSku);
-        imported += 1;
       } catch (error) {
         errors += 1;
         error_details.push({
@@ -537,6 +491,17 @@ async function importProductsForStore(storeId, options = {}) {
     { $set: { last_sync_at: new Date(), last_error: errors ? `${errors} product import errors` : "" } }
   );
 
+  let message = '';
+  if (imported > 0 && updated === 0) {
+    message = `Import complete: ${imported} product(s) imported from ${store.name}.`;
+  } else if (imported > 0 && updated > 0) {
+    message = `Import complete: ${imported} product(s) imported, ${updated} refreshed from ${store.name}.`;
+  } else if (imported === 0 && updated > 0) {
+    message = `Import complete: ${updated} product(s) refreshed from ${store.name}.`;
+  } else {
+    message = `No active products found to import from ${store.name}.`;
+  }
+
   return {
     store_id: store._id,
     store_name: store.name,
@@ -547,7 +512,8 @@ async function importProductsForStore(storeId, options = {}) {
     errors,
     error_details,
     new_skus,
-    skipped_skus
+    skipped_skus,
+    message
   };
 }
 

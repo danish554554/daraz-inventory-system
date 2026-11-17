@@ -205,12 +205,13 @@ class FinanceProvider extends ChangeNotifier {
     await load(silent: true, forceRefresh: true);
   }
 
-  Future<void> setCostPrice({required String sellerSku, required double costPrice}) async {
+  Future<void> setCostPrice({required String sellerSku, required double costPrice, String? productName}) async {
     await ApiClient.instance.post(
       '/finance/set-cost',
       body: <String, dynamic>{
         'seller_sku': sellerSku,
         'cost_price': costPrice,
+        if (productName != null && productName.isNotEmpty) 'product_name': productName,
       },
     );
     ApiClient.instance.clearCache();

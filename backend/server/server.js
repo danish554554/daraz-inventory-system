@@ -1,3 +1,15 @@
+// Silence Mongoose 8/9 deprecation warning: the 'new' option for findOneAndUpdate()
+const originalEmitWarning = process.emitWarning;
+process.emitWarning = function(warning, ...args) {
+  if (
+    (typeof warning === 'string' && warning.includes("the 'new' option for 'findOneAndUpdate()'")) ||
+    (warning && warning.message && warning.message.includes("the 'new' option for 'findOneAndUpdate()'"))
+  ) {
+    return;
+  }
+  return originalEmitWarning.call(process, warning, ...args);
+};
+
 const path = require('path');
 const dotenv = require('dotenv');
 

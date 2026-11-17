@@ -51,65 +51,102 @@ function normalizeDateInput(value) {
 }
 
 // Synchronize purchasing cost to Products, CentralOrderItems, and FinanceEntries
-async function syncFinanceCostForSku(sku, unitCost) {
-  if (!sku || unitCost <= 0) return 0;
+async function syncFinanceCostForSku(sku, unitCost, productName = '') {
+  if ((!sku && !productName) || unitCost <= 0) return 0;
   try {
-    const trimmed = String(sku).trim();
-    const escaped = trimmed.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-    const withHyphens = trimmed.replace(/\s+/g, '-');
-    const withSpaces = trimmed.replace(/[-_]+/g, ' ');
-    const strippedSuffix = trimmed.replace(/[-_\s]\d+$/, '');
+    const trimmed = String(sku || '').trim();
+    const cleanName = String(productName || '').trim();
+    const escapeRegex = (s) => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 
-    const candidateStrings = Array.from(new Set([
-      trimmed,
-      withHyphens,
-      withSpaces,
-      strippedSuffix
-    ].filter(Boolean)));
+    const candidateStrings = new Set();
+    if (trimmed) {
+      candidateStrings.add(trimmed);
+      candidateStrings.add(trimmed.replace(/\s+/g, '-'));
+      candidateStrings.add(trimmed.replace(/[-_]+/g, ' '));
+      const strippedSuffix = trimmed.replace(/[-_\s]\d+$/, '');
+      if (strippedSuffix) candidateStrings.add(strippedSuffix);
 
-    const regexList = candidateStrings.map((s) => new RegExp(`^${s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}$`, 'i'));
-    const orQueries = regexList.map((rgx) => ({ seller_sku: rgx }));
-
-    // 1. Update Product catalog purchase price
-    await Product.updateMany(
-      { $or: regexList.map((rgx) => ({ sku: rgx })) },
-      { $set: { purchase_price: unitCost } }
-    );
-
-    // 2. Update CentralOrderItem records
-    const orderItems = await CentralOrderItem.find({ $or: orQueries });
-    for (const orderItem of orderItems) {
-      const itemUnitPrice = toNumber(orderItem.unit_price, 0);
-      const itemQty = toNumber(orderItem.quantity, 1);
-      const itemRev = itemUnitPrice * itemQty;
-      const itemCost = unitCost * itemQty;
-      orderItem.cost_price = unitCost;
-      orderItem.profit = itemRev - itemCost;
-      orderItem.profit_margin = itemRev > 0 ? Number((((itemRev - itemCost) / itemRev) * 100).toFixed(2)) : 0;
-      orderItem.profit_ready = true;
-      await orderItem.save();
+      if (trimmed.includes('-')) {
+        const parts = trimmed.split('-');
+        if (parts[0].trim()) candidateStrings.add(parts[0].trim());
+        if (parts.length > 2) candidateStrings.add(parts.slice(0, 2).join('-').trim());
+      }
+      if (trimmed.includes('_')) {
+        candidateStrings.add(trimmed.split('_')[0].trim());
+      }
     }
 
-    // 3. Update FinanceEntry order records across all statements
-    const financeEntries = await FinanceEntry.find({
-      $or: orQueries,
-      entry_type: 'order'
-    });
+    const regexList = Array.from(candidateStrings).filter(Boolean).map((s) => new RegExp(`^${escapeRegex(s)}$`, 'i'));
+    const orQueries = regexList.map((rgx) => ({ seller_sku: rgx }));
 
+    // Prefix matching for long numeric/alnum base IDs (e.g. 923171376 matching 923171376-1782364893283-0)
+    const baseId = trimmed.split(/[-_\s]/)[0]?.trim();
+    if (baseId && baseId.length >= 6) {
+      orQueries.push({ seller_sku: new RegExp(`^${escapeRegex(baseId)}([-_\\s]|$)`, 'i') });
+    }
+
+    if (cleanName && cleanName.length >= 4) {
+      orQueries.push({ product_name: new RegExp(`^${escapeRegex(cleanName)}$`, 'i') });
+    }
+
+    // 1. Update Product catalog purchase price
+    const prodOr = regexList.map((rgx) => ({ sku: rgx }));
+    if (cleanName && cleanName.length >= 4) {
+      prodOr.push({ name: new RegExp(`^${escapeRegex(cleanName)}$`, 'i') });
+    }
+    if (prodOr.length > 0) {
+      await Product.updateMany({ $or: prodOr }, { $set: { purchase_price: unitCost } });
+    }
+
+    // 2. Update CentralInventory items across stores to keep prices synchronized
+    if (orQueries.length > 0) {
+      await CentralInventory.updateMany(
+        { $or: orQueries },
+        { $set: { purchase_price: unitCost, cost_price: unitCost } }
+      );
+    }
+
+    // 3. Update CentralOrderItem records
+    if (orQueries.length > 0) {
+      const orderItems = await CentralOrderItem.find({ $or: orQueries });
+      for (const orderItem of orderItems) {
+        const itemUnitPrice = toNumber(orderItem.unit_price, 0);
+        const itemQty = toNumber(orderItem.quantity, 1);
+        const itemRev = itemUnitPrice * itemQty;
+        const itemCost = unitCost * itemQty;
+        orderItem.cost_price = unitCost;
+        orderItem.profit = itemRev - itemCost;
+        orderItem.profit_margin = itemRev > 0 ? Number((((itemRev - itemCost) / itemRev) * 100).toFixed(2)) : 0;
+        orderItem.profit_ready = true;
+        await orderItem.save();
+      }
+    }
+
+    // 4. Update FinanceEntry order records across all statements
     let count = 0;
-    for (const entry of financeEntries) {
-      if (entry.is_penalty || entry.is_penalty_refund || /return|cancel|penalt/i.test(entry.order_status || '')) continue;
-      const qty = entry.quantity > 0 ? entry.quantity : 1;
-      const totalCost = Number((unitCost * qty).toFixed(2));
-      const netProfit = Number(((entry.net_settlement || 0) - totalCost).toFixed(2));
+    if (orQueries.length > 0) {
+      const financeEntries = await FinanceEntry.find({
+        $or: orQueries,
+        entry_type: 'order'
+      });
 
-      entry.cost_price = unitCost;
-      entry.total_cost = totalCost;
-      entry.net_profit = netProfit;
-      entry.profit_ready = true;
-      entry.matched_by = `central_inventory_sync:${trimmed}`;
-      await entry.save();
-      count++;
+      for (const entry of financeEntries) {
+        if (entry.is_penalty || entry.is_penalty_refund) continue;
+        const isReturn = /return|cancel/i.test(entry.order_status || '');
+        const qty = entry.quantity > 0 ? entry.quantity : 1;
+        const totalCost = isReturn ? 0 : Number((unitCost * qty).toFixed(2));
+        const netProfit = isReturn
+          ? Number((entry.net_settlement || 0).toFixed(2))
+          : Number(((entry.net_settlement || 0) - totalCost).toFixed(2));
+
+        entry.cost_price = unitCost;
+        entry.total_cost = totalCost;
+        entry.net_profit = netProfit;
+        entry.profit_ready = true;
+        entry.matched_by = `central_inventory_sync:${trimmed || cleanName}`;
+        await entry.save();
+        count++;
+      }
     }
 
     return count;
@@ -703,7 +740,7 @@ router.post('/restock', async (req, res, next) => {
           { seller_sku: { $regex: new RegExp(`^${refreshed.seller_sku.trim().replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}$`, 'i') } },
           { $set: { purchase_price: unitCost, cost_price: unitCost } }
         );
-        await syncFinanceCostForSku(refreshed.seller_sku, unitCost);
+        await syncFinanceCostForSku(refreshed.seller_sku, unitCost, refreshed.product_name);
       }
     }
 
@@ -747,7 +784,7 @@ router.post('/restock/bulk', async (req, res, next) => {
               { seller_sku: { $regex: new RegExp(`^${refreshed.seller_sku.trim().replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}$`, 'i') } },
               { $set: { purchase_price: unitCost, cost_price: unitCost } }
             );
-            await syncFinanceCostForSku(refreshed.seller_sku, unitCost);
+            await syncFinanceCostForSku(refreshed.seller_sku, unitCost, refreshed.product_name);
           }
         }
         results.push({ line: index + 1, store_code: storeCode, seller_sku: refreshed.seller_sku, master_sku: refreshed.master_sku, product_name: refreshed.product_name, quantity: qty, stock_after: result.stock_after, merged: refreshed.kind === 'merge' });
@@ -1006,7 +1043,7 @@ router.put('/:id/prices', async (req, res, next) => {
         { $set: { purchase_price: cost, cost_price: cost, selling_price: selling, profit_margin: margin } }
       );
       if (cost > 0) {
-        await syncFinanceCostForSku(item.seller_sku, cost);
+        await syncFinanceCostForSku(item.seller_sku, cost, item.product_name || item.display_title);
       }
     }
 
@@ -1028,30 +1065,28 @@ router.delete('/:id', async (req, res, next) => {
       group = await InventoryMergeGroup.findById(itemId);
     }
 
+    const Product = require('../models/Product');
+    const ProductSkuMap = require('../models/ProductSkuMap');
+
     if (group) {
       const linkedIds = group.inventory_ids || [];
       const linkedItems = await CentralInventory.find({ _id: { $in: linkedIds } });
       const skus = linkedItems.map((i) => i.seller_sku).filter(Boolean);
       if (group.master_sku) skus.push(group.master_sku);
 
-      await CentralInventory.updateMany(
-        { _id: { $in: linkedIds } },
-        { $set: { is_archived: true, is_deleted: true, status: 'archived' } }
-      );
-      if (skus.length > 0) {
-        await CentralInventory.updateMany(
-          { seller_sku: { $in: skus } },
-          { $set: { is_archived: true, is_deleted: true, status: 'archived' } }
-        );
-        await Product.updateMany(
-          { sku: { $in: skus } },
-          { $set: { is_active: false, status: 'archived' } }
-        );
-      }
-      await InventoryMergeGroup.findByIdAndDelete(group._id);
+      await Promise.all([
+        CentralInventory.deleteMany({ _id: { $in: linkedIds } }),
+        ...(skus.length > 0 ? [
+          CentralInventory.deleteMany({ seller_sku: { $in: skus } }),
+          Product.deleteMany({ sku: { $in: skus } }),
+          ProductSkuMap.deleteMany({ sku: { $in: skus } })
+        ] : []),
+        InventoryMergeGroup.findByIdAndDelete(group._id)
+      ]);
+
       return res.json({
         success: true,
-        message: `Merged product "${group.title || group.master_sku}" removed successfully.`
+        message: `Merged product "${group.title || group.master_sku}" removed completely.`
       });
     }
 
@@ -1062,25 +1097,24 @@ router.delete('/:id', async (req, res, next) => {
       { $pull: { inventory_ids: item._id } }
     );
 
-    item.is_archived = true;
-    item.is_deleted = true;
-    item.status = 'archived';
-    await item.save();
+    const sku = item.seller_sku;
+    await CentralInventory.findByIdAndDelete(item._id);
 
-    if (item.seller_sku) {
-      await Product.updateMany(
-        { sku: item.seller_sku },
-        { $set: { is_active: false, status: 'archived' } }
-      );
-      await CentralInventory.updateMany(
-        { seller_sku: item.seller_sku },
-        { $set: { is_archived: true, is_deleted: true, status: 'archived' } }
-      );
+    if (sku) {
+      const remainingForSku = await CentralInventory.countDocuments({ seller_sku: sku });
+      if (remainingForSku === 0) {
+        await Promise.all([
+          Product.deleteMany({ sku }),
+          ProductSkuMap.deleteMany({ sku })
+        ]);
+      } else {
+        await ProductSkuMap.deleteMany({ store_id: item.store_id, sku });
+      }
     }
 
     res.json({
       success: true,
-      message: `Product "${item.product_name || item.seller_sku}" removed successfully.`
+      message: `Product "${item.product_name || item.seller_sku}" removed completely.`
     });
   } catch (error) { next(error); }
 });
@@ -1090,79 +1124,81 @@ router.post('/batch-delete', async (req, res, next) => {
     const { inventory_ids = [] } = req.body;
     const isAll = inventory_ids === 'all' || (Array.isArray(inventory_ids) && inventory_ids.includes('all'));
 
-    let targetItemIds = [];
-    let targetSkus = [];
-    let groups = [];
+    const Product = require('../models/Product');
+    const ProductSkuMap = require('../models/ProductSkuMap');
 
     if (isAll) {
-      const [items, allGroups] = await Promise.all([
-        CentralInventory.find({ is_archived: { $ne: true }, is_deleted: { $ne: true } }),
-        InventoryMergeGroup.find({})
-      ]);
-      targetItemIds = items.map((i) => i._id);
-      targetSkus = items.map((i) => i.seller_sku).filter(Boolean);
-      groups = allGroups;
-    } else {
-      if (!Array.isArray(inventory_ids) || inventory_ids.length === 0) {
-        return res.status(400).json({ message: 'No inventory IDs provided for removal.' });
-      }
-
-      const [items, foundGroups] = await Promise.all([
-        CentralInventory.find({ _id: { $in: inventory_ids } }),
-        InventoryMergeGroup.find({ _id: { $in: inventory_ids } })
+      const [invCount, grpCount] = await Promise.all([
+        CentralInventory.countDocuments({}),
+        InventoryMergeGroup.countDocuments({})
       ]);
 
-      const allItemIds = new Set(items.map((i) => String(i._id)));
-      const skus = new Set(items.map((i) => i.seller_sku).filter(Boolean));
+      await Promise.all([
+        CentralInventory.deleteMany({}),
+        InventoryMergeGroup.deleteMany({}),
+        ProductSkuMap.deleteMany({}),
+        Product.deleteMany({})
+      ]);
 
-      for (const group of foundGroups) {
-        for (const id of group.inventory_ids || []) {
-          allItemIds.add(String(id));
-        }
-        if (group.master_sku) skus.add(group.master_sku);
-      }
-
-      targetItemIds = Array.from(allItemIds);
-      targetSkus = Array.from(skus);
-      groups = foundGroups;
+      return res.json({
+        success: true,
+        message: 'All inventory products removed completely. Memory and cache cleared.',
+        deleted_count: invCount + grpCount
+      });
     }
+
+    if (!Array.isArray(inventory_ids) || inventory_ids.length === 0) {
+      return res.status(400).json({ message: 'No inventory IDs provided for removal.' });
+    }
+
+    const [items, foundGroups] = await Promise.all([
+      CentralInventory.find({ _id: { $in: inventory_ids } }),
+      InventoryMergeGroup.find({ _id: { $in: inventory_ids } })
+    ]);
+
+    const allItemIds = new Set(items.map((i) => String(i._id)));
+    const skus = new Set(items.map((i) => i.seller_sku).filter(Boolean));
+
+    for (const group of foundGroups) {
+      for (const id of group.inventory_ids || []) {
+        allItemIds.add(String(id));
+      }
+      if (group.master_sku) skus.add(group.master_sku);
+    }
+
+    const targetItemIds = Array.from(allItemIds);
+    const targetSkus = Array.from(skus);
 
     await InventoryMergeGroup.updateMany(
       { inventory_ids: { $in: targetItemIds } },
       { $pull: { inventory_ids: { $in: targetItemIds } } }
     );
 
-    if (groups.length > 0) {
-      await InventoryMergeGroup.deleteMany({ _id: { $in: groups.map((g) => g._id) } });
+    if (foundGroups.length > 0) {
+      await InventoryMergeGroup.deleteMany({ _id: { $in: foundGroups.map((g) => g._id) } });
     }
 
-    const updateRes = await CentralInventory.updateMany(
-      { _id: { $in: targetItemIds } },
-      { $set: { is_archived: true, is_deleted: true, status: 'archived' } }
-    );
+    await CentralInventory.deleteMany({
+      $or: [
+        { _id: { $in: targetItemIds } },
+        ...(targetSkus.length > 0 ? [{ seller_sku: { $in: targetSkus } }] : [])
+      ]
+    });
 
     if (targetSkus.length > 0) {
-      const ProductSkuMap = require('../models/ProductSkuMap');
       await Promise.all([
-        Product.updateMany(
-          { sku: { $in: targetSkus } },
-          { $set: { is_active: false, status: 'archived' } }
-        ),
-        CentralInventory.updateMany(
-          { seller_sku: { $in: targetSkus } },
-          { $set: { is_archived: true, is_deleted: true, status: 'archived' } }
-        ),
-        ProductSkuMap.deleteMany(
-          { sku: { $in: targetSkus } }
-        )
+        Product.deleteMany({ sku: { $in: targetSkus } }),
+        ProductSkuMap.deleteMany({ sku: { $in: targetSkus } })
       ]);
     }
 
     res.json({
       success: true,
-      message: `${targetItemIds.length || updateRes.modifiedCount || 0} product(s) removed successfully.`,
-      deleted_count: targetItemIds.length || updateRes.modifiedCount || 0
+      message: `${targetItemIds.length || 0} product(s) removed completely.`,
+      deleted_count: targetItemIds.length || 0
     });
+  } catch (error) { next(error); }
+});
   } catch (error) { next(error); }
 });
 

@@ -1521,8 +1521,7 @@ async function autoMatchUncostedFinanceEntries(limit = 200) {
       entry_type: "order",
       $or: [{ cost_price: { $lte: 0 } }, { profit_ready: false }],
       is_penalty: { $ne: true },
-      is_penalty_refund: { $ne: true },
-      order_status: { $nin: ["returned", "Returned", "cancelled", "Cancelled"] }
+      is_penalty_refund: { $ne: true }
     }).limit(limit);
 
     if (uncostedEntries.length === 0) return;
@@ -1540,13 +1539,23 @@ async function autoMatchUncostedFinanceEntries(limit = 200) {
       let matchedCost = 0;
       let matchedName = "";
 
+      // Helper to check SKU matches (exact, alnum, or prefix)
+      const matchesSku = (invSku) => {
+        const invNorm = normAlnum(invSku);
+        if (!invNorm) return false;
+        if (candidates.some((c) => normAlnum(c) === invNorm)) return true;
+        return candidates.some((c) => {
+          const cn = normAlnum(c);
+          return (cn.length >= 6 && invNorm.startsWith(cn)) || (invNorm.length >= 6 && cn.startsWith(invNorm));
+        });
+      };
+
       // 1. Check CentralInventory with storeId first
       if (entry.store_id) {
         const storeStr = String(entry.store_id);
         const match = invItems.find((inv) => {
           if (String(inv.store_id) !== storeStr) return false;
-          const invNorm = normAlnum(inv.seller_sku);
-          return candidates.some((c) => normAlnum(c) === invNorm);
+          return matchesSku(inv.seller_sku);
         });
         if (match) {
           matchedCost = match.cost_price > 0 ? match.cost_price : match.purchase_price;
@@ -1554,23 +1563,38 @@ async function autoMatchUncostedFinanceEntries(limit = 200) {
         }
       }
 
-      // 2. Cross-store CentralInventory fallback
+      // 2. Cross-store CentralInventory fallback by SKU
       if (matchedCost <= 0) {
-        const match = invItems.find((inv) => {
-          const invNorm = normAlnum(inv.seller_sku);
-          return candidates.some((c) => normAlnum(c) === invNorm);
-        });
+        const match = invItems.find((inv) => matchesSku(inv.seller_sku));
         if (match) {
           matchedCost = match.cost_price > 0 ? match.cost_price : match.purchase_price;
           matchedName = match.product_name || match.display_title || entry.product_name;
         }
       }
 
-      // 3. Product Catalog fallback
+      // 3. Match CentralInventory by Product Name
+      if (matchedCost <= 0 && entry.product_name) {
+        const entryNameNorm = normAlnum(entry.product_name);
+        if (entryNameNorm.length >= 5) {
+          const nameMatch = invItems.find((inv) => {
+            const invNameNorm = normAlnum(inv.product_name || inv.display_title || "");
+            if (!invNameNorm) return false;
+            return invNameNorm === entryNameNorm || invNameNorm.includes(entryNameNorm) || entryNameNorm.includes(invNameNorm);
+          });
+          if (nameMatch) {
+            matchedCost = nameMatch.cost_price > 0 ? nameMatch.cost_price : nameMatch.purchase_price;
+            matchedName = nameMatch.product_name || nameMatch.display_title || entry.product_name;
+          }
+        }
+      }
+
+      // 4. Product Catalog fallback (by SKU or Name)
       if (matchedCost <= 0) {
         const prodMatch = productCatalog.find((p) => {
           const pNorm = normAlnum(p.sku);
-          return candidates.some((c) => normAlnum(c) === pNorm);
+          if (candidates.some((c) => normAlnum(c) === pNorm)) return true;
+          if (entry.product_name && normAlnum(p.name) === normAlnum(entry.product_name)) return true;
+          return false;
         });
         if (prodMatch) {
           matchedCost = prodMatch.purchase_price;
@@ -1579,9 +1603,12 @@ async function autoMatchUncostedFinanceEntries(limit = 200) {
       }
 
       if (matchedCost > 0) {
+        const isReturn = /return|cancel/i.test(entry.order_status || "");
         const qty = entry.quantity > 0 ? entry.quantity : 1;
-        const totalCost = Number((matchedCost * qty).toFixed(2));
-        const netProfit = Number(((entry.net_settlement || 0) - totalCost).toFixed(2));
+        const totalCost = isReturn ? 0 : Number((matchedCost * qty).toFixed(2));
+        const netProfit = isReturn
+          ? Number((entry.net_settlement || 0).toFixed(2))
+          : Number(((entry.net_settlement || 0) - totalCost).toFixed(2));
 
         await FinanceEntry.updateOne(
           { _id: entry._id },
@@ -1794,17 +1821,28 @@ router.post("/import-csv", async (req, res) => {
 // 5. 1-Tap Set Cost & Recalculate Profits across all statements
 router.post("/set-cost", async (req, res) => {
   try {
-    const { seller_sku, cost_price } = req.body;
+    const { seller_sku, cost_price, product_name } = req.body;
     const cost = Math.max(0, toNumber(cost_price, 0));
     const sku = String(seller_sku || "").trim();
+    const cleanName = String(product_name || "").trim();
 
-    if (!sku || cost <= 0) {
-      return res.status(400).json({ message: "A valid seller_sku and cost_price are required." });
+    if ((!sku && !cleanName) || cost <= 0) {
+      return res.status(400).json({ message: "A valid seller_sku or product_name, and cost_price are required." });
     }
 
     const skuCandidates = extractSkuCandidates(sku);
     const regexList = skuCandidates.map((s) => new RegExp(`^${escapeRegex(s)}$`, "i"));
     const orQueries = regexList.map((rgx) => ({ seller_sku: rgx }));
+
+    // Prefix matching for base ID (e.g. 923171376 matching 923171376-1782364893283-0)
+    const baseId = sku.split(/[-_\s]/)[0]?.trim();
+    if (baseId && baseId.length >= 6) {
+      orQueries.push({ seller_sku: new RegExp(`^${escapeRegex(baseId)}([-_\\s]|$)`, 'i') });
+    }
+
+    if (cleanName && cleanName.length >= 4) {
+      orQueries.push({ product_name: new RegExp(`^${escapeRegex(cleanName)}$`, 'i') });
+    }
 
     // 1. Update Central Inventory
     await CentralInventory.updateMany(
@@ -1813,10 +1851,13 @@ router.post("/set-cost", async (req, res) => {
     );
 
     // 2. Update Product Catalog
-    await Product.updateMany(
-      { $or: regexList.map((rgx) => ({ sku: rgx })) },
-      { $set: { purchase_price: cost } }
-    );
+    const prodOr = regexList.map((rgx) => ({ sku: rgx }));
+    if (cleanName && cleanName.length >= 4) {
+      prodOr.push({ name: new RegExp(`^${escapeRegex(cleanName)}$`, 'i') });
+    }
+    if (prodOr.length > 0) {
+      await Product.updateMany({ $or: prodOr }, { $set: { purchase_price: cost } });
+    }
 
     // 3. Update CentralOrderItem
     const CentralOrderItem = require("../models/CentralOrderItem");
@@ -1841,17 +1882,19 @@ router.post("/set-cost", async (req, res) => {
 
     let recalculated = 0;
     for (const entry of matchingEntries) {
-      // Returned / cancelled / penalty lines went back to stock: COGS stays 0, profit = settlement
-      if (entry.is_penalty || entry.is_penalty_refund || /return|cancel|penalt/i.test(entry.order_status || "")) continue;
+      if (entry.is_penalty || entry.is_penalty_refund) continue;
+      const isReturn = /return|cancel/i.test(entry.order_status || "");
       const qty = entry.quantity > 0 ? entry.quantity : 1;
-      const totalCost = Number((cost * qty).toFixed(2));
-      const netProfit = Number(((entry.net_settlement || 0) - totalCost).toFixed(2));
+      const totalCost = isReturn ? 0 : Number((cost * qty).toFixed(2));
+      const netProfit = isReturn
+        ? Number((entry.net_settlement || 0).toFixed(2))
+        : Number(((entry.net_settlement || 0) - totalCost).toFixed(2));
 
       entry.cost_price = cost;
       entry.total_cost = totalCost;
       entry.net_profit = netProfit;
       entry.profit_ready = true;
-      entry.matched_by = `user_override:${sku}`;
+      entry.matched_by = `user_override:${sku || cleanName}`;
       await entry.save();
       recalculated += 1;
     }

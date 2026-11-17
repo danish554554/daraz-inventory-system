@@ -1,7 +1,16 @@
 const mongoose = require("mongoose");
 
 // Prevent Mongoose 8/9 deprecation warning: the 'new' option for findOneAndUpdate() is deprecated
-mongoose.set("returnDocument", "before");
+const originalEmitWarning = process.emitWarning;
+process.emitWarning = function(warning, ...args) {
+  if (
+    (typeof warning === 'string' && warning.includes("the 'new' option for 'findOneAndUpdate()'")) ||
+    (warning && warning.message && warning.message.includes("the 'new' option for 'findOneAndUpdate()'"))
+  ) {
+    return;
+  }
+  return originalEmitWarning.call(process, warning, ...args);
+};
 
 const connectDB = async () => {
   try {
