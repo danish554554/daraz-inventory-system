@@ -87,12 +87,14 @@ async function syncFinanceCostForSku(sku, unitCost, productName = '') {
 
     if (cleanName && cleanName.length >= 4) {
       orQueries.push({ product_name: new RegExp(`^${escapeRegex(cleanName)}$`, 'i') });
+      orQueries.push({ product_name: new RegExp(escapeRegex(cleanName), 'i') });
     }
 
     // 1. Update Product catalog purchase price
     const prodOr = regexList.map((rgx) => ({ sku: rgx }));
     if (cleanName && cleanName.length >= 4) {
       prodOr.push({ name: new RegExp(`^${escapeRegex(cleanName)}$`, 'i') });
+      prodOr.push({ name: new RegExp(escapeRegex(cleanName), 'i') });
     }
     if (prodOr.length > 0) {
       await Product.updateMany({ $or: prodOr }, { $set: { purchase_price: unitCost } });

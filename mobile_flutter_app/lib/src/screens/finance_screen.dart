@@ -1446,9 +1446,11 @@ class _FinanceScreenState extends State<FinanceScreen> {
                     // Purchasing Price
                     if (!isAdjustment && !isPenaltyCharged && !isPenaltyReturned) ...<Widget>[
                       if (isReturned)
-                        const Text(
-                          'Stock: PKR 0 (Restocked)',
-                          style: TextStyle(
+                        Text(
+                          item.costPrice > 0
+                              ? 'Stock: PKR ${Formatters.money(item.costPrice)} (Restocked)'
+                              : 'Stock: PKR 0 (Restocked)',
+                          style: const TextStyle(
                             fontWeight: FontWeight.w700,
                             fontSize: 10.5,
                             color: AppTheme.info,
