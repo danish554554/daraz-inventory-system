@@ -1199,8 +1199,6 @@ router.post('/batch-delete', async (req, res, next) => {
     });
   } catch (error) { next(error); }
 });
-  } catch (error) { next(error); }
-});
 
 router.use((error, req, res, next) => {
   const status = error.status || 500;
