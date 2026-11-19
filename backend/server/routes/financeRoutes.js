@@ -629,28 +629,77 @@ function detectAdjustmentType(group) {
   };
 }
 
+function normAlnum(str) {
+  return (str || "").toString().toLowerCase().replace(/[^a-z0-9]/g, "");
+}
+
+function fuzzyMatchTitle(nameA, nameB) {
+  if (!nameA || !nameB) return false;
+  const normA = normAlnum(nameA);
+  const normB = normAlnum(nameB);
+  if (!normA || !normB) return false;
+  if (normA === normB || normA.includes(normB) || normB.includes(normA)) return true;
+
+  // Prefix match of significant length (e.g. first 14+ characters match)
+  const minLen = Math.min(normA.length, normB.length);
+  const checkPrefixLen = Math.min(18, minLen);
+  if (checkPrefixLen >= 12 && normA.slice(0, checkPrefixLen) === normB.slice(0, checkPrefixLen)) {
+    return true;
+  }
+
+  // Word token overlap (words of length >= 3)
+  const extractWords = (str) =>
+    (str || "")
+      .toLowerCase()
+      .split(/[^a-z0-9]+/)
+      .filter((w) => w.length >= 3);
+  const wordsA = new Set(extractWords(nameA));
+  const wordsB = new Set(extractWords(nameB));
+  if (wordsA.size === 0 || wordsB.size === 0) return false;
+
+  let common = 0;
+  for (const w of wordsA) {
+    if (wordsB.has(w)) common++;
+  }
+  const minCount = Math.min(wordsA.size, wordsB.size);
+  if (common >= 3 || (minCount >= 2 && common / minCount >= 0.7)) {
+    return true;
+  }
+  return false;
+}
+
 // Fast in-memory or database cost details matcher
 async function findCostDetails(group, storeId = null, preloadedCache = null) {
   let sellerSku = extractFirstNonEmpty(group, "Seller SKU", "seller_sku");
   let lazadaSku = extractFirstNonEmpty(group, "Lazada SKU", "lazada_sku");
   let productName = extractFirstNonEmpty(group, "Product Name", "product_name");
   const orderNum = extractFirstNonEmpty(group, "Order Number", "Order No", "Order ID", "order_number");
+  const orderLineId = extractEntryLineId(group);
 
-  if ((!sellerSku || !productName) && orderNum) {
+  if ((!sellerSku || !productName) && (orderLineId || orderNum)) {
     try {
       const CentralOrderItem = require("../models/CentralOrderItem");
-      const orderItem = await CentralOrderItem.findOne({
-        $or: [{ order_number: orderNum }, { external_order_id: orderNum }]
-      }).lean();
-      if (orderItem) {
-        if (!sellerSku) sellerSku = orderItem.sku || orderItem.seller_sku || "";
-        if (!productName) productName = orderItem.name || orderItem.product_name || "";
+      const CentralOrder = require("../models/CentralOrder");
+      let item = null;
+      if (orderLineId) {
+        item = await CentralOrderItem.findOne({ external_order_item_id: orderLineId }).lean();
+      }
+      if (!item && orderNum) {
+        const parentOrder = await CentralOrder.findOne({
+          $or: [{ order_number: orderNum }, { external_order_id: orderNum }]
+        }).select("_id").lean();
+        if (parentOrder) {
+          item = await CentralOrderItem.findOne({ order_id: parentOrder._id }).lean();
+        }
+      }
+      if (item) {
+        if (!sellerSku) sellerSku = item.seller_sku || "";
+        if (!productName) productName = item.product_name || item.display_title || item.original_product_name || "";
       }
     } catch (_) {}
   }
 
   const skuCandidates = extractSkuCandidates(sellerSku, lazadaSku);
-  const normAlnum = (str) => (str || "").toString().toLowerCase().replace(/[^a-z0-9]/g, "");
 
   const matchesSkuCandidate = (invSku) => {
     const invNorm = normAlnum(invSku);
@@ -702,37 +751,30 @@ async function findCostDetails(group, storeId = null, preloadedCache = null) {
 
     // 1c. Check CentralInventory by Product Name (current store first, then cross-store)
     if (productName) {
-      const pNorm = normAlnum(productName);
-      if (pNorm.length >= 4) {
-        let invByName = null;
-        if (storeId) {
-          const storeStr = String(storeId);
-          invByName = inventoryList.find((inv) => {
-            if (String(inv.store_id) !== storeStr) return false;
-            const invNameNorm = normAlnum(inv.product_name || inv.display_title || inv.original_product_name || "");
-            if (!invNameNorm) return false;
-            const matches = invNameNorm === pNorm || invNameNorm.includes(pNorm) || pNorm.includes(invNameNorm);
-            return matches && (inv.cost_price > 0 || inv.purchase_price > 0);
-          });
-        }
-        if (!invByName) {
-          invByName = inventoryList.find((inv) => {
-            const invNameNorm = normAlnum(inv.product_name || inv.display_title || inv.original_product_name || "");
-            if (!invNameNorm) return false;
-            const matches = invNameNorm === pNorm || invNameNorm.includes(pNorm) || pNorm.includes(invNameNorm);
-            return matches && (inv.cost_price > 0 || inv.purchase_price > 0);
-          });
-        }
-        if (invByName) {
-          const cost = invByName.cost_price > 0 ? invByName.cost_price : invByName.purchase_price;
-          return {
-            cost_price: Number(cost),
-            matched_product_id: invByName._id,
-            matched_product_name: invByName.product_name || invByName.display_title || productName,
-            matched_by: `central_inventory_name:${invByName.seller_sku}`,
-            profit_ready: true
-          };
-        }
+      let invByName = null;
+      if (storeId) {
+        const storeStr = String(storeId);
+        invByName = inventoryList.find((inv) => {
+          if (String(inv.store_id) !== storeStr) return false;
+          const targetTitle = inv.product_name || inv.display_title || inv.original_product_name || "";
+          return fuzzyMatchTitle(targetTitle, productName) && (inv.cost_price > 0 || inv.purchase_price > 0);
+        });
+      }
+      if (!invByName) {
+        invByName = inventoryList.find((inv) => {
+          const targetTitle = inv.product_name || inv.display_title || inv.original_product_name || "";
+          return fuzzyMatchTitle(targetTitle, productName) && (inv.cost_price > 0 || inv.purchase_price > 0);
+        });
+      }
+      if (invByName) {
+        const cost = invByName.cost_price > 0 ? invByName.cost_price : invByName.purchase_price;
+        return {
+          cost_price: Number(cost),
+          matched_product_id: invByName._id,
+          matched_product_name: invByName.product_name || invByName.display_title || productName,
+          matched_by: `central_inventory_name:${invByName.seller_sku}`,
+          profit_ready: true
+        };
       }
     }
 
@@ -853,12 +895,23 @@ async function findCostDetails(group, storeId = null, preloadedCache = null) {
 
   // Check CentralInventory by Product Name
   if (productName) {
+    const baseTitle = productName.split(/[-–—|,(]/)[0]?.trim();
+    const nameRegexes = [new RegExp(escapeRegex(productName), "i")];
+    if (baseTitle && baseTitle.length >= 6 && baseTitle !== productName) {
+      nameRegexes.push(new RegExp(escapeRegex(baseTitle), "i"));
+    }
+    const nameOrConditions = [];
+    nameRegexes.forEach((rgx) => {
+      nameOrConditions.push({ product_name: rgx });
+      nameOrConditions.push({ display_title: rgx });
+      nameOrConditions.push({ original_product_name: rgx });
+    });
+
     const invNameMatch = await CentralInventory.findOne({
-      $or: [
-        { product_name: { $regex: escapeRegex(productName), $options: "i" } },
-        { display_title: { $regex: escapeRegex(productName), $options: "i" } }
+      $and: [
+        { $or: nameOrConditions },
+        { $or: [{ cost_price: { $gt: 0 } }, { purchase_price: { $gt: 0 } }] }
       ],
-      $or: [{ cost_price: { $gt: 0 } }, { purchase_price: { $gt: 0 } }],
       is_archived: { $ne: true },
       is_deleted: { $ne: true }
     }).sort({ cost_price: -1, purchase_price: -1 }).lean();
@@ -1688,21 +1741,31 @@ async function autoHealFinanceEntries(force = false) {
 }
 
 // Automatically match uncosted finance orders against Central Inventory & Product catalog
-async function autoMatchUncostedFinanceEntries(limit = 1000) {
+async function autoMatchUncostedFinanceEntries(limit = 1000, forceAll = false) {
   try {
-    const uncostedEntries = await FinanceEntry.find({
+    const baseQuery = {
       entry_type: "order",
-      $or: [
-        { cost_price: { $lte: 0 } },
-        { profit_ready: false },
-        { seller_sku: "" },
-        { seller_sku: null },
-        { product_name: "" },
-        { product_name: null }
-      ],
       is_penalty: { $ne: true },
       is_penalty_refund: { $ne: true }
-    }).limit(limit);
+    };
+
+    // forceAll = re-examine every order entry regardless of profit_ready status
+    // normal run = only entries that look uncosted or incomplete
+    const uncostedEntries = await FinanceEntry.find(
+      forceAll
+        ? baseQuery
+        : {
+            ...baseQuery,
+            $or: [
+              { cost_price: { $not: { $gt: 0 } } }, // catches null, missing, 0, negative
+              { profit_ready: { $ne: true } },
+              { seller_sku: "" },
+              { seller_sku: null },
+              { product_name: "" },
+              { product_name: null }
+            ]
+          }
+    ).limit(limit);
 
     if (uncostedEntries.length === 0) return;
 
@@ -1712,8 +1775,14 @@ async function autoMatchUncostedFinanceEntries(limit = 1000) {
 
     const productCatalog = await Product.find({ purchase_price: { $gt: 0 } }).select("sku purchase_price name").lean();
 
+    const StockReceipt = require("../models/StockReceipt");
+    const stockReceipts = await StockReceipt.find({ unit_cost: { $gt: 0 } })
+      .select("seller_sku unit_cost product_name")
+      .sort({ createdAt: -1 })
+      .lean();
+
     const CentralOrderItem = require("../models/CentralOrderItem");
-    const normAlnum = (str) => (str || "").toString().toLowerCase().replace(/[^a-z0-9]/g, "");
+    const CentralOrder = require("../models/CentralOrder");
 
     for (const entry of uncostedEntries) {
       let currentSku = (entry.seller_sku || "").trim();
@@ -1729,14 +1798,23 @@ async function autoMatchUncostedFinanceEntries(limit = 1000) {
         }
       }
 
-      if ((!currentSku || !currentName) && entry.order_number) {
+      if ((!currentSku || !currentName) && (entry.order_line_id || entry.order_number)) {
         try {
-          const item = await CentralOrderItem.findOne({
-            $or: [{ order_number: entry.order_number }, { external_order_id: entry.order_number }]
-          }).lean();
+          let item = null;
+          if (entry.order_line_id) {
+            item = await CentralOrderItem.findOne({ external_order_item_id: entry.order_line_id }).lean();
+          }
+          if (!item && entry.order_number) {
+            const parentOrder = await CentralOrder.findOne({
+              $or: [{ order_number: entry.order_number }, { external_order_id: entry.order_number }]
+            }).select("_id").lean();
+            if (parentOrder) {
+              item = await CentralOrderItem.findOne({ order_id: parentOrder._id }).lean();
+            }
+          }
           if (item) {
-            if (!currentSku) currentSku = (item.sku || item.seller_sku || "").toString().trim();
-            if (!currentName) currentName = (item.name || item.product_name || "").toString().trim();
+            if (!currentSku) currentSku = (item.seller_sku || "").toString().trim();
+            if (!currentName) currentName = (item.product_name || item.display_title || item.original_product_name || "").toString().trim();
           }
         } catch (_) {}
       }
@@ -1778,31 +1856,26 @@ async function autoMatchUncostedFinanceEntries(limit = 1000) {
         }
       }
 
-      // 3. Match CentralInventory by Product Name
+      // 3. Match CentralInventory by Product Name (fuzzy matching)
       if (matchedCost <= 0 && currentName) {
-        const entryNameNorm = normAlnum(currentName);
-        if (entryNameNorm.length >= 4) {
-          let nameMatch = null;
-          if (entry.store_id) {
-            const storeStr = String(entry.store_id);
-            nameMatch = invItems.find((inv) => {
-              if (String(inv.store_id) !== storeStr) return false;
-              const invNameNorm = normAlnum(inv.product_name || inv.display_title || inv.original_product_name || "");
-              if (!invNameNorm) return false;
-              return invNameNorm === entryNameNorm || invNameNorm.includes(entryNameNorm) || entryNameNorm.includes(invNameNorm);
-            });
-          }
-          if (!nameMatch) {
-            nameMatch = invItems.find((inv) => {
-              const invNameNorm = normAlnum(inv.product_name || inv.display_title || inv.original_product_name || "");
-              if (!invNameNorm) return false;
-              return invNameNorm === entryNameNorm || invNameNorm.includes(entryNameNorm) || entryNameNorm.includes(invNameNorm);
-            });
-          }
-          if (nameMatch) {
-            matchedCost = nameMatch.cost_price > 0 ? nameMatch.cost_price : nameMatch.purchase_price;
-            matchedName = nameMatch.product_name || nameMatch.display_title || currentName;
-          }
+        let nameMatch = null;
+        if (entry.store_id) {
+          const storeStr = String(entry.store_id);
+          nameMatch = invItems.find((inv) => {
+            if (String(inv.store_id) !== storeStr) return false;
+            const targetTitle = inv.product_name || inv.display_title || inv.original_product_name || "";
+            return fuzzyMatchTitle(targetTitle, currentName);
+          });
+        }
+        if (!nameMatch) {
+          nameMatch = invItems.find((inv) => {
+            const targetTitle = inv.product_name || inv.display_title || inv.original_product_name || "";
+            return fuzzyMatchTitle(targetTitle, currentName);
+          });
+        }
+        if (nameMatch) {
+          matchedCost = nameMatch.cost_price > 0 ? nameMatch.cost_price : nameMatch.purchase_price;
+          matchedName = nameMatch.product_name || nameMatch.display_title || currentName;
         }
       }
 
@@ -1811,12 +1884,23 @@ async function autoMatchUncostedFinanceEntries(limit = 1000) {
         const prodMatch = productCatalog.find((p) => {
           const pNorm = normAlnum(p.sku);
           if (candidates.some((c) => normAlnum(c) === pNorm)) return true;
-          if (currentName && normAlnum(p.name) === normAlnum(currentName)) return true;
+          if (currentName && (normAlnum(p.name) === normAlnum(currentName) || fuzzyMatchTitle(p.name, currentName))) return true;
           return false;
         });
         if (prodMatch) {
           matchedCost = prodMatch.purchase_price;
           matchedName = prodMatch.name || currentName;
+        }
+      }
+
+      // 5. StockReceipt fallback (unit cost recorded on stock receipts)
+      if (matchedCost <= 0 && stockReceipts.length > 0) {
+        const receiptMatch = stockReceipts.find(
+          (r) => matchesSku(r.seller_sku) || (currentName && fuzzyMatchTitle(r.product_name, currentName))
+        );
+        if (receiptMatch && receiptMatch.unit_cost > 0) {
+          matchedCost = receiptMatch.unit_cost;
+          matchedName = receiptMatch.product_name || currentName;
         }
       }
 
@@ -2081,15 +2165,26 @@ router.post("/set-cost", async (req, res) => {
     const skuCandidates = extractSkuCandidates(sku);
     const regexList = skuCandidates.map((s) => new RegExp(`^${escapeRegex(s)}$`, "i"));
     const orQueries = regexList.map((rgx) => ({ seller_sku: rgx }));
+    regexList.forEach((rgx) => {
+      orQueries.push({ lazada_sku: rgx });
+    });
 
     // Prefix matching for base ID (e.g. 923171376 matching 923171376-1782364893283-0)
     const baseId = sku.split(/[-_\s]/)[0]?.trim();
     if (baseId && baseId.length >= 6) {
       orQueries.push({ seller_sku: new RegExp(`^${escapeRegex(baseId)}([-_\\s]|$)`, 'i') });
+      orQueries.push({ lazada_sku: new RegExp(`^${escapeRegex(baseId)}([-_\\s]|$)`, 'i') });
     }
 
     if (cleanName && cleanName.length >= 4) {
       orQueries.push({ product_name: new RegExp(`^${escapeRegex(cleanName)}$`, 'i') });
+      orQueries.push({ product_name: new RegExp(escapeRegex(cleanName), 'i') });
+      orQueries.push({ display_title: new RegExp(escapeRegex(cleanName), 'i') });
+      const baseTitle = cleanName.split(/[-–—|,(]/)[0]?.trim();
+      if (baseTitle && baseTitle.length >= 6 && baseTitle !== cleanName) {
+        orQueries.push({ product_name: new RegExp(escapeRegex(baseTitle), 'i') });
+        orQueries.push({ display_title: new RegExp(escapeRegex(baseTitle), 'i') });
+      }
     }
 
     // 1. Update Central Inventory
@@ -2154,6 +2249,37 @@ router.post("/set-cost", async (req, res) => {
     });
   } catch (error) {
     res.status(500).json({ message: "Error updating cost price and recalculating", error: error.message });
+  }
+});
+
+// 6a. Force Rematch All Orders (re-apply stock costs to all existing finance entries)
+router.post("/rematch-all", async (req, res) => {
+  try {
+    // Reset profit_ready=false for ALL order entries so they get re-examined
+    const resetResult = await FinanceEntry.updateMany(
+      {
+        entry_type: "order",
+        is_penalty: { $ne: true },
+        is_penalty_refund: { $ne: true }
+      },
+      { $set: { profit_ready: false } }
+    );
+
+    // Now run the full auto-match sweep in forceAll mode
+    await autoMatchUncostedFinanceEntries(5000, true);
+
+    // Count how many are now costed
+    const costedCount = await FinanceEntry.countDocuments({ entry_type: "order", profit_ready: true });
+    const totalCount = await FinanceEntry.countDocuments({ entry_type: "order" });
+
+    res.json({
+      success: true,
+      message: `Rematch complete. ${costedCount} of ${totalCount} orders now have purchase cost matched.`,
+      costed: costedCount,
+      total: totalCount
+    });
+  } catch (error) {
+    res.status(500).json({ message: "Error during rematch-all", error: error.message });
   }
 });
 
@@ -2788,6 +2914,8 @@ router.post("/sync", async (req, res) => {
 });
 
 module.exports = router;
+module.exports.autoMatchUncostedFinanceEntries = autoMatchUncostedFinanceEntries;
+module.exports.findCostDetails = findCostDetails;
 module.exports.roundMoney = roundMoney;
 module.exports.getDarazHandlingFee = getDarazHandlingFee;
 module.exports.resolveCategoryRule = resolveCategoryRule;

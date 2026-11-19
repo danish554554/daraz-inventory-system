@@ -750,6 +750,44 @@ class _FinanceScreenState extends State<FinanceScreen> {
     }
   }
 
+  Future<void> _rematchAll() async {
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (context) => AlertDialog(
+        backgroundColor: AppTheme.cardColor(context),
+        title: Text('Rematch All Purchase Costs?',
+            style: TextStyle(color: AppTheme.textPrimaryColor(context), fontWeight: FontWeight.w900)),
+        content: Text(
+          'This will re-scan all your orders against the Stock screen costs and automatically fill in any missing purchase prices. Orders already matched will be re-verified.\n\nThis may take a moment.',
+          style: TextStyle(color: AppTheme.textMutedColor(context)),
+        ),
+        actions: <Widget>[
+          TextButton(onPressed: () => Navigator.pop(context, false), child: const Text('Cancel')),
+          FilledButton(
+            style: FilledButton.styleFrom(backgroundColor: const Color(0xFF2E7D32)),
+            onPressed: () => Navigator.pop(context, true),
+            child: const Text('Rematch Now'),
+          ),
+        ],
+      ),
+    );
+
+    if (confirmed == true) {
+      try {
+        final api = ApiClient.instance;
+        final res = await api.post('/finance/rematch-all', <String, dynamic>{});
+        final costed = res['costed'] ?? 0;
+        final total = res['total'] ?? 0;
+        if (mounted) {
+          showAppSnackBar(context, 'Done! $costed of $total orders now have purchase cost matched.');
+          await _load(forceRefresh: true);
+        }
+      } catch (e) {
+        if (mounted) showAppSnackBar(context, 'Rematch failed: $e', error: true);
+      }
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
     return Scaffold(
@@ -818,6 +856,13 @@ class _FinanceScreenState extends State<FinanceScreen> {
                                         onPressed: _recalculate,
                                         background: AppTheme.primarySoft,
                                         foreground: AppTheme.primary,
+                                      ),
+                                      const SizedBox(width: 8),
+                                      CircleIconButton(
+                                        icon: Icons.auto_fix_high_rounded,
+                                        onPressed: _rematchAll,
+                                        background: const Color(0xFFE8F5E9),
+                                        foreground: const Color(0xFF2E7D32),
                                       ),
                                       const SizedBox(width: 8),
                                       CircleIconButton(

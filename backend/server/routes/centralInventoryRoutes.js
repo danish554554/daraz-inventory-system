@@ -78,16 +78,26 @@ async function syncFinanceCostForSku(sku, unitCost, productName = '') {
 
     const regexList = Array.from(candidateStrings).filter(Boolean).map((s) => new RegExp(`^${escapeRegex(s)}$`, 'i'));
     const orQueries = regexList.map((rgx) => ({ seller_sku: rgx }));
+    regexList.forEach((rgx) => {
+      orQueries.push({ lazada_sku: rgx });
+    });
 
     // Prefix matching for long numeric/alnum base IDs (e.g. 923171376 matching 923171376-1782364893283-0)
     const baseId = trimmed.split(/[-_\s]/)[0]?.trim();
     if (baseId && baseId.length >= 6) {
       orQueries.push({ seller_sku: new RegExp(`^${escapeRegex(baseId)}([-_\\s]|$)`, 'i') });
+      orQueries.push({ lazada_sku: new RegExp(`^${escapeRegex(baseId)}([-_\\s]|$)`, 'i') });
     }
 
     if (cleanName && cleanName.length >= 4) {
       orQueries.push({ product_name: new RegExp(`^${escapeRegex(cleanName)}$`, 'i') });
       orQueries.push({ product_name: new RegExp(escapeRegex(cleanName), 'i') });
+      orQueries.push({ display_title: new RegExp(escapeRegex(cleanName), 'i') });
+      const baseTitle = cleanName.split(/[-–—|,(]/)[0]?.trim();
+      if (baseTitle && baseTitle.length >= 6 && baseTitle !== cleanName) {
+        orQueries.push({ product_name: new RegExp(escapeRegex(baseTitle), 'i') });
+        orQueries.push({ display_title: new RegExp(escapeRegex(baseTitle), 'i') });
+      }
     }
 
     // 1. Update Product catalog purchase price
@@ -150,6 +160,14 @@ async function syncFinanceCostForSku(sku, unitCost, productName = '') {
         count++;
       }
     }
+
+    // 5. Trigger auto-match for any other uncosted entries
+    try {
+      const financeRoutes = require('./financeRoutes');
+      if (typeof financeRoutes.autoMatchUncostedFinanceEntries === 'function') {
+        await financeRoutes.autoMatchUncostedFinanceEntries(1000);
+      }
+    } catch (_) {}
 
     return count;
   } catch (err) {
