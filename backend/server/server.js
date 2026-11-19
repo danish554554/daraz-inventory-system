@@ -131,6 +131,41 @@ app.get('/health', (req, res) => {
   });
 });
 
+app.get('/health/qa-audit', async (req, res) => {
+  try {
+    const FinanceEntry = require('./models/FinanceEntry');
+    const CentralInventory = require('./models/CentralInventory');
+    const Product = require('./models/Product');
+
+    const trimmerOrders = await FinanceEntry.find({
+      order_number: { $in: ['251776120072486', '250836068328754', '252103981308557'] }
+    }).select('order_number seller_sku product_name cost_price total_cost net_settlement net_profit profit_ready order_status').lean();
+
+    const returnedOrders = await FinanceEntry.find({
+      order_status: { $regex: /return/i }
+    }).select('order_number seller_sku product_name cost_price total_cost net_settlement net_profit profit_ready order_status').limit(10).lean();
+
+    const trimmerInv = await CentralInventory.find({
+      seller_sku: { $regex: /1953371685/i }
+    }).select('seller_sku product_name cost_price purchase_price store_id').lean();
+
+    const removerInv = await CentralInventory.find({
+      seller_sku: { $regex: /923171376/i }
+    }).select('seller_sku product_name cost_price purchase_price store_id').lean();
+
+    return res.status(200).json({
+      success: true,
+      timestamp: new Date().toISOString(),
+      trimmerOrders,
+      returnedOrders,
+      trimmerInv,
+      removerInv
+    });
+  } catch (error) {
+    return res.status(500).json({ success: false, error: error.message });
+  }
+});
+
 app.use('/api/auth', authRoutes);
 app.use('/api/stores/oauth', darazOauthRoutes);
 app.use('/api/daraz/oauth', darazOauthRoutes);
