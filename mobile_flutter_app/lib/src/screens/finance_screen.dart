@@ -281,10 +281,10 @@ class _FinanceScreenState extends State<FinanceScreen> {
       return false;
     }).firstOrNull;
 
-    if (matched != null && (matched.costPrice > 0 || matched.purchasePrice > 0)) {
-      final c = matched.costPrice > 0 ? matched.costPrice : matched.purchasePrice;
+    if (matched != null && (matched.costPrice >= 10 || matched.purchasePrice >= 10)) {
+      final c = matched.costPrice >= 10 ? matched.costPrice : matched.purchasePrice;
       costController.text = c.toStringAsFixed(c.truncateToDouble() == c ? 0 : 2);
-    } else if (entry.costPrice > 0) {
+    } else if (entry.costPrice >= 10) {
       costController.text = entry.costPrice.toStringAsFixed(entry.costPrice.truncateToDouble() == entry.costPrice ? 0 : 2);
     }
 
@@ -780,7 +780,7 @@ class _FinanceScreenState extends State<FinanceScreen> {
     if (confirmed == true) {
       try {
         final api = ApiClient.instance;
-        final res = await api.post('/finance/rematch-all', <String, dynamic>{});
+        final res = await api.post('/finance/rematch-all', body: <String, dynamic>{});
         final costed = res['costed'] ?? 0;
         final total = res['total'] ?? 0;
         if (mounted) {
@@ -1496,15 +1496,47 @@ class _FinanceScreenState extends State<FinanceScreen> {
                     // Purchasing Price
                     if (!isAdjustment && !isPenaltyCharged && !isPenaltyReturned) ...<Widget>[
                       if (isReturned)
-                        Text(
-                          item.costPrice > 0
-                              ? 'Stock: PKR ${Formatters.money(item.costPrice)} (Restocked)'
-                              : 'Stock: PKR 0 (Restocked)',
-                          style: const TextStyle(
-                            fontWeight: FontWeight.w700,
-                            fontSize: 10.5,
-                            color: AppTheme.info,
-                          ),
+                        InkWell(
+                          onTap: () => _openSetCostDialog(item),
+                          borderRadius: BorderRadius.circular(4),
+                          child: item.costPrice > 0
+                              ? Row(
+                                  mainAxisSize: MainAxisSize.min,
+                                  children: <Widget>[
+                                    Text(
+                                      'Stock: PKR ${Formatters.money(item.costPrice)} (Restocked)',
+                                      style: const TextStyle(
+                                        fontWeight: FontWeight.w700,
+                                        fontSize: 10.5,
+                                        color: AppTheme.info,
+                                      ),
+                                    ),
+                                    const SizedBox(width: 3),
+                                    const Icon(Icons.edit_outlined, size: 11, color: AppTheme.info),
+                                  ],
+                                )
+                              : Container(
+                                  padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                                  decoration: BoxDecoration(
+                                    color: AppTheme.dangerSoft,
+                                    borderRadius: BorderRadius.circular(6),
+                                  ),
+                                  child: const Row(
+                                    mainAxisSize: MainAxisSize.min,
+                                    children: <Widget>[
+                                      Icon(Icons.edit_note_rounded, size: 12, color: AppTheme.danger),
+                                      SizedBox(width: 2),
+                                      Text(
+                                        'Set Cost',
+                                        style: TextStyle(
+                                          fontSize: 10,
+                                          color: AppTheme.danger,
+                                          fontWeight: FontWeight.w900,
+                                        ),
+                                      ),
+                                    ],
+                                  ),
+                                ),
                         )
                       else if (isProfitReady)
                         InkWell(
@@ -1579,7 +1611,9 @@ class _FinanceScreenState extends State<FinanceScreen> {
                               ? 'Penalty Impact: '
                               : (isPenaltyReturned
                                   ? 'Penalty Reversal: '
-                                  : (isReturned ? 'Net Return Loss: ' : (item.isEstimate ? 'Estimated Profit: ' : 'Exact True Profit: '))),
+                                  : (isReturned
+                                      ? (netProfit >= 0 ? 'Net Return Settlement: ' : 'Net Return Loss: ')
+                                      : (item.isEstimate ? 'Estimated Profit: ' : 'Exact True Profit: '))),
                           style: TextStyle(
                             fontSize: 11,
                             fontWeight: FontWeight.w700,
