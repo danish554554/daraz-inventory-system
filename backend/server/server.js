@@ -92,7 +92,15 @@ function startupChecks() {
   });
 }
 
-connectDB();
+connectDB().then(() => {
+  if (typeof financeRoutes.autoHealFinanceEntries === 'function') {
+    financeRoutes.autoHealFinanceEntries(true).catch((err) => {
+      console.warn('[Startup] Non-blocking autoHeal notice:', err.message);
+    });
+  }
+}).catch((err) => {
+  console.error('[Startup] DB connect error:', err.message);
+});
 startupChecks();
 
 if (process.env.TRUST_PROXY === 'true') {
@@ -133,6 +141,10 @@ app.get('/health', (req, res) => {
 
 app.get('/health/qa-audit', async (req, res) => {
   try {
+    if (typeof financeRoutes.autoHealFinanceEntries === 'function') {
+      await financeRoutes.autoHealFinanceEntries(true);
+    }
+
     const FinanceEntry = require('./models/FinanceEntry');
     const CentralInventory = require('./models/CentralInventory');
     const Product = require('./models/Product');

@@ -3119,6 +3119,7 @@ router.post("/sync", async (req, res) => {
 });
 
 module.exports = router;
+module.exports.autoHealFinanceEntries = autoHealFinanceEntries;
 module.exports.autoMatchUncostedFinanceEntries = autoMatchUncostedFinanceEntries;
 module.exports.findCostDetails = findCostDetails;
 module.exports.roundMoney = roundMoney;
