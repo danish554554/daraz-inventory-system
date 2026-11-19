@@ -708,7 +708,6 @@ async function findCostDetails(group, storeId = null, preloadedCache = null) {
       const candNorm = candidate.toLowerCase();
       const candAlnum = normAlnum(candidate);
       if (invSku.toLowerCase() === candNorm || (candAlnum && invNorm === candAlnum)) return true;
-      if (candAlnum && candAlnum.length >= 6 && (invNorm.startsWith(candAlnum) || candAlnum.startsWith(invNorm))) return true;
     }
     return false;
   };
@@ -749,32 +748,35 @@ async function findCostDetails(group, storeId = null, preloadedCache = null) {
       };
     }
 
-    // 1c. Check CentralInventory by Product Name (current store first, then cross-store)
+    // 1c. Check CentralInventory by Product Name (exact normalized title only - never loose fuzzy)
     if (productName) {
-      let invByName = null;
-      if (storeId) {
-        const storeStr = String(storeId);
-        invByName = inventoryList.find((inv) => {
-          if (String(inv.store_id) !== storeStr) return false;
-          const targetTitle = inv.product_name || inv.display_title || inv.original_product_name || "";
-          return fuzzyMatchTitle(targetTitle, productName) && (inv.cost_price > 0 || inv.purchase_price > 0);
-        });
-      }
-      if (!invByName) {
-        invByName = inventoryList.find((inv) => {
-          const targetTitle = inv.product_name || inv.display_title || inv.original_product_name || "";
-          return fuzzyMatchTitle(targetTitle, productName) && (inv.cost_price > 0 || inv.purchase_price > 0);
-        });
-      }
-      if (invByName) {
-        const cost = invByName.cost_price > 0 ? invByName.cost_price : invByName.purchase_price;
-        return {
-          cost_price: Number(cost),
-          matched_product_id: invByName._id,
-          matched_product_name: invByName.product_name || invByName.display_title || productName,
-          matched_by: `central_inventory_name:${invByName.seller_sku}`,
-          profit_ready: true
-        };
+      const pNorm = normAlnum(productName);
+      if (pNorm.length >= 5) {
+        let invByName = null;
+        if (storeId) {
+          const storeStr = String(storeId);
+          invByName = inventoryList.find((inv) => {
+            if (String(inv.store_id) !== storeStr) return false;
+            const targetNorm = normAlnum(inv.product_name || inv.display_title || inv.original_product_name || "");
+            return targetNorm === pNorm && (inv.cost_price > 0 || inv.purchase_price > 0);
+          });
+        }
+        if (!invByName) {
+          invByName = inventoryList.find((inv) => {
+            const targetNorm = normAlnum(inv.product_name || inv.display_title || inv.original_product_name || "");
+            return targetNorm === pNorm && (inv.cost_price > 0 || inv.purchase_price > 0);
+          });
+        }
+        if (invByName) {
+          const cost = invByName.cost_price > 0 ? invByName.cost_price : invByName.purchase_price;
+          return {
+            cost_price: Number(cost),
+            matched_product_id: invByName._id,
+            matched_product_name: invByName.product_name || invByName.display_title || productName,
+            matched_by: `central_inventory_name:${invByName.seller_sku}`,
+            profit_ready: true
+          };
+        }
       }
     }
 
@@ -1735,6 +1737,67 @@ async function autoHealFinanceEntries(force = false) {
         }
       }
     }
+
+    // Explicit healing for user-confirmed product costs:
+    // 1. SKU 923171376-1782364893283-0 (Rechargeable Body Hair Remover) = PKR 580.00
+    // 2. Order #250752229780604 / SKU 658095011-1792921423093-0 (3 in 1 Hair Dryer) = PKR 1200.00
+    const confirmedCorrections = [
+      {
+        skus: ["923171376-1782364893283-0", "923171376-1782364893283"],
+        orders: [],
+        cost: 580,
+        name: "Rechargeable Body Hair Remover"
+      },
+      {
+        skus: ["658095011-1792921423093-0", "658095011-1792921423093"],
+        orders: ["250752229780604", "25075229780604"],
+        cost: 1200,
+        name: "3 in 1 Hair Dryer, Hair Straightener"
+      }
+    ];
+
+    for (const correction of confirmedCorrections) {
+      const skuRegexList = correction.skus.map((s) => new RegExp(`^${escapeRegex(s)}$`, "i"));
+      const orConditions = skuRegexList.map((rgx) => ({ seller_sku: rgx }));
+      if (correction.orders && correction.orders.length > 0) {
+        orConditions.push({ order_number: { $in: correction.orders } });
+      }
+
+      // Update CentralInventory
+      await CentralInventory.updateMany(
+        { $or: skuRegexList.map((rgx) => ({ seller_sku: rgx })) },
+        { $set: { purchase_price: correction.cost, cost_price: correction.cost } }
+      );
+
+      // Update Product catalog
+      await Product.updateMany(
+        { $or: skuRegexList.map((rgx) => ({ sku: rgx })) },
+        { $set: { purchase_price: correction.cost } }
+      );
+
+      // Update FinanceEntry
+      const entries = await FinanceEntry.find({
+        $or: orConditions,
+        entry_type: "order"
+      });
+
+      for (const entry of entries) {
+        if (entry.is_penalty || entry.is_penalty_refund) continue;
+        const isReturn = /return|cancel/i.test(entry.order_status || "");
+        const qty = entry.quantity > 0 ? entry.quantity : 1;
+        const totalCost = isReturn ? 0 : Number((correction.cost * qty).toFixed(2));
+        const netProfit = isReturn
+          ? Number((entry.net_settlement || 0).toFixed(2))
+          : Number(((entry.net_settlement || 0) - totalCost).toFixed(2));
+
+        entry.cost_price = correction.cost;
+        entry.total_cost = totalCost;
+        entry.net_profit = netProfit;
+        entry.profit_ready = true;
+        entry.matched_by = `user_override:${correction.skus[0]}`;
+        await entry.save();
+      }
+    }
   } catch (err) {
     // Non-blocking auto-heal notice
   }
@@ -1819,19 +1882,20 @@ async function autoMatchUncostedFinanceEntries(limit = 1000, forceAll = false) {
         } catch (_) {}
       }
 
+      // Never overwrite costs that were manually entered or confirmed by the user
+      if (entry.matched_by && (entry.matched_by.startsWith("user_override") || entry.matched_by.startsWith("confirmed_cost"))) {
+        continue;
+      }
+
       const candidates = extractSkuCandidates(currentSku, currentLazadaSku);
       let matchedCost = 0;
       let matchedName = "";
 
-      // Helper to check SKU matches (exact, alnum, or prefix)
+      // Helper to check SKU matches (exact or punctuation/case normalized)
       const matchesSku = (invSku) => {
         const invNorm = normAlnum(invSku);
         if (!invNorm) return false;
-        if (candidates.some((c) => normAlnum(c) === invNorm)) return true;
-        return candidates.some((c) => {
-          const cn = normAlnum(c);
-          return (cn.length >= 6 && invNorm.startsWith(cn)) || (invNorm.length >= 6 && cn.startsWith(invNorm));
-        });
+        return candidates.some((c) => normAlnum(c) === invNorm || invSku.toLowerCase() === c.toLowerCase());
       };
 
       // 1. Check CentralInventory with storeId first by SKU
@@ -1856,35 +1920,38 @@ async function autoMatchUncostedFinanceEntries(limit = 1000, forceAll = false) {
         }
       }
 
-      // 3. Match CentralInventory by Product Name (fuzzy matching)
+      // 3. Match CentralInventory by exact Product Name only (never loose cross-product matches)
       if (matchedCost <= 0 && currentName) {
-        let nameMatch = null;
-        if (entry.store_id) {
-          const storeStr = String(entry.store_id);
-          nameMatch = invItems.find((inv) => {
-            if (String(inv.store_id) !== storeStr) return false;
-            const targetTitle = inv.product_name || inv.display_title || inv.original_product_name || "";
-            return fuzzyMatchTitle(targetTitle, currentName);
-          });
-        }
-        if (!nameMatch) {
-          nameMatch = invItems.find((inv) => {
-            const targetTitle = inv.product_name || inv.display_title || inv.original_product_name || "";
-            return fuzzyMatchTitle(targetTitle, currentName);
-          });
-        }
-        if (nameMatch) {
-          matchedCost = nameMatch.cost_price > 0 ? nameMatch.cost_price : nameMatch.purchase_price;
-          matchedName = nameMatch.product_name || nameMatch.display_title || currentName;
+        const entryNameNorm = normAlnum(currentName);
+        if (entryNameNorm.length >= 5) {
+          let nameMatch = null;
+          if (entry.store_id) {
+            const storeStr = String(entry.store_id);
+            nameMatch = invItems.find((inv) => {
+              if (String(inv.store_id) !== storeStr) return false;
+              const targetTitle = normAlnum(inv.product_name || inv.display_title || inv.original_product_name || "");
+              return targetTitle === entryNameNorm;
+            });
+          }
+          if (!nameMatch) {
+            nameMatch = invItems.find((inv) => {
+              const targetTitle = normAlnum(inv.product_name || inv.display_title || inv.original_product_name || "");
+              return targetTitle === entryNameNorm;
+            });
+          }
+          if (nameMatch) {
+            matchedCost = nameMatch.cost_price > 0 ? nameMatch.cost_price : nameMatch.purchase_price;
+            matchedName = nameMatch.product_name || nameMatch.display_title || currentName;
+          }
         }
       }
 
-      // 4. Product Catalog fallback (by SKU or Name)
+      // 4. Product Catalog fallback (by exact SKU or exact Name)
       if (matchedCost <= 0) {
         const prodMatch = productCatalog.find((p) => {
           const pNorm = normAlnum(p.sku);
-          if (candidates.some((c) => normAlnum(c) === pNorm)) return true;
-          if (currentName && (normAlnum(p.name) === normAlnum(currentName) || fuzzyMatchTitle(p.name, currentName))) return true;
+          if (candidates.some((c) => normAlnum(c) === pNorm || p.sku.toLowerCase() === c.toLowerCase())) return true;
+          if (currentName && normAlnum(p.name) === normAlnum(currentName)) return true;
           return false;
         });
         if (prodMatch) {

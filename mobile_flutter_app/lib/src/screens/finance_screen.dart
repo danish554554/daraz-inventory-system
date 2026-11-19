@@ -264,18 +264,23 @@ class _FinanceScreenState extends State<FinanceScreen> {
 
     if (!mounted) return;
 
-    // Look for matching inventory item with exact, punctuation-normalized, prefix, or title matching
+    // Look for matching inventory item by exact SKU, suffix-stripped SKU, or exact title
     String normSku(String s) => s.replaceAll(RegExp(r'[^a-zA-Z0-9]'), '').toLowerCase();
     final targetNorm = normSku(sku);
+    final targetBase = sku.replaceAll(RegExp(r'[-_\s]\d+$'), '');
+    final targetBaseNorm = normSku(targetBase);
     final targetNameNorm = normSku(name);
+
     final matched = _inventory.where((i) {
       if (i.sellerSku.toLowerCase() == sku.toLowerCase()) return true;
       final iSkuNorm = normSku(i.sellerSku);
       if (targetNorm.isNotEmpty && iSkuNorm == targetNorm) return true;
-      if (targetNorm.length >= 6 && (iSkuNorm.startsWith(targetNorm) || targetNorm.startsWith(iSkuNorm))) return true;
-      if (targetNameNorm.length >= 5 && (normSku(i.title) == targetNameNorm || normSku(i.title).contains(targetNameNorm) || targetNameNorm.contains(normSku(i.title)))) return true;
+      final iBase = i.sellerSku.replaceAll(RegExp(r'[-_\s]\d+$'), '');
+      if (targetBaseNorm.isNotEmpty && normSku(iBase) == targetBaseNorm) return true;
+      if (targetNameNorm.length >= 5 && normSku(i.title) == targetNameNorm) return true;
       return false;
     }).firstOrNull;
+
     if (matched != null && (matched.costPrice > 0 || matched.purchasePrice > 0)) {
       final c = matched.costPrice > 0 ? matched.costPrice : matched.purchasePrice;
       costController.text = c.toStringAsFixed(c.truncateToDouble() == c ? 0 : 2);
@@ -1502,12 +1507,23 @@ class _FinanceScreenState extends State<FinanceScreen> {
                           ),
                         )
                       else if (isProfitReady)
-                        Text(
-                          'Cost: -PKR ${Formatters.money(totalCost)}',
-                          style: const TextStyle(
-                            fontWeight: FontWeight.w800,
-                            fontSize: 11.5,
-                            color: AppTheme.danger,
+                        InkWell(
+                          onTap: () => _openSetCostDialog(item),
+                          borderRadius: BorderRadius.circular(4),
+                          child: Row(
+                            mainAxisSize: MainAxisSize.min,
+                            children: <Widget>[
+                              Text(
+                                'Cost: -PKR ${Formatters.money(totalCost)}',
+                                style: const TextStyle(
+                                  fontWeight: FontWeight.w800,
+                                  fontSize: 11.5,
+                                  color: AppTheme.danger,
+                                ),
+                              ),
+                              const SizedBox(width: 3),
+                              const Icon(Icons.edit_outlined, size: 11, color: AppTheme.danger),
+                            ],
                           ),
                         )
                       else
